@@ -1,0 +1,11 @@
+{
+  "name": "directus-extension-symbolika-live-calc-interface",
+  "version": "1.0.0",
+  "type": "module",
+  "directus:extension": {
+    "type": "interface",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}

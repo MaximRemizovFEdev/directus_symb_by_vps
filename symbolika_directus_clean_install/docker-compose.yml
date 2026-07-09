@@ -1,0 +1,44 @@
+services:
+  database:
+    image: postgis/postgis:16-3.4
+    container_name: symbolika-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: directus
+      POSTGRES_USER: directus
+      POSTGRES_PASSWORD: ChangeThisDbPass2026
+    volumes:
+      - ./database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U directus -d directus"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  directus:
+    image: directus/directus:11.17.0
+    container_name: symbolika-directus
+    restart: unless-stopped
+    ports:
+      - "8057:8055"
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      KEY: "symbolika-directus-key-change-me"
+      SECRET: "symbolika-directus-secret-change-me"
+      ADMIN_EMAIL: "admin@symb.local"
+      ADMIN_PASSWORD: "ChangeThisAdminPass2026"
+      DB_CLIENT: "pg"
+      DB_HOST: "database"
+      DB_PORT: "5432"
+      DB_DATABASE: "directus"
+      DB_USER: "directus"
+      DB_PASSWORD: "ChangeThisDbPass2026"
+      WEBSOCKETS_ENABLED: "true"
+      CORS_ENABLED: "true"
+      CORS_ORIGIN: "true"
+    volumes:
+      - ./uploads:/directus/uploads
+      - ./extensions:/directus/extensions
+      - ./setup:/directus/setup
