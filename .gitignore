@@ -19,4 +19,5 @@ database_before_pg_resetwal/
 db_backups/
 
 *.sql
+!full_directus_backup.sql
 !.gitignore
