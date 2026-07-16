@@ -229,6 +229,10 @@ async function main() {
   await str('contractors','phone','Телефон',{sort:4});
   await str('contractors','email','Email',{sort:5});
   await text('contractors','comment','Комментарий',{sort:6});
+  await bool('contractors','has_own_view','Свое представление',{sort:7});
+  await field('contractors','directus_user','uuid','Пользователь Directus',{data_type:'uuid', foreign_key_table:'directus_users', foreign_key_column:'id', is_nullable:true},{interface:'select-dropdown-m2o', special:['m2o'], sort:8});
+  await m2o('contractors','default_product_category','Категория по умолчанию','product_categories',{sort:9});
+  await m2o('contractors','default_product_subcategory','Подкатегория по умолчанию','product_subcategories',{sort:10});
   await dec('contractors','items_total_cost','Себестоимость позиций',{readonly:true, default:0, sort:20});
   await dec('contractors','payments_total_out','Оплачено контрагенту',{readonly:true, default:0, sort:21});
   await dec('contractors','balance','Баланс взаиморасчетов',{readonly:true, default:0, sort:22});
@@ -286,7 +290,7 @@ async function main() {
   await dec('orders_items','contractor_2_cost','Себестоимость подрядчика 2',{default:0, sort:23});
   await datetime('orders_items','deadline','Срок позиции',{sort:24});
   await text('orders_items','production_comment','Комментарий производства',{sort:25});
-  await text('orders_items','technical_task_text','ТЗ (собранный текст)',{readonly:true, sort:26});
+  await text('orders_items','technical_task_text','ТЗ',{sort:26});
 
   // Specs
   await m2o('order_item_specs','order_item','Позиция заказа','orders_items',{required:true, template:'{{product_name}}', one_field:'spec', on_delete:'CASCADE', sort:2});

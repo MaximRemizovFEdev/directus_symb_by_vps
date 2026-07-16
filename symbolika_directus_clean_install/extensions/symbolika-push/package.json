@@ -1,14 +1,11 @@
 {
-  "name": "directus-extension-symbolika-calculations",
+  "name": "directus-extension-symbolika-push",
   "version": "0.1.0",
   "type": "module",
   "directus:extension": {
-    "type": "hook",
+    "type": "endpoint",
     "path": "index.js",
     "source": "index.js",
     "host": "^11.0.0"
-  },
-  "dependencies": {
-    "web-push": "^3.6.7"
   }
 }

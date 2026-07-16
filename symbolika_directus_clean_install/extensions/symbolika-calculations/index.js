@@ -1,4 +1,6 @@
-export default ({ filter, action }, { database, logger }) => {
+import webPush from 'web-push';
+
+export default ({ filter, action }, { database, logger, env }) => {
   const num = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
   const round = (v) => Math.round(num(v) * 100) / 100;
   const isEmpty = (v) => v === null || v === undefined || v === '';
@@ -12,6 +14,8 @@ export default ({ filter, action }, { database, logger }) => {
   const prevItems = new Map();
   const prevPayments = new Map();
   const prevContractorPayments = new Map();
+  let pushConfigured = false;
+  let pushTableReady = false;
 
   async function generateOrderNumber() {
     const last = await database('orders')
@@ -39,10 +43,276 @@ export default ({ filter, action }, { database, logger }) => {
 
   async function getDeliveredStatusId() {
     const status = await database('order_statuses')
-      .whereILike('name', 'Доставлен')
+      .whereILike('name', '\u0414\u043e\u0441\u0442\u0430\u0432\u043b\u0435\u043d')
       .first();
 
     return status?.id || null;
+  }
+
+  async function getReadyStatusId() {
+    const status = await database('order_statuses')
+      .whereILike('name', '\u0413\u043e\u0442\u043e\u0432')
+      .first();
+
+    return status?.id || null;
+  }
+
+  async function getRoleUserIds(roleName) {
+    if (!roleName) return [];
+
+    const role = await database('directus_roles')
+      .where({ name: roleName })
+      .first();
+
+    if (!role?.id) return [];
+
+    const users = await database('directus_users')
+      .where({ role: role.id, status: 'active' })
+      .select('id');
+
+    return users.map((user) => user.id).filter(Boolean);
+  }
+
+  async function getEmployeeUserId(employeeId) {
+    if (!employeeId) return null;
+
+    const employee = await database('employees')
+      .where({ id: employeeId })
+      .first();
+
+    return employee?.directus_user || null;
+  }
+
+  async function getOrderLabel(orderId) {
+    if (!orderId) return '\u0437\u0430\u043a\u0430\u0437';
+
+    const order = await database('orders')
+      .where({ id: orderId })
+      .first();
+
+    return order?.order_number || `#${orderId}`;
+  }
+
+  async function getOrderStatusName(statusId) {
+    if (!statusId) return '\u043d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d';
+
+    const status = await database('order_statuses')
+      .where({ id: statusId })
+      .first();
+
+    return status?.name || String(statusId);
+  }
+
+  async function getProductionStatusName(statusId) {
+    if (!statusId) return '\u043d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d';
+
+    const status = await database('production_statuses')
+      .where({ id: statusId })
+      .first();
+
+    return status?.name || String(statusId);
+  }
+
+  async function ensurePushTable() {
+    if (pushTableReady) return true;
+
+    try {
+      const exists = await database.schema.hasTable('symbolika_push_subscriptions');
+      if (!exists) {
+        await database.schema.createTable('symbolika_push_subscriptions', (table) => {
+        table.increments('id').primary();
+        table.uuid('user').notNullable();
+        table.text('endpoint').notNullable().unique();
+        table.jsonb('subscription').notNullable();
+        table.text('user_agent');
+        table.text('last_error');
+        table.timestamp('created_at', { useTz: true }).defaultTo(database.fn.now());
+        table.timestamp('updated_at', { useTz: true }).defaultTo(database.fn.now());
+        });
+      }
+      pushTableReady = true;
+      return true;
+    } catch (error) {
+      logger.warn(error);
+      return false;
+    }
+  }
+
+  function configurePush() {
+    if (pushConfigured) return true;
+
+    const publicKey = env?.SYMBOLIKA_PUSH_PUBLIC_KEY;
+    const privateKey = env?.SYMBOLIKA_PUSH_PRIVATE_KEY;
+    if (!publicKey || !privateKey) return false;
+
+    webPush.setVapidDetails(
+      env?.SYMBOLIKA_PUSH_SUBJECT || 'mailto:admin@symbcorp.ru',
+      publicKey,
+      privateKey
+    );
+
+    pushConfigured = true;
+    return true;
+  }
+
+  function getNotificationUrl(collection, item) {
+    if (!collection || item == null) return '/admin';
+    return `/admin/content/${collection}/${item}`;
+  }
+
+  async function sendBrowserPush(recipient, subject, message, collection = null, item = null) {
+    if (!recipient || !configurePush()) return;
+    if (!await ensurePushTable()) return;
+
+    const subscriptions = await database('symbolika_push_subscriptions')
+      .where({ user: recipient })
+      .select('id', 'subscription');
+
+    if (!subscriptions.length) return;
+
+    const payload = JSON.stringify({
+      title: subject,
+      body: message || '',
+      url: getNotificationUrl(collection, item),
+      tag: collection && item != null ? `${collection}:${item}` : undefined,
+    });
+
+    for (const row of subscriptions) {
+      try {
+        await webPush.sendNotification(row.subscription, payload);
+        await database('symbolika_push_subscriptions')
+          .where({ id: row.id })
+          .update({ last_error: null, updated_at: database.fn.now() });
+      } catch (error) {
+        if (error?.statusCode === 404 || error?.statusCode === 410) {
+          await database('symbolika_push_subscriptions').where({ id: row.id }).delete();
+          continue;
+        }
+
+        await database('symbolika_push_subscriptions')
+          .where({ id: row.id })
+          .update({
+            last_error: String(error?.message || error).slice(0, 500),
+            updated_at: database.fn.now(),
+          });
+        logger.warn(error);
+      }
+    }
+  }
+
+  async function notifyUser(recipient, subject, message, collection = null, item = null) {
+    if (!recipient || !subject) return;
+
+    await database('directus_notifications').insert({
+      status: 'inbox',
+      recipient,
+      subject,
+      message,
+      collection,
+      item: item == null ? null : String(item),
+    });
+
+    await sendBrowserPush(recipient, subject, message, collection, item);
+  }
+
+  async function notifyUsers(recipients, subject, message, collection = null, item = null) {
+    const uniqueRecipients = Array.from(new Set((recipients || []).filter(Boolean)));
+
+    for (const recipient of uniqueRecipients) {
+      await notifyUser(recipient, subject, message, collection, item);
+    }
+  }
+
+  async function notifyManager(employeeId, subject, message, collection = null, item = null) {
+    const userId = await getEmployeeUserId(employeeId);
+    await notifyUser(userId, subject, message, collection, item);
+  }
+
+  async function notifyOrderStatusChanged(order, prevOrder) {
+    if (!order || !prevOrder) return;
+    if (order.order_status === prevOrder.order_status) return;
+
+    const managerUserId = await getEmployeeUserId(order.manager_employee);
+    if (!managerUserId) return;
+
+    const orderLabel = order.order_number || `#${order.id}`;
+    const prevStatus = await getOrderStatusName(prevOrder.order_status);
+    const nextStatus = await getOrderStatusName(order.order_status);
+
+    await notifyUser(
+      managerUserId,
+      `\u0418\u0437\u043c\u0435\u043d\u0438\u043b\u0441\u044f \u0441\u0442\u0430\u0442\u0443\u0441 \u0437\u0430\u043a\u0430\u0437\u0430 ${orderLabel}`,
+      `\u0421\u0442\u0430\u0442\u0443\u0441: ${prevStatus} \u2192 ${nextStatus}.`,
+      'orders',
+      order.id
+    );
+  }
+
+  function contractorMatches(contractorName, pattern) {
+    return String(contractorName || '').toLowerCase().includes(pattern);
+  }
+
+  async function getItemContractors(item) {
+    const ids = [item?.contractor_1, item?.contractor_2].filter(Boolean);
+    if (!ids.length) return [];
+
+    return await database('contractors')
+      .whereIn('id', ids)
+      .select('id', 'name');
+  }
+
+  async function notifyNewProductionAssignments(item, prevItem = null) {
+    if (!item?.id) return;
+
+    const contractors = await getItemContractors(item);
+    if (!contractors.length) return;
+
+    const prevContractorIds = new Set([prevItem?.contractor_1, prevItem?.contractor_2].filter(Boolean));
+    const orderLabel = await getOrderLabel(item.order);
+    const productName = item.product_name || '\u041f\u043e\u0437\u0438\u0446\u0438\u044f';
+    const quantity = item.quantity ? `, ${item.quantity} \u0448\u0442.` : '';
+
+    for (const contractor of contractors) {
+      if (prevContractorIds.has(contractor.id)) continue;
+
+      let roleName = null;
+      if (contractorMatches(contractor.name, '\u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432')) {
+        roleName = '\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e';
+      }
+      if (contractorMatches(contractor.name, '\u0448\u0435\u043b\u043a\u043e\u0433\u0440\u0430\u0444')) {
+        roleName = '\u0428\u0435\u043b\u043a\u043e\u0433\u0440\u0430\u0444\u0438\u044f';
+      }
+      if (!roleName) continue;
+
+      const recipients = await getRoleUserIds(roleName);
+
+      await notifyUsers(
+        recipients,
+        `\u041d\u043e\u0432\u0430\u044f \u043f\u043e\u0437\u0438\u0446\u0438\u044f \u0432 ${roleName}`,
+        `${orderLabel}: ${productName}${quantity}.`,
+        'orders_items',
+        item.id
+      );
+    }
+  }
+
+  async function notifyLayoutRevisionIfNeeded(item, prevItem = null) {
+    if (!item?.id || !item.manager_employee) return;
+    if (item.production_status === prevItem?.production_status) return;
+
+    const nextStatus = await getProductionStatusName(item.production_status);
+    if (nextStatus !== '\u0414\u043e\u0440\u0430\u0431\u043e\u0442\u043a\u0430 \u043c\u0430\u043a\u0435\u0442\u0430') return;
+
+    const orderLabel = await getOrderLabel(item.order);
+    const productName = item.product_name || '\u041f\u043e\u0437\u0438\u0446\u0438\u044f';
+
+    await notifyManager(
+      item.manager_employee,
+      `\u041d\u0443\u0436\u043d\u0430 \u0434\u043e\u0440\u0430\u0431\u043e\u0442\u043a\u0430 \u043c\u0430\u043a\u0435\u0442\u0430`,
+      `${orderLabel}: ${productName}. \u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e \u043f\u043e\u043c\u0435\u0442\u0438\u043b\u043e \u0441\u0442\u0430\u0442\u0443\u0441 "\u0414\u043e\u0440\u0430\u0431\u043e\u0442\u043a\u0430 \u043c\u0430\u043a\u0435\u0442\u0430".`,
+      'orders_items',
+      item.id
+    );
   }
 
   async function getManagerPercent(orderId) {
@@ -71,7 +341,7 @@ export default ({ filter, action }, { database, logger }) => {
     if (order.customer) {
       const customer = await database('customers').where({ id: order.customer }).first();
 
-      if (customer && !customer.manager) {
+      if (customer && customer.manager !== order.manager_employee) {
         await database('customers').where({ id: order.customer }).update({
           manager: order.manager_employee,
         });
@@ -296,6 +566,7 @@ export default ({ filter, action }, { database, logger }) => {
 
     const allIssued = items.every((item) => item.office_status === ISSUED);
     const allInOffice = items.every((item) => item.office_status === IN_OFFICE || item.office_status === ISSUED);
+    const hasNotInOffice = items.some((item) => !item.office_status || item.office_status === NOT_IN_OFFICE);
 
     const update = {};
 
@@ -304,10 +575,20 @@ export default ({ filter, action }, { database, logger }) => {
 
       const deliveredId = await getDeliveredStatusId();
       if (deliveredId) update.order_status = deliveredId;
+    } else if (hasNotInOffice) {
+      update.office_status = NOT_IN_OFFICE;
     } else if (allInOffice) {
       update.office_status = IN_OFFICE;
     } else {
       update.office_status = NOT_IN_OFFICE;
+    }
+
+    const order = await database('orders').where({ id: orderId }).first();
+    const deliveredId = await getDeliveredStatusId();
+
+    if (update.office_status !== ISSUED && deliveredId && order?.order_status === deliveredId) {
+      const readyId = await getReadyStatusId();
+      if (readyId) update.order_status = readyId;
     }
 
     await database('orders').where({ id: orderId }).update(update);
@@ -444,6 +725,21 @@ export default ({ filter, action }, { database, logger }) => {
     await recalcCustomerBalance(updatedPayment.customer);
     await recalcCompanyBalance(updatedPayment.customer_company);
   }
+
+  // BEFORE CREATE CUSTOMER / COMPANY
+  filter('items.create', async (payload, meta, context) => {
+    if (!['customers', 'customer_companies'].includes(meta.collection)) return payload;
+
+    const next = { ...payload };
+    const userId = context?.accountability?.user || meta?.accountability?.user;
+
+    if (userId) {
+      const emp = await getEmployeeByUser(userId);
+      if (emp?.id) next.manager = emp.id;
+    }
+
+    return next;
+  });
 
   // BEFORE CREATE ORDER
   filter('items.create', async (payload, meta, context) => {
@@ -583,6 +879,17 @@ export default ({ filter, action }, { database, logger }) => {
           }
         }
 
+        if (Object.prototype.hasOwnProperty.call(payload || {}, 'order_status')) {
+          const deliveredId = await getDeliveredStatusId();
+
+          if (deliveredId && Number(payload.order_status) === Number(deliveredId)) {
+            await setAllItemsOfficeStatus(orderId, ISSUED);
+            await database('orders').where({ id: orderId }).update({
+              office_status: ISSUED,
+            });
+          }
+        }
+
         if (Object.prototype.hasOwnProperty.call(payload || {}, 'payment_type')) {
           const items = await database('orders_items').where({ order: orderId });
 
@@ -595,11 +902,12 @@ export default ({ filter, action }, { database, logger }) => {
           }
         }
 
-        await syncPaymentsFromOrder(orderId);
-        await recalcOrder(orderId, prevOrder);
+      await syncPaymentsFromOrder(orderId);
+      await recalcOrder(orderId, prevOrder);
 
-        const updatedOrder = await database('orders').where({ id: orderId }).first();
-        await recalcOrderParties(updatedOrder, prevOrder);
+      const updatedOrder = await database('orders').where({ id: orderId }).first();
+      await notifyOrderStatusChanged(updatedOrder, prevOrder);
+      await recalcOrderParties(updatedOrder, prevOrder);
       }
     } catch (error) {
       logger.error(error);
@@ -612,6 +920,9 @@ export default ({ filter, action }, { database, logger }) => {
       if (collection !== 'orders_items') return;
 
       const orderId = await recalcItem(key);
+      const item = await database('orders_items').where({ id: key }).first();
+      await notifyNewProductionAssignments(item);
+      await notifyLayoutRevisionIfNeeded(item);
       await recalcOrder(orderId);
     } catch (error) {
       logger.error(error);
@@ -628,6 +939,9 @@ export default ({ filter, action }, { database, logger }) => {
         prevItems.delete(String(key));
 
         const orderId = await recalcItem(key, prevItem);
+        const item = await database('orders_items').where({ id: key }).first();
+        await notifyNewProductionAssignments(item, prevItem);
+        await notifyLayoutRevisionIfNeeded(item, prevItem);
         await recalcOrder(orderId);
       }
     } catch (error) {
@@ -664,7 +978,7 @@ export default ({ filter, action }, { database, logger }) => {
             payment: key,
             order: updatedPayment.order,
             amount: updatedPayment.amount,
-            comment: 'Автоматическое распределение',
+            comment: '\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u043e\u0435 \u0440\u0430\u0441\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u0438\u0435',
           });
         }
 
@@ -784,3 +1098,4 @@ export default ({ filter, action }, { database, logger }) => {
     }
   });
 };
+
