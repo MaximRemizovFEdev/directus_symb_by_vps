@@ -148,6 +148,7 @@ CREATE TABLE IF NOT EXISTS production_work (
   product_name character varying(255),
   quantity numeric(10,0),
   technical_task_text text,
+  production_comment text,
   url character varying(255),
   production_status integer,
   deadline timestamp without time zone
@@ -162,6 +163,7 @@ CREATE TABLE IF NOT EXISTS screen_printing_work (
   product_name character varying(255),
   quantity numeric(10,0),
   technical_task_text text,
+  production_comment text,
   url character varying(255),
   production_status integer,
   deadline timestamp without time zone
@@ -181,14 +183,18 @@ CREATE TABLE IF NOT EXISTS contractor_work (
   product_name character varying(255),
   quantity numeric(10,0),
   technical_task_text text,
+  production_comment text,
   url character varying(255),
   production_status integer,
   deadline timestamp without time zone
 );
 
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE production_work ADD COLUMN IF NOT EXISTS production_comment text;
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS production_comment text;
 ALTER TABLE contractor_work ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE contractor_work ADD COLUMN IF NOT EXISTS production_comment text;
 
 CREATE OR REPLACE FUNCTION set_symbolika_order_link()
 RETURNS trigger
@@ -665,36 +671,36 @@ BEGIN
 
   INSERT INTO production_work (
     id, "order", customer, customer_company, manager_employee,
-    product_name, quantity, technical_task_text, url, production_status, deadline
+    product_name, quantity, technical_task_text, production_comment, url, production_status, deadline
   )
   SELECT
     oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
-    oi.product_name, oi.quantity, oi.technical_task_text, oi.url, oi.production_status, oi.deadline
+    oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, oi.deadline
   FROM orders_items oi
   JOIN orders o ON o.id = oi."order"
   LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
   LEFT JOIN contractors c2 ON c2.id = oi.contractor_2
   WHERE oi.id = item_id
-    AND (c1.name ILIKE '%РїСЂРѕРёР·РІРѕРґСЃС‚РІ%' OR c2.name ILIKE '%РїСЂРѕРёР·РІРѕРґСЃС‚РІ%');
+    AND (c1.name ILIKE U&'%\043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432%' OR c2.name ILIKE U&'%\043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432%');
 
   INSERT INTO screen_printing_work (
     id, "order", customer, customer_company, manager_employee,
-    product_name, quantity, technical_task_text, url, production_status, deadline
+    product_name, quantity, technical_task_text, production_comment, url, production_status, deadline
   )
   SELECT
     oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
-    oi.product_name, oi.quantity, oi.technical_task_text, oi.url, oi.production_status, oi.deadline
+    oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, oi.deadline
   FROM orders_items oi
   JOIN orders o ON o.id = oi."order"
   LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
   LEFT JOIN contractors c2 ON c2.id = oi.contractor_2
   WHERE oi.id = item_id
-    AND (c1.name ILIKE '%С€РµР»РєРѕРіСЂР°С„%' OR c2.name ILIKE '%С€РµР»РєРѕРіСЂР°С„%');
+    AND (c1.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%' OR c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%');
 
   INSERT INTO contractor_work (
     id, order_item, contractor, contractor_slot, contractor_has_own_view, access_user,
     "order", customer, customer_company, manager_employee,
-    product_name, quantity, technical_task_text, url, production_status, deadline
+    product_name, quantity, technical_task_text, production_comment, url, production_status, deadline
   )
   SELECT
     oi.id * 10 + contractor_slots.slot,
@@ -710,6 +716,7 @@ BEGIN
     oi.product_name,
     oi.quantity,
     oi.technical_task_text,
+    oi.production_comment,
     oi.url,
     oi.production_status,
     oi.deadline
@@ -793,10 +800,21 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  UPDATE orders_items
-     SET production_status = NEW.production_status
-   WHERE id = CASE WHEN TG_TABLE_NAME = 'contractor_work' THEN NEW.order_item ELSE NEW.id END
-     AND production_status IS DISTINCT FROM NEW.production_status;
+  IF TG_TABLE_NAME = 'contractor_work' THEN
+    UPDATE orders_items
+       SET production_status = NEW.production_status,
+           production_comment = NEW.production_comment
+     WHERE id = NEW.order_item
+       AND (production_status IS DISTINCT FROM NEW.production_status
+            OR production_comment IS DISTINCT FROM NEW.production_comment);
+  ELSE
+    UPDATE orders_items
+       SET production_status = NEW.production_status,
+           production_comment = NEW.production_comment
+     WHERE id = NEW.id
+       AND (production_status IS DISTINCT FROM NEW.production_status
+            OR production_comment IS DISTINCT FROM NEW.production_comment);
+  END IF;
 
   RETURN NEW;
 END;
@@ -877,12 +895,12 @@ FOR EACH ROW
 EXECUTE FUNCTION push_office_item_status_update();
 
 CREATE TRIGGER production_work_push_update
-AFTER UPDATE OF production_status ON production_work
+AFTER UPDATE OF production_status, production_comment ON production_work
 FOR EACH ROW
 EXECUTE FUNCTION push_work_status_update();
 
 CREATE TRIGGER screen_printing_work_push_update
-AFTER UPDATE OF production_status ON screen_printing_work
+AFTER UPDATE OF production_status, production_comment ON screen_printing_work
 FOR EACH ROW
 EXECUTE FUNCTION push_work_status_update();
 
@@ -1080,7 +1098,7 @@ FOR EACH ROW
 EXECUTE FUNCTION sync_contractor_work_user_trigger();
 
 CREATE TRIGGER contractor_work_push_update
-AFTER UPDATE OF production_status ON contractor_work
+AFTER UPDATE OF production_status, production_comment ON contractor_work
 FOR EACH ROW
 EXECUTE FUNCTION push_work_status_update();
 
@@ -1227,36 +1245,36 @@ DELETE FROM screen_printing_work;
 DELETE FROM contractor_work;
 INSERT INTO production_work (
   id, "order", customer, customer_company, manager_employee,
-  product_name, quantity, technical_task_text, url, production_status, deadline
+  product_name, quantity, technical_task_text, production_comment, url, production_status, deadline
 )
 SELECT
   oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
-  oi.product_name, oi.quantity, oi.technical_task_text, oi.url, oi.production_status, oi.deadline
+  oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, oi.deadline
 FROM orders_items oi
 JOIN orders o ON o.id = oi."order"
 LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
 LEFT JOIN contractors c2 ON c2.id = oi.contractor_2
-WHERE c1.name ILIKE '%РїСЂРѕРёР·РІРѕРґСЃС‚РІ%'
-   OR c2.name ILIKE '%РїСЂРѕРёР·РІРѕРґСЃС‚РІ%';
+WHERE c1.name ILIKE U&'%\043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432%'
+   OR c2.name ILIKE U&'%\043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432%';
 
 INSERT INTO screen_printing_work (
   id, "order", customer, customer_company, manager_employee,
-  product_name, quantity, technical_task_text, url, production_status, deadline
+  product_name, quantity, technical_task_text, production_comment, url, production_status, deadline
 )
 SELECT
   oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
-  oi.product_name, oi.quantity, oi.technical_task_text, oi.url, oi.production_status, oi.deadline
+  oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, oi.deadline
 FROM orders_items oi
 JOIN orders o ON o.id = oi."order"
 LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
 LEFT JOIN contractors c2 ON c2.id = oi.contractor_2
-WHERE c1.name ILIKE '%С€РµР»РєРѕРіСЂР°С„%'
-   OR c2.name ILIKE '%С€РµР»РєРѕРіСЂР°С„%';
+WHERE c1.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%'
+   OR c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%';
 
 INSERT INTO contractor_work (
   id, order_item, contractor, contractor_slot, contractor_has_own_view, access_user,
   "order", customer, customer_company, manager_employee,
-  product_name, quantity, technical_task_text, url, production_status, deadline
+  product_name, quantity, technical_task_text, production_comment, url, production_status, deadline
 )
 SELECT
   oi.id * 10 + contractor_slots.slot,
@@ -1272,6 +1290,7 @@ SELECT
   oi.product_name,
   oi.quantity,
   oi.technical_task_text,
+  oi.production_comment,
   oi.url,
   oi.production_status,
   oi.deadline
@@ -1466,8 +1485,9 @@ INSERT INTO directus_fields (
   ('production_work', 'quantity', NULL, 'input', NULL, NULL, NULL, true, false, 7, 'half', '[{"language":"ru-RU","translation":"РљРѕР»РёС‡РµСЃС‚РІРѕ"}]'::json, false, true),
   ('production_work', 'deadline', NULL, 'datetime', NULL, NULL, NULL, true, false, 8, 'half', '[{"language":"ru-RU","translation":"РЎСЂРѕРє РїРѕР·РёС†РёРё"}]'::json, false, true),
   ('production_work', 'technical_task_text', NULL, 'input-multiline', NULL, NULL, NULL, true, false, 9, 'full', '[{"language":"ru-RU","translation":"РўР—"}]'::json, false, true),
-  ('production_work', 'url', NULL, 'input', '{"iconLeft":"web_traffic"}'::json, NULL, NULL, true, false, 10, 'full', '[{"language":"ru-RU","translation":"РЎСЃС‹Р»РєР° РЅР° РјР°РєРµС‚"}]'::json, false, true),
-  ('production_work', 'production_status', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 11, 'half', '[{"language":"ru-RU","translation":"РЎС‚Р°С‚СѓСЃ РїСЂРѕРёР·РІРѕРґСЃС‚РІР°"}]'::json, false, true),
+  ('production_work', 'production_comment', NULL, 'input-multiline', NULL, NULL, NULL, false, false, 10, 'full', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439'))::json, false, true),
+  ('production_work', 'url', NULL, 'input', '{"iconLeft":"web_traffic"}'::json, NULL, NULL, true, false, 11, 'full', '[{"language":"ru-RU","translation":"РЎСЃС‹Р»РєР° РЅР° РјР°РєРµС‚"}]'::json, false, true),
+  ('production_work', 'production_status', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 12, 'half', '[{"language":"ru-RU","translation":"РЎС‚Р°С‚СѓСЃ РїСЂРѕРёР·РІРѕРґСЃС‚РІР°"}]'::json, false, true),
 
   ('screen_printing_work', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'full', NULL, false, true),
   ('screen_printing_work', 'order', 'm2o', 'select-dropdown-m2o', '{"template":"{{order_number}}"}'::json, 'related-values', '{"template":"{{order_number}}"}'::json, true, false, 2, 'half', '[{"language":"ru-RU","translation":"Р—Р°РєР°Р·"}]'::json, false, true),
@@ -1479,8 +1499,9 @@ INSERT INTO directus_fields (
   ('screen_printing_work', 'quantity', NULL, 'input', NULL, NULL, NULL, true, false, 7, 'half', '[{"language":"ru-RU","translation":"РљРѕР»РёС‡РµСЃС‚РІРѕ"}]'::json, false, true),
   ('screen_printing_work', 'deadline', NULL, 'datetime', NULL, NULL, NULL, true, false, 8, 'half', '[{"language":"ru-RU","translation":"РЎСЂРѕРє РїРѕР·РёС†РёРё"}]'::json, false, true),
   ('screen_printing_work', 'technical_task_text', NULL, 'input-multiline', NULL, NULL, NULL, true, false, 9, 'full', '[{"language":"ru-RU","translation":"РўР—"}]'::json, false, true),
-  ('screen_printing_work', 'url', NULL, 'input', '{"iconLeft":"web_traffic"}'::json, NULL, NULL, true, false, 10, 'full', '[{"language":"ru-RU","translation":"РЎСЃС‹Р»РєР° РЅР° РјР°РєРµС‚"}]'::json, false, true),
-  ('screen_printing_work', 'production_status', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 11, 'half', '[{"language":"ru-RU","translation":"РЎС‚Р°С‚СѓСЃ РїСЂРѕРёР·РІРѕРґСЃС‚РІР°"}]'::json, false, true),
+  ('screen_printing_work', 'production_comment', NULL, 'input-multiline', NULL, NULL, NULL, false, false, 10, 'full', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439'))::json, false, true),
+  ('screen_printing_work', 'url', NULL, 'input', '{"iconLeft":"web_traffic"}'::json, NULL, NULL, true, false, 11, 'full', '[{"language":"ru-RU","translation":"РЎСЃС‹Р»РєР° РЅР° РјР°РєРµС‚"}]'::json, false, true),
+  ('screen_printing_work', 'production_status', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 12, 'half', '[{"language":"ru-RU","translation":"РЎС‚Р°С‚СѓСЃ РїСЂРѕРёР·РІРѕРґСЃС‚РІР°"}]'::json, false, true),
 
   ('contractor_work', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'full', NULL, false, true),
   ('contractor_work', 'order_item', 'm2o', 'select-dropdown-m2o', '{"template":"{{product_name}}"}'::json, 'related-values', '{"template":"{{product_name}}"}'::json, true, true, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\0437\0438\0446\0438\044f'))::json, false, true),
@@ -1498,7 +1519,8 @@ INSERT INTO directus_fields (
   ('contractor_work', 'deadline', NULL, 'datetime', NULL, NULL, NULL, true, false, 14, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0440\043e\043a'))::json, false, true),
   ('contractor_work', 'production_status', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 15, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0442\0430\0442\0443\0441 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\0430'))::json, false, true),
   ('contractor_work', 'url', NULL, 'input', '{"iconLeft":"web_traffic"}'::json, NULL, NULL, true, false, 16, 'full', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0441\044b\043b\043a\0430 \043d\0430 \043c\0430\043a\0435\0442'))::json, false, true),
-  ('contractor_work', 'technical_task_text', NULL, 'input-multiline', NULL, NULL, NULL, true, false, 17, 'full', json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0417'))::json, false, true);
+  ('contractor_work', 'technical_task_text', NULL, 'input-multiline', NULL, NULL, NULL, true, false, 17, 'full', json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0417'))::json, false, true),
+  ('contractor_work', 'production_comment', NULL, 'input-multiline', NULL, NULL, NULL, false, false, 18, 'full', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439'))::json, false, true);
 
 INSERT INTO directus_fields (
   collection, field, special, interface, options, display, display_options,
@@ -1810,18 +1832,18 @@ VALUES
 
   ('production_work', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
   ('production_work', 'update', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
-  ('production_work', 'read', '{}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,product_name,quantity,deadline,technical_task_text,url,production_status', '00000000-0000-4000-8000-000000000204'),
-  ('production_work', 'update', '{}'::json, NULL, NULL, 'production_status', '00000000-0000-4000-8000-000000000204'),
+  ('production_work', 'read', '{}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,product_name,quantity,deadline,technical_task_text,production_comment,url,production_status', '00000000-0000-4000-8000-000000000204'),
+  ('production_work', 'update', '{}'::json, NULL, NULL, 'production_status,production_comment', '00000000-0000-4000-8000-000000000204'),
 
   ('screen_printing_work', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
   ('screen_printing_work', 'update', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
-  ('screen_printing_work', 'read', '{}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,product_name,quantity,deadline,technical_task_text,url,production_status', '00000000-0000-4000-8000-000000000206'),
-  ('screen_printing_work', 'update', '{}'::json, NULL, NULL, 'production_status', '00000000-0000-4000-8000-000000000206'),
+  ('screen_printing_work', 'read', '{}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,product_name,quantity,deadline,technical_task_text,production_comment,url,production_status', '00000000-0000-4000-8000-000000000206'),
+  ('screen_printing_work', 'update', '{}'::json, NULL, NULL, 'production_status,production_comment', '00000000-0000-4000-8000-000000000206'),
 
   ('contractor_work', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
   ('contractor_work', 'update', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
-  ('contractor_work', 'read', '{"_and":[{"contractor_has_own_view":{"_eq":true}},{"access_user":{"_eq":"$CURRENT_USER"}}]}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,contractor,product_name,quantity,deadline,technical_task_text,url,production_status', '00000000-0000-4000-8000-000000000207'),
-  ('contractor_work', 'update', '{"_and":[{"contractor_has_own_view":{"_eq":true}},{"access_user":{"_eq":"$CURRENT_USER"}}]}'::json, NULL, NULL, 'production_status', '00000000-0000-4000-8000-000000000207');
+  ('contractor_work', 'read', '{"_and":[{"contractor_has_own_view":{"_eq":true}},{"access_user":{"_eq":"$CURRENT_USER"}}]}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,contractor,product_name,quantity,deadline,technical_task_text,production_comment,url,production_status', '00000000-0000-4000-8000-000000000207'),
+  ('contractor_work', 'update', '{"_and":[{"contractor_has_own_view":{"_eq":true}},{"access_user":{"_eq":"$CURRENT_USER"}}]}'::json, NULL, NULL, 'production_status,production_comment', '00000000-0000-4000-8000-000000000207');
 
 UPDATE directus_permissions
    SET fields = 'id,office_summary,office_customer,office_payment,office_positions,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,add_payment,overpayment,payment_type,payment_comment,order_items'
@@ -2461,6 +2483,7 @@ WITH labels(collection_name, field_name, label) AS (VALUES
   ('production_work', 'quantity', U&'\041a\043e\043b\0438\0447\0435\0441\0442\0432\043e'),
   ('production_work', 'deadline', U&'\0421\0440\043e\043a \043f\043e\0437\0438\0446\0438\0438'),
   ('production_work', 'technical_task_text', U&'\0422\0417'),
+  ('production_work', 'production_comment', U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439'),
   ('production_work', 'url', U&'\0421\0441\044b\043b\043a\0430 \043d\0430 \043c\0430\043a\0435\0442'),
   ('production_work', 'production_status', U&'\0421\0442\0430\0442\0443\0441 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\0430'),
   ('screen_printing_work', 'order', U&'\0417\0430\043a\0430\0437'),
@@ -2471,6 +2494,7 @@ WITH labels(collection_name, field_name, label) AS (VALUES
   ('screen_printing_work', 'quantity', U&'\041a\043e\043b\0438\0447\0435\0441\0442\0432\043e'),
   ('screen_printing_work', 'deadline', U&'\0421\0440\043e\043a \043f\043e\0437\0438\0446\0438\0438'),
   ('screen_printing_work', 'technical_task_text', U&'\0422\0417'),
+  ('screen_printing_work', 'production_comment', U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439'),
   ('screen_printing_work', 'url', U&'\0421\0441\044b\043b\043a\0430 \043d\0430 \043c\0430\043a\0435\0442'),
   ('screen_printing_work', 'production_status', U&'\0421\0442\0430\0442\0443\0441 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\0430'),
   ('contractors', 'has_own_view', U&'\0421\0432\043e\0435 \043f\0440\0435\0434\0441\0442\0430\0432\043b\0435\043d\0438\0435'),
@@ -2487,6 +2511,7 @@ WITH labels(collection_name, field_name, label) AS (VALUES
   ('contractor_work', 'quantity', U&'\041a\043e\043b\0438\0447\0435\0441\0442\0432\043e'),
   ('contractor_work', 'deadline', U&'\0421\0440\043e\043a'),
   ('contractor_work', 'technical_task_text', U&'\0422\0417'),
+  ('contractor_work', 'production_comment', U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439'),
   ('contractor_work', 'url', U&'\0421\0441\044b\043b\043a\0430 \043d\0430 \043c\0430\043a\0435\0442'),
   ('contractor_work', 'production_status', U&'\0421\0442\0430\0442\0443\0441 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\0430')
 )
@@ -2697,11 +2722,28 @@ CREATE TABLE IF NOT EXISTS my_orders_in_work_items (
   id integer PRIMARY KEY,
   bucket_order integer,
   product_name character varying(255),
-  quantity integer
+  quantity integer,
+  deadline timestamp without time zone,
+  item_status character varying(255),
+  production_status integer,
+  office_status character varying(255)
 );
 
 CREATE TABLE IF NOT EXISTS my_orders_completed_items (LIKE my_orders_in_work_items INCLUDING ALL);
 CREATE TABLE IF NOT EXISTS my_orders_unpaid_items (LIKE my_orders_in_work_items INCLUDING ALL);
+
+ALTER TABLE my_orders_in_work_items ADD COLUMN IF NOT EXISTS deadline timestamp without time zone;
+ALTER TABLE my_orders_in_work_items ADD COLUMN IF NOT EXISTS item_status character varying(255);
+ALTER TABLE my_orders_in_work_items ADD COLUMN IF NOT EXISTS production_status integer;
+ALTER TABLE my_orders_in_work_items ADD COLUMN IF NOT EXISTS office_status character varying(255);
+ALTER TABLE my_orders_completed_items ADD COLUMN IF NOT EXISTS deadline timestamp without time zone;
+ALTER TABLE my_orders_completed_items ADD COLUMN IF NOT EXISTS item_status character varying(255);
+ALTER TABLE my_orders_completed_items ADD COLUMN IF NOT EXISTS production_status integer;
+ALTER TABLE my_orders_completed_items ADD COLUMN IF NOT EXISTS office_status character varying(255);
+ALTER TABLE my_orders_unpaid_items ADD COLUMN IF NOT EXISTS deadline timestamp without time zone;
+ALTER TABLE my_orders_unpaid_items ADD COLUMN IF NOT EXISTS item_status character varying(255);
+ALTER TABLE my_orders_unpaid_items ADD COLUMN IF NOT EXISTS production_status integer;
+ALTER TABLE my_orders_unpaid_items ADD COLUMN IF NOT EXISTS office_status character varying(255);
 
 CREATE TABLE IF NOT EXISTS my_orders_in_work_payments (
   id integer PRIMARY KEY,
@@ -2879,23 +2921,23 @@ BEGIN
   WHERE id = order_id;
 
   INSERT INTO my_orders_completed_items (
-    id, bucket_order, product_name, quantity
+    id, bucket_order, product_name, quantity, deadline, item_status, production_status, office_status
   )
-  SELECT oi.id, oi."order", oi.product_name, oi.quantity
+  SELECT oi.id, oi."order", oi.product_name, oi.quantity, oi.deadline, oi.item_status, oi.production_status, oi.office_status
   FROM orders_items oi
   WHERE oi."order" = order_id AND is_completed;
 
   INSERT INTO my_orders_in_work_items (
-    id, bucket_order, product_name, quantity
+    id, bucket_order, product_name, quantity, deadline, item_status, production_status, office_status
   )
-  SELECT oi.id, oi."order", oi.product_name, oi.quantity
+  SELECT oi.id, oi."order", oi.product_name, oi.quantity, oi.deadline, oi.item_status, oi.production_status, oi.office_status
   FROM orders_items oi
   WHERE oi."order" = order_id AND NOT is_completed;
 
   INSERT INTO my_orders_unpaid_items (
-    id, bucket_order, product_name, quantity
+    id, bucket_order, product_name, quantity, deadline, item_status, production_status, office_status
   )
-  SELECT oi.id, oi."order", oi.product_name, oi.quantity
+  SELECT oi.id, oi."order", oi.product_name, oi.quantity, oi.deadline, oi.item_status, oi.production_status, oi.office_status
   FROM orders_items oi
   WHERE oi."order" = order_id AND is_unpaid;
 
@@ -3343,7 +3385,7 @@ SELECT
   my_fields.special_value,
   my_fields.interface_name,
   CASE WHEN my_fields.field_name = 'order_items'
-    THEN '{"layout":"table","tableSpacing":"compact","fields":["product_name","quantity"],"enableCreate":false,"enableSelect":false}'::json
+    THEN '{"layout":"table","tableSpacing":"compact","fields":["product_name","quantity","deadline","item_status","production_status","office_status"],"enableCreate":false,"enableSelect":false}'::json
     WHEN my_fields.field_name = 'payments'
     THEN '{"layout":"table","tableSpacing":"compact","fields":["payment_date","amount","payment_type_name","allocated_amount"],"enableCreate":false,"enableSelect":false}'::json
     WHEN my_fields.field_name = 'manager_employee'
@@ -3407,8 +3449,22 @@ CROSS JOIN (VALUES
   ('id', NULL, 'numeric', NULL::json, NULL, NULL::json, 1, 'full', NULL, true),
   ('bucket_order', 'm2o', 'select-dropdown-m2o', '{"template":"{{order_number}}"}'::json, 'related-values', '{"template":"{{order_number}}"}'::json, 2, 'half', U&'\0417\0430\043a\0430\0437', true),
   ('product_name', NULL, 'input', NULL::json, NULL, NULL::json, 3, 'half', U&'\041d\0430\0438\043c\0435\043d\043e\0432\0430\043d\0438\0435', false),
-  ('quantity', NULL, 'input', NULL::json, NULL, NULL::json, 4, 'half', U&'\041a\043e\043b\0438\0447\0435\0441\0442\0432\043e', false)
+  ('quantity', NULL, 'input', NULL::json, NULL, NULL::json, 4, 'half', U&'\041a\043e\043b\0438\0447\0435\0441\0442\0432\043e', false),
+  ('deadline', NULL, 'datetime', NULL::json, NULL, NULL::json, 5, 'half', U&'\0421\0440\043e\043a \043f\043e\0437\0438\0446\0438\0438', false),
+  ('item_status', NULL, 'select-dropdown', NULL::json, 'labels', NULL::json, 6, 'half', U&'\0421\0442\0430\0442\0443\0441 \043f\043e\0437\0438\0446\0438\0438', false),
+  ('production_status', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'labels', NULL::json, 7, 'half', U&'\0421\0442\0430\0442\0443\0441 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\0430', false),
+  ('office_status', NULL, 'select-dropdown', NULL::json, 'labels', NULL::json, 8, 'half', U&'\0421\0442\0430\0442\0443\0441 \043e\0444\0438\0441\0430', false)
 ) AS fields(field_name, special_value, interface_name, options_value, display_value, display_options_value, sort_order, width_value, label, hidden_value);
+
+UPDATE directus_fields target
+SET options = source.options,
+    display = source.display,
+    display_options = source.display_options
+FROM directus_fields source
+WHERE source.collection = 'orders_items'
+  AND source.field = target.field
+  AND target.collection IN ('my_orders_in_work_items', 'my_orders_completed_items', 'my_orders_unpaid_items')
+  AND target.field IN ('deadline', 'item_status', 'production_status', 'office_status');
 
 INSERT INTO directus_fields (
   collection, field, special, interface, options, display, display_options,
@@ -3451,6 +3507,7 @@ CROSS JOIN (VALUES
 DELETE FROM directus_relations
 WHERE (many_collection = 'orders_overview_items' AND many_field = 'orders_overview')
    OR (many_collection IN ('my_orders_in_work_items', 'my_orders_completed_items', 'my_orders_unpaid_items') AND many_field = 'bucket_order')
+   OR (many_collection IN ('my_orders_in_work_items', 'my_orders_completed_items', 'my_orders_unpaid_items') AND many_field = 'production_status')
    OR (many_collection IN ('my_orders_in_work_payments', 'my_orders_completed_payments', 'my_orders_unpaid_payments') AND many_field = 'bucket_order')
    OR many_collection IN ('my_orders_in_work', 'my_orders_completed', 'my_orders_unpaid');
 
@@ -3470,6 +3527,9 @@ INSERT INTO directus_relations (
   ('my_orders_in_work_items', 'bucket_order', 'my_orders_in_work', 'order_items', 'nullify'),
   ('my_orders_completed_items', 'bucket_order', 'my_orders_completed', 'order_items', 'nullify'),
   ('my_orders_unpaid_items', 'bucket_order', 'my_orders_unpaid', 'order_items', 'nullify'),
+  ('my_orders_in_work_items', 'production_status', 'production_statuses', NULL, 'nullify'),
+  ('my_orders_completed_items', 'production_status', 'production_statuses', NULL, 'nullify'),
+  ('my_orders_unpaid_items', 'production_status', 'production_statuses', NULL, 'nullify'),
   ('my_orders_in_work_payments', 'bucket_order', 'my_orders_in_work', 'payments', 'nullify'),
   ('my_orders_completed_payments', 'bucket_order', 'my_orders_completed', 'payments', 'nullify'),
   ('my_orders_unpaid_payments', 'bucket_order', 'my_orders_unpaid', 'payments', 'nullify');
@@ -4124,6 +4184,11 @@ FROM group_labels
 WHERE df.collection = group_labels.collection_name
   AND df.field = group_labels.field_name;
 
+UPDATE directus_fields
+SET options = '{"layout":"table","tableSpacing":"compact","fields":["product_name","quantity","price_per_unit","order_sum","deadline","item_status","production_status","office_status"],"enableCreate":true,"enableSelect":true}'::json
+WHERE collection = 'orders'
+  AND field = 'order_items';
+
 WITH layout(collection_name, field_name, group_name, sort_value, width_value, hidden_value) AS (VALUES
   ('orders', 'main', NULL, 1, 'full', false),
   ('orders', 'order_number', 'main', 1, 'half', false),
@@ -4236,6 +4301,7 @@ WITH layout(collection_name, field_name, group_name, sort_value, width_value, hi
   ('production_work', 'manager_employee', NULL, 9, 'half', false),
   ('production_work', 'url', NULL, 10, 'full', false),
   ('production_work', 'technical_task_text', NULL, 11, 'full', false),
+  ('production_work', 'production_comment', NULL, 12, 'full', false),
 
   ('screen_printing_work', 'order_link', NULL, 1, 'half', false),
   ('screen_printing_work', 'order', NULL, 2, 'half', false),
@@ -4248,6 +4314,7 @@ WITH layout(collection_name, field_name, group_name, sort_value, width_value, hi
   ('screen_printing_work', 'manager_employee', NULL, 9, 'half', false),
   ('screen_printing_work', 'url', NULL, 10, 'full', false),
   ('screen_printing_work', 'technical_task_text', NULL, 11, 'full', false),
+  ('screen_printing_work', 'production_comment', NULL, 12, 'full', false),
 
   ('contractor_work', 'order_link', NULL, 1, 'half', false),
   ('contractor_work', 'order', NULL, 2, 'half', false),
@@ -4261,6 +4328,7 @@ WITH layout(collection_name, field_name, group_name, sort_value, width_value, hi
   ('contractor_work', 'manager_employee', NULL, 10, 'half', false),
   ('contractor_work', 'url', NULL, 11, 'full', false),
   ('contractor_work', 'technical_task_text', NULL, 12, 'full', false),
+  ('contractor_work', 'production_comment', NULL, 13, 'full', false),
 
   ('customers', 'name', NULL, 1, 'half', false),
   ('customers', 'phone', NULL, 2, 'half', false),

@@ -15,6 +15,45 @@
     '\u043d\u043e\u044f\u0431\u0440\u044f': '11',
     '\u0434\u0435\u043a\u0430\u0431\u0440\u044f': '12',
   };
+  const calendarTextMap = new Map([
+    ['January', '\u042f\u043d\u0432\u0430\u0440\u044c'],
+    ['February', '\u0424\u0435\u0432\u0440\u0430\u043b\u044c'],
+    ['March', '\u041c\u0430\u0440\u0442'],
+    ['April', '\u0410\u043f\u0440\u0435\u043b\u044c'],
+    ['May', '\u041c\u0430\u0439'],
+    ['June', '\u0418\u044e\u043d\u044c'],
+    ['July', '\u0418\u044e\u043b\u044c'],
+    ['August', '\u0410\u0432\u0433\u0443\u0441\u0442'],
+    ['September', '\u0421\u0435\u043d\u0442\u044f\u0431\u0440\u044c'],
+    ['October', '\u041e\u043a\u0442\u044f\u0431\u0440\u044c'],
+    ['November', '\u041d\u043e\u044f\u0431\u0440\u044c'],
+    ['December', '\u0414\u0435\u043a\u0430\u0431\u0440\u044c'],
+    ['Jan', '\u044f\u043d\u0432'],
+    ['Feb', '\u0444\u0435\u0432'],
+    ['Mar', '\u043c\u0430\u0440'],
+    ['Apr', '\u0430\u043f\u0440'],
+    ['Jun', '\u0438\u044e\u043d'],
+    ['Jul', '\u0438\u044e\u043b'],
+    ['Aug', '\u0430\u0432\u0433'],
+    ['Sep', '\u0441\u0435\u043d'],
+    ['Oct', '\u043e\u043a\u0442'],
+    ['Nov', '\u043d\u043e\u044f'],
+    ['Dec', '\u0434\u0435\u043a'],
+    ['Sunday', '\u0412\u043e\u0441\u043a\u0440\u0435\u0441\u0435\u043d\u044c\u0435'],
+    ['Monday', '\u041f\u043e\u043d\u0435\u0434\u0435\u043b\u044c\u043d\u0438\u043a'],
+    ['Tuesday', '\u0412\u0442\u043e\u0440\u043d\u0438\u043a'],
+    ['Wednesday', '\u0421\u0440\u0435\u0434\u0430'],
+    ['Thursday', '\u0427\u0435\u0442\u0432\u0435\u0440\u0433'],
+    ['Friday', '\u041f\u044f\u0442\u043d\u0438\u0446\u0430'],
+    ['Saturday', '\u0421\u0443\u0431\u0431\u043e\u0442\u0430'],
+    ['Sun', '\u0412\u0441'],
+    ['Mon', '\u041f\u043d'],
+    ['Tue', '\u0412\u0442'],
+    ['Wed', '\u0421\u0440'],
+    ['Thu', '\u0427\u0442'],
+    ['Fri', '\u041f\u0442'],
+    ['Sat', '\u0421\u0431'],
+  ]);
   const processedNodes = new WeakSet();
   const autosave = {
     timer: null,
@@ -33,6 +72,7 @@
     fieldError: '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0438\u0442\u044c \u043f\u043e\u043b\u0435',
     saveError: '\u041e\u0448\u0438\u0431\u043a\u0430 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u044f',
   };
+  const formAutosaveEnabled = false;
   const tableState = {
     byCollection: new Map(),
     collectionMeta: new Map(),
@@ -41,6 +81,15 @@
     editCell: null,
   };
   const tableInlineEditingEnabled = false;
+
+  function applyDocumentLocale() {
+    document.documentElement.lang = 'ru-RU';
+    document.documentElement.setAttribute('translate', 'no');
+    if (document.body) {
+      document.body.setAttribute('translate', 'no');
+    }
+  }
+
   const tableEditText = {
     hint: '\u041a\u043b\u0438\u043a\u043d\u0438\u0442\u0435, \u0447\u0442\u043e\u0431\u044b \u0438\u0437\u043c\u0435\u043d\u0438\u0442\u044c',
   };
@@ -387,6 +436,7 @@
     if (!node.nodeValue) return;
 
     let nextText = node.nodeValue;
+    nextText = translateCalendarText(nextText);
     const match = nextText.match(exactCountPattern);
     if (match) {
       const count = Number(match[1]);
@@ -395,6 +445,97 @@
 
     nextText = formatVisibleDates(nextText);
     if (node.nodeValue !== nextText) node.nodeValue = nextText;
+  }
+
+  function translateCalendarText(text) {
+    const raw = String(text || '');
+    const trimmed = raw.trim();
+    if (!trimmed) return text;
+
+    const translated = calendarTextMap.get(trimmed);
+    if (translated) return raw.replace(trimmed, translated);
+
+    return raw.replace(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/g, (match) => {
+      return calendarTextMap.get(match) || match;
+    });
+  }
+
+  function normalizeCalendarWeekdays(root) {
+    if (!root || root.nodeType !== Node.ELEMENT_NODE) return;
+
+    const sundayFirst = ['Sun', '\u0412\u0441', '\u0412\u0441.'];
+    const weekdayValues = new Set([
+      'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat',
+      '\u0412\u0441', '\u041f\u043d', '\u0412\u0442', '\u0421\u0440', '\u0427\u0442', '\u041f\u0442', '\u0421\u0431',
+      '\u0412\u0441.', '\u041f\u043d.', '\u0412\u0442.', '\u0421\u0440.', '\u0427\u0442.', '\u041f\u0442.', '\u0421\u0431.',
+    ]);
+    const labels = ['\u041f\u043d', '\u0412\u0442', '\u0421\u0440', '\u0427\u0442', '\u041f\u0442', '\u0421\u0431', '\u0412\u0441'];
+    const weekdayParents = new Set();
+    const dayParents = new Set();
+
+    const calendarRoots = root.matches?.('.v-date-picker, [class*="date-picker"], [role="dialog"], .v-overlay-container')
+      ? [root]
+      : Array.from(root.querySelectorAll?.('.v-date-picker, [class*="date-picker"], [role="dialog"], .v-overlay-container') || []);
+
+    for (const calendarRoot of calendarRoots) {
+      const nodes = Array.from(calendarRoot.querySelectorAll?.('*') || []);
+      for (const node of nodes) {
+        const children = Array.from(node.children || []);
+        if (children.length < 7) continue;
+
+        const textChildren = children.filter((child) => child.textContent?.trim());
+        for (let index = 0; index <= textChildren.length - 7; index += 1) {
+          const group = textChildren.slice(index, index + 7);
+          const values = group.map((child) => child.textContent.trim());
+          if (values.every((value) => weekdayValues.has(value))) {
+            weekdayParents.add(node);
+            break;
+          }
+        }
+      }
+    }
+
+    for (const node of Array.from(root.querySelectorAll?.('.v-date-picker-month__weekday, [class*="weekday"]') || [])) {
+      const text = node.textContent?.trim();
+      if (weekdayValues.has(text) && node.parentElement) weekdayParents.add(node.parentElement);
+    }
+
+    for (const parent of weekdayParents) {
+      const nodes = Array.from(parent.children).filter((node) => node.textContent?.trim());
+      if (nodes.length < 7) continue;
+      const firstSeven = nodes.slice(0, 7);
+      const raw = firstSeven.map((node) => node.textContent.trim());
+      if (sundayFirst.includes(raw[0])) {
+        parent.append(...firstSeven.slice(1), firstSeven[0]);
+      }
+      Array.from(parent.children).slice(0, 7).forEach((node, index) => {
+        node.textContent = labels[index];
+        node.setAttribute('aria-label', labels[index]);
+      });
+      parent.dataset.symbolikaMondayFirst = 'true';
+    }
+
+    for (const node of Array.from(root.querySelectorAll?.('.v-date-picker-month__day, [class*="date-picker-month"] button, [class*="date-picker"] [role="gridcell"]') || [])) {
+      if (node.parentElement) dayParents.add(node.parentElement);
+    }
+
+    for (const parent of dayParents) {
+      if (parent.dataset.symbolikaMondayFirst === 'true') continue;
+      const days = Array.from(parent.children).filter((node) => {
+        return node.classList?.contains('v-date-picker-month__day')
+          || node.querySelector?.('button')
+          || node.getAttribute?.('role') === 'gridcell'
+          || node.matches?.('button');
+      });
+      if (days.length < 7 || days.length % 7 !== 0) continue;
+      const reordered = [];
+      for (let index = 0; index < days.length; index += 7) {
+        const week = days.slice(index, index + 7);
+        reordered.push(...week.slice(1), week[0]);
+      }
+      parent.append(...reordered);
+      parent.dataset.symbolikaMondayFirst = 'true';
+    }
   }
 
   function formatVisibleDates(text) {
@@ -464,6 +605,7 @@
 
     updateCountLabels(root);
     updateDateInputs(root);
+    normalizeCalendarWeekdays(root);
 
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode();
@@ -474,7 +616,9 @@
   }
 
   function scan() {
+    applyDocumentLocale();
     updateCountLabels(document.body);
+    normalizeCalendarWeekdays(document.body);
     walk(document.body);
   }
 
@@ -509,6 +653,7 @@
   }
 
   function setAutosaveStatus(state, text) {
+    if (!formAutosaveEnabled) return;
     const node = ensureAutosaveStatus();
     node.dataset.state = state;
     node.textContent = text;
@@ -1193,11 +1338,13 @@
   document.addEventListener('click', onInlineTableClick, true);
   document.addEventListener('pointerdown', onStaticReadonlyFieldEvent, true);
   document.addEventListener('click', onStaticReadonlyFieldEvent, true);
-  document.addEventListener('pointerdown', onAutosavePointerDown, true);
-  document.addEventListener('click', onAutosaveClick, true);
-  document.addEventListener('input', onAutosaveInput, true);
-  document.addEventListener('change', onAutosaveInput, true);
-  document.addEventListener('blur', onAutosaveInput, true);
+  if (formAutosaveEnabled) {
+    document.addEventListener('pointerdown', onAutosavePointerDown, true);
+    document.addEventListener('click', onAutosaveClick, true);
+    document.addEventListener('input', onAutosaveInput, true);
+    document.addEventListener('change', onAutosaveInput, true);
+    document.addEventListener('blur', onAutosaveInput, true);
+  }
 
   observer.observe(document.documentElement, {
     childList: true,
