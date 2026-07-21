@@ -45,6 +45,11 @@ services:
       SYMBOLIKA_PUSH_PUBLIC_KEY: "BNGNVNeqGsMSa90cNbA7LnQIwU3lxU5bXNV31QyJwrx60cHPFgrQo9s_zlRA3nQ5AJ9wUGoN09Usp4NnirtFHCo"
       SYMBOLIKA_PUSH_PRIVATE_KEY: "oqWwx53ZjshhAgpQdnZLWhhGnpuRTVLEcEzACFVIdAA"
       SYMBOLIKA_PUSH_SUBJECT: "mailto:admin@symbcorp.ru"
+      SYMBOLIKA_PUBLIC_URL: "http://localhost:8057"
+      SYMBOLIKA_VK_TOKEN: ""
+      SYMBOLIKA_VK_API_VERSION: "5.199"
+      SYMBOLIKA_VK_PRODUCTION_PEER_ID: ""
+      SYMBOLIKA_VK_SCREEN_PRINTING_PEER_ID: ""
     volumes:
       - ./uploads:/directus/uploads
       - ./extensions:/directus/extensions

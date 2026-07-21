@@ -4,6 +4,11 @@ export default ({ filter, action }, { database, logger, env }) => {
   const num = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
   const round = (v) => Math.round(num(v) * 100) / 100;
   const isEmpty = (v) => v === null || v === undefined || v === '';
+  const toDateOnly = (v) => {
+    if (isEmpty(v)) return null;
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    return String(v).slice(0, 10);
+  };
 
   const OFFICE_PICKUP = 'office_pickup';
   const NOT_IN_OFFICE = 'not_in_office';
@@ -160,6 +165,55 @@ export default ({ filter, action }, { database, logger, env }) => {
     return `/admin/content/${collection}/${item}`;
   }
 
+  function getPublicUrl(path = '/admin') {
+    const baseUrl = env?.SYMBOLIKA_PUBLIC_URL || env?.PUBLIC_URL || env?.DIRECTUS_PUBLIC_URL || '';
+    if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) return path;
+
+    try {
+      return new URL(path, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).href;
+    } catch {
+      return path;
+    }
+  }
+
+  function getVkPeerId(channel) {
+    if (channel === 'production') return env?.SYMBOLIKA_VK_PRODUCTION_PEER_ID || null;
+    if (channel === 'screen_printing') return env?.SYMBOLIKA_VK_SCREEN_PRINTING_PEER_ID || null;
+    return null;
+  }
+
+  async function sendVkMessage(channel, message) {
+    const token = env?.SYMBOLIKA_VK_TOKEN;
+    const peerId = getVkPeerId(channel);
+    if (!token || !peerId || !message) return;
+
+    try {
+      const body = new URLSearchParams({
+        access_token: token,
+        v: env?.SYMBOLIKA_VK_API_VERSION || '5.199',
+        peer_id: String(peerId),
+        random_id: String(Date.now() * 1000 + Math.floor(Math.random() * 1000)),
+        message,
+      });
+
+      const response = await fetch('https://api.vk.com/method/messages.send', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || payload?.error) {
+        logger.warn({
+          channel,
+          error: payload?.error || response.statusText,
+        }, '[Symbolika VK] send failed');
+      }
+    } catch (error) {
+      logger.warn(error);
+    }
+  }
+
   async function sendBrowserPush(recipient, subject, message, collection = null, item = null) {
     if (!recipient || !configurePush()) return;
     if (!await ensurePushTable()) return;
@@ -252,6 +306,44 @@ export default ({ filter, action }, { database, logger, env }) => {
     return String(contractorName || '').toLowerCase().includes(pattern);
   }
 
+  function getWorkNotificationTarget(contractorName) {
+    if (contractorMatches(contractorName, '\u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432')) {
+      return {
+        roleName: '\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e',
+        collection: 'production_work',
+        vkChannel: 'production',
+      };
+    }
+
+    if (contractorMatches(contractorName, '\u0448\u0435\u043b\u043a\u043e\u0433\u0440\u0430\u0444')) {
+      return {
+        roleName: '\u0428\u0435\u043b\u043a\u043e\u0433\u0440\u0430\u0444\u0438\u044f',
+        collection: 'screen_printing_work',
+        vkChannel: 'screen_printing',
+      };
+    }
+
+    return null;
+  }
+
+  async function buildWorkAssignmentMessage(item, target) {
+    const orderLabel = await getOrderLabel(item.order);
+    const productName = item.product_name || '\u041f\u043e\u0437\u0438\u0446\u0438\u044f';
+    const quantity = item.quantity || '-';
+    const techTask = item.technical_task_text || '-';
+    const layoutUrl = item.url || '-';
+    const adminUrl = getPublicUrl(getNotificationUrl(target.collection, item.id));
+
+    return [
+      `\u0417\u0430\u043a\u0430\u0437: ${orderLabel}`,
+      `\u041f\u043e\u0437\u0438\u0446\u0438\u044f: ${productName}`,
+      `\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e: ${quantity}`,
+      `\u0422\u0417: ${techTask}`,
+      `\u0421\u0441\u044b\u043b\u043a\u0430 \u043d\u0430 \u043c\u0430\u043a\u0435\u0442: ${layoutUrl}`,
+      `\u0412 \u0441\u0438\u0441\u0442\u0435\u043c\u0435: ${adminUrl}`,
+    ].join('\n');
+  }
+
   async function getItemContractors(item) {
     const ids = [item?.contractor_1, item?.contractor_2].filter(Boolean);
     if (!ids.length) return [];
@@ -268,30 +360,28 @@ export default ({ filter, action }, { database, logger, env }) => {
     if (!contractors.length) return;
 
     const prevContractorIds = new Set([prevItem?.contractor_1, prevItem?.contractor_2].filter(Boolean));
-    const orderLabel = await getOrderLabel(item.order);
-    const productName = item.product_name || '\u041f\u043e\u0437\u0438\u0446\u0438\u044f';
-    const quantity = item.quantity ? `, ${item.quantity} \u0448\u0442.` : '';
-
     for (const contractor of contractors) {
       if (prevContractorIds.has(contractor.id)) continue;
 
-      let roleName = null;
-      if (contractorMatches(contractor.name, '\u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432')) {
-        roleName = '\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e';
-      }
-      if (contractorMatches(contractor.name, '\u0448\u0435\u043b\u043a\u043e\u0433\u0440\u0430\u0444')) {
-        roleName = '\u0428\u0435\u043b\u043a\u043e\u0433\u0440\u0430\u0444\u0438\u044f';
-      }
-      if (!roleName) continue;
+      const target = getWorkNotificationTarget(contractor.name);
+      if (!target) continue;
 
-      const recipients = await getRoleUserIds(roleName);
+      const recipients = await getRoleUserIds(target.roleName);
+      const orderLabel = await getOrderLabel(item.order);
+      const message = await buildWorkAssignmentMessage(item, target);
+      const subject = `\u041d\u043e\u0432\u044b\u0439 \u0437\u0430\u043a\u0430\u0437 \u0434\u043b\u044f ${target.roleName}: ${orderLabel}`;
 
       await notifyUsers(
         recipients,
-        `\u041d\u043e\u0432\u0430\u044f \u043f\u043e\u0437\u0438\u0446\u0438\u044f \u0432 ${roleName}`,
-        `${orderLabel}: ${productName}${quantity}.`,
-        'orders_items',
+        subject,
+        message,
+        target.collection,
         item.id
+      );
+
+      await sendVkMessage(
+        target.vkChannel,
+        `${subject}\n\n${message}`
       );
     }
   }
@@ -341,7 +431,7 @@ export default ({ filter, action }, { database, logger, env }) => {
     if (order.customer) {
       const customer = await database('customers').where({ id: order.customer }).first();
 
-      if (customer && customer.manager !== order.manager_employee) {
+      if (customer && !customer.manager) {
         await database('customers').where({ id: order.customer }).update({
           manager: order.manager_employee,
         });
@@ -383,6 +473,13 @@ export default ({ filter, action }, { database, logger, env }) => {
       customer_companies: order.customer_company,
       is_default: defaultLink ? false : true,
     });
+
+    const customer = await database('customers').where({ id: order.customer }).first();
+    if (customer && !customer.company) {
+      await database('customers').where({ id: order.customer }).update({
+        company: order.customer_company,
+      });
+    }
   }
 
   async function recalcCustomerBalance(customerId) {
@@ -545,6 +642,27 @@ export default ({ filter, action }, { database, logger, env }) => {
         shipping_method: order.shipping_method || null,
         office_status: NOT_IN_OFFICE,
       });
+  }
+
+  async function syncItemDeadlinesFromOrder(orderId, prevDeadline, nextDeadline) {
+    if (!orderId) return;
+
+    const nextDate = toDateOnly(nextDeadline);
+    const prevDate = toDateOnly(prevDeadline);
+
+    if (nextDate === prevDate) return;
+
+    const query = database('orders_items').where({ order: orderId });
+
+    if (prevDate) {
+      query.andWhere((builder) => {
+        builder.whereNull('deadline').orWhereRaw('deadline::date = ?', [prevDate]);
+      });
+    } else {
+      query.whereNull('deadline');
+    }
+
+    await query.update({ deadline: nextDate });
   }
 
   async function setAllItemsOfficeStatus(orderId, officeStatus) {
@@ -764,6 +882,25 @@ export default ({ filter, action }, { database, logger, env }) => {
     return next;
   });
 
+  // BEFORE CREATE ORDER ITEM
+  filter('items.create', async (payload, meta) => {
+    if (meta.collection !== 'orders_items') return payload;
+
+    const next = { ...payload };
+
+    if (isEmpty(next.deadline) && next.order) {
+      const order = await database('orders')
+        .where({ id: next.order })
+        .first();
+
+      if (!isEmpty(order?.deadline)) {
+        next.deadline = toDateOnly(order.deadline);
+      }
+    }
+
+    return next;
+  });
+
   // CAPTURE OLD VALUES BEFORE UPDATE
   filter('items.update', async (payload, meta) => {
     const keys = meta?.keys || [];
@@ -856,6 +993,10 @@ export default ({ filter, action }, { database, logger, env }) => {
 
         if (Object.prototype.hasOwnProperty.call(payload || {}, 'shipping_method')) {
           await syncItemsShippingFromOrder(orderId);
+        }
+
+        if (Object.prototype.hasOwnProperty.call(payload || {}, 'deadline')) {
+          await syncItemDeadlinesFromOrder(orderId, prevOrder?.deadline, order?.deadline);
         }
 
         if (Object.prototype.hasOwnProperty.call(payload || {}, 'office_status')) {

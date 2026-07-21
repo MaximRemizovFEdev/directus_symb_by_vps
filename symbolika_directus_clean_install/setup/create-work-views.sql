@@ -19,6 +19,7 @@ DROP TRIGGER IF EXISTS office_issue_item_push_update ON office_issue_items;
 DROP TRIGGER IF EXISTS office_items_in_office_push_update ON office_items_in_office;
 DROP TRIGGER IF EXISTS symbolika_sync_work_contractor ON contractors;
 DROP TRIGGER IF EXISTS symbolika_apply_category_contractors ON orders_items;
+DROP TRIGGER IF EXISTS symbolika_sync_work_routing_rule ON product_routing_rules;
 DROP TRIGGER IF EXISTS symbolika_sync_contractor_work_user ON contractors;
 DROP TRIGGER IF EXISTS symbolika_sync_order_payment_access ON order_payments;
 DROP TRIGGER IF EXISTS symbolika_sync_order_payments_access_for_order ON orders;
@@ -33,6 +34,9 @@ DROP TRIGGER IF EXISTS symbolika_office_items_in_office_order_link ON office_ite
 DROP TRIGGER IF EXISTS symbolika_production_work_order_link ON production_work;
 DROP TRIGGER IF EXISTS symbolika_screen_printing_work_order_link ON screen_printing_work;
 DROP TRIGGER IF EXISTS symbolika_contractor_work_order_link ON contractor_work;
+DROP TRIGGER IF EXISTS symbolika_apply_item_status_from_production ON orders_items;
+DROP TRIGGER IF EXISTS symbolika_recalc_order_status_from_items ON orders_items;
+DROP TRIGGER IF EXISTS symbolika_apply_order_status_to_items ON orders;
 
 DO $$
 DECLARE
@@ -64,6 +68,46 @@ CREATE TABLE IF NOT EXISTS symbolika_push_subscriptions (
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
+
+DO $$
+BEGIN
+  IF to_regclass('public.customer_company_links') IS NOT NULL THEN
+    DELETE FROM customer_company_links
+     WHERE customer IS NULL
+        OR customer_companies IS NULL;
+
+    IF EXISTS (
+      SELECT 1
+        FROM information_schema.table_constraints
+       WHERE table_schema = 'public'
+         AND table_name = 'customer_company_links'
+         AND constraint_name = 'customer_company_links_customer_foreign'
+    ) THEN
+      ALTER TABLE customer_company_links
+        DROP CONSTRAINT customer_company_links_customer_foreign;
+    END IF;
+
+    IF EXISTS (
+      SELECT 1
+        FROM information_schema.table_constraints
+       WHERE table_schema = 'public'
+         AND table_name = 'customer_company_links'
+         AND constraint_name = 'customer_company_links_customer_companies_foreign'
+    ) THEN
+      ALTER TABLE customer_company_links
+        DROP CONSTRAINT customer_company_links_customer_companies_foreign;
+    END IF;
+
+    ALTER TABLE customer_company_links
+      ADD CONSTRAINT customer_company_links_customer_foreign
+      FOREIGN KEY (customer) REFERENCES customers(id) ON DELETE CASCADE;
+
+    ALTER TABLE customer_company_links
+      ADD CONSTRAINT customer_company_links_customer_companies_foreign
+      FOREIGN KEY (customer_companies) REFERENCES customer_companies(id) ON DELETE CASCADE;
+  END IF;
+END;
+$$;
 
 CREATE TABLE IF NOT EXISTS office_issue (
   id integer PRIMARY KEY,
@@ -132,12 +176,33 @@ ALTER TABLE order_payments ADD COLUMN IF NOT EXISTS customer_company_name_displa
 ALTER TABLE order_payments ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE payment_allocations ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS application_method integer;
+ALTER TABLE product_categories ADD COLUMN IF NOT EXISTS detail_mode character varying(255) DEFAULT 'subcategory';
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS default_product_category integer REFERENCES product_categories(id) ON DELETE SET NULL;
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS default_product_subcategory integer REFERENCES product_subcategories(id) ON DELETE SET NULL;
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS has_own_view boolean DEFAULT false;
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS directus_user uuid REFERENCES directus_users(id) ON DELETE SET NULL;
 ALTER TABLE product_categories DROP COLUMN IF EXISTS default_contractor_1;
 ALTER TABLE product_categories DROP COLUMN IF EXISTS default_contractor_2;
+
+CREATE TABLE IF NOT EXISTS product_application_methods (
+  id serial PRIMARY KEY,
+  name character varying(255) NOT NULL,
+  sort integer,
+  is_active boolean DEFAULT true
+);
+
+CREATE TABLE IF NOT EXISTS product_routing_rules (
+  id serial PRIMARY KEY,
+  name character varying(255),
+  product_category integer REFERENCES product_categories(id) ON DELETE CASCADE,
+  product_subcategory integer REFERENCES product_subcategories(id) ON DELETE CASCADE,
+  application_method integer REFERENCES product_application_methods(id) ON DELETE CASCADE,
+  contractor_1 integer REFERENCES contractors(id) ON DELETE SET NULL,
+  contractor_2 integer REFERENCES contractors(id) ON DELETE SET NULL,
+  priority integer DEFAULT 100,
+  is_active boolean DEFAULT true
+);
 
 CREATE TABLE IF NOT EXISTS production_work (
   id integer PRIMARY KEY,
@@ -220,20 +285,46 @@ DECLARE
 BEGIN
   IF TG_OP = 'INSERT'
      OR NEW.product_category IS DISTINCT FROM OLD.product_category
-     OR NEW.product_subcategory IS DISTINCT FROM OLD.product_subcategory THEN
-    SELECT array_agg(id ORDER BY priority, id)
+     OR NEW.product_subcategory IS DISTINCT FROM OLD.product_subcategory
+     OR NEW.application_method IS DISTINCT FROM OLD.application_method THEN
+    SELECT ARRAY[rule_match.contractor_1, rule_match.contractor_2]
       INTO matched_contractors
       FROM (
-        SELECT c.id, 1 AS priority
+        SELECT
+          r.contractor_1,
+          r.contractor_2,
+          (
+            CASE WHEN r.product_subcategory IS NOT NULL THEN 2 ELSE 0 END +
+            CASE WHEN r.application_method IS NOT NULL THEN 2 ELSE 0 END +
+            CASE WHEN r.product_category IS NOT NULL THEN 1 ELSE 0 END
+          ) AS specificity,
+          COALESCE(r.priority, 100) AS priority,
+          r.id
+        FROM product_routing_rules r
+        WHERE COALESCE(r.is_active, true) = true
+          AND r.product_category = NEW.product_category
+          AND (r.product_subcategory IS NULL OR r.product_subcategory = NEW.product_subcategory)
+          AND (r.application_method IS NULL OR r.application_method = NEW.application_method)
+          AND (r.contractor_1 IS NOT NULL OR r.contractor_2 IS NOT NULL)
+        ORDER BY specificity DESC, priority, id
+        LIMIT 1
+      ) rule_match;
+
+    IF matched_contractors IS NULL THEN
+      SELECT array_agg(id ORDER BY priority, id)
+        INTO matched_contractors
+        FROM (
+          SELECT c.id, 1 AS priority
           FROM contractors c
-         WHERE NEW.product_subcategory IS NOT NULL
-           AND c.default_product_subcategory = NEW.product_subcategory
-        UNION
-        SELECT c.id, 2 AS priority
+          WHERE NEW.product_subcategory IS NOT NULL
+            AND c.default_product_subcategory = NEW.product_subcategory
+          UNION
+          SELECT c.id, 2 AS priority
           FROM contractors c
-         WHERE NEW.product_category IS NOT NULL
-           AND c.default_product_category = NEW.product_category
-      ) matches;
+          WHERE NEW.product_category IS NOT NULL
+            AND c.default_product_category = NEW.product_category
+        ) fallback_matches;
+    END IF;
 
     NEW.contractor_1 := matched_contractors[1];
     NEW.contractor_2 := matched_contractors[2];
@@ -244,9 +335,36 @@ END;
 $$;
 
 CREATE TRIGGER symbolika_apply_category_contractors
-BEFORE INSERT OR UPDATE OF product_category, product_subcategory ON orders_items
+BEFORE INSERT OR UPDATE OF product_category, product_subcategory, application_method ON orders_items
 FOR EACH ROW
 EXECUTE FUNCTION apply_category_contractors_trigger();
+
+CREATE OR REPLACE FUNCTION sync_work_routing_rule_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  affected_category integer;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    affected_category := OLD.product_category;
+  ELSE
+    affected_category := NEW.product_category;
+  END IF;
+
+  UPDATE orders_items
+     SET product_category = product_category
+   WHERE affected_category IS NULL
+      OR product_category = affected_category;
+
+  RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+CREATE TRIGGER symbolika_sync_work_routing_rule
+AFTER INSERT OR UPDATE OR DELETE ON product_routing_rules
+FOR EACH ROW
+EXECUTE FUNCTION sync_work_routing_rule_trigger();
 
 CREATE TRIGGER symbolika_order_payments_order_link
 BEFORE INSERT OR UPDATE OF "order" ON order_payments
@@ -457,9 +575,6 @@ DECLARE
   all_in_office boolean;
   has_not_in_office boolean;
   next_status character varying(255);
-  delivered_status_id integer;
-  ready_status_id integer;
-  current_order_status_id integer;
 BEGIN
   SELECT COUNT(*) INTO items_count
   FROM orders_items
@@ -492,40 +607,182 @@ BEGIN
    WHERE id = order_id
      AND office_status IS DISTINCT FROM next_status;
 
-  SELECT id INTO delivered_status_id
-  FROM order_statuses
-  WHERE name ILIKE U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d'
-  LIMIT 1;
-
-  SELECT id INTO ready_status_id
-  FROM order_statuses
-  WHERE name ILIKE U&'\0413\043e\0442\043e\0432'
-  LIMIT 1;
-
-  IF next_status = 'issued' THEN
-    IF delivered_status_id IS NOT NULL THEN
-      UPDATE orders
-         SET order_status = delivered_status_id
-       WHERE id = order_id
-         AND order_status IS DISTINCT FROM delivered_status_id;
-    END IF;
-  ELSE
-    SELECT order_status INTO current_order_status_id
-    FROM orders
-    WHERE id = order_id;
-
-    IF ready_status_id IS NOT NULL
-       AND delivered_status_id IS NOT NULL
-       AND current_order_status_id = delivered_status_id THEN
-      UPDATE orders
-         SET order_status = ready_status_id
-       WHERE id = order_id
-         AND order_status IS DISTINCT FROM ready_status_id;
-    END IF;
-  END IF;
-
   PERFORM sync_office_issue_order(order_id);
   PERFORM sync_office_issue_items(order_id);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION symbolika_order_status_id(status_name text)
+RETURNS integer
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT id
+  FROM order_statuses
+  WHERE name = status_name
+  ORDER BY id
+  LIMIT 1
+$$;
+
+CREATE OR REPLACE FUNCTION symbolika_item_status_from_production(status_id integer)
+RETURNS character varying
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT CASE ps.name
+    WHEN U&'\0412 \0440\0430\0431\043e\0442\0435' THEN 'in_work'
+    WHEN U&'\0413\043e\0442\043e\0432' THEN 'ready'
+    WHEN U&'\041e\0442\043c\0435\043d\0435\043d' THEN 'cancelled'
+    WHEN U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430' THEN 'layout_revision'
+    ELSE NULL
+  END
+  FROM production_statuses ps
+  WHERE ps.id = status_id
+  LIMIT 1
+$$;
+
+CREATE OR REPLACE FUNCTION symbolika_normalize_item_status(status_value character varying)
+RETURNS character varying
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT CASE status_value
+    WHEN 'waiting_layout' THEN 'new'
+    WHEN 'send_to_work' THEN 'in_work'
+    WHEN 'sent_to_work' THEN 'in_work'
+    WHEN U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d' THEN 'delivered'
+    ELSE COALESCE(status_value, 'new')
+  END
+$$;
+
+CREATE OR REPLACE FUNCTION symbolika_recalc_order_status_from_items(order_id integer)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  items_count integer;
+  next_status_name text;
+  next_status_id integer;
+BEGIN
+  IF order_id IS NULL THEN
+    RETURN;
+  END IF;
+
+  SELECT COUNT(*) INTO items_count
+  FROM orders_items
+  WHERE "order" = order_id;
+
+  IF items_count = 0 THEN
+    RETURN;
+  END IF;
+
+  WITH normalized AS (
+    SELECT symbolika_normalize_item_status(item_status) AS item_status
+    FROM orders_items
+    WHERE "order" = order_id
+  )
+  SELECT CASE
+    WHEN bool_and(item_status = 'cancelled') THEN U&'\041e\0442\043c\0435\043d\0435\043d'
+    WHEN bool_and(item_status = 'delivered') THEN U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d'
+    WHEN bool_and(item_status = 'ready') THEN U&'\0413\043e\0442\043e\0432'
+    WHEN bool_or(item_status = 'layout_revision') THEN U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430'
+    WHEN bool_or(item_status = 'in_work') THEN U&'\0412 \0440\0430\0431\043e\0442\0435'
+    WHEN bool_or(item_status = 'approval') THEN U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435'
+    ELSE U&'\041d\043e\0432\044b\0439'
+  END
+  INTO next_status_name
+  FROM normalized;
+
+  next_status_id := symbolika_order_status_id(next_status_name);
+
+  IF next_status_id IS NOT NULL THEN
+    UPDATE orders
+       SET order_status = next_status_id
+     WHERE id = order_id
+       AND order_status IS DISTINCT FROM next_status_id;
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION symbolika_apply_item_status_from_production_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  next_item_status character varying;
+BEGIN
+  IF TG_OP = 'INSERT'
+     OR NEW.production_status IS DISTINCT FROM OLD.production_status THEN
+    next_item_status := symbolika_item_status_from_production(NEW.production_status);
+  ELSE
+    next_item_status := NULL;
+  END IF;
+
+  IF next_item_status IS NOT NULL THEN
+    NEW.item_status := next_item_status;
+  ELSE
+    NEW.item_status := symbolika_normalize_item_status(NEW.item_status);
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION symbolika_recalc_order_status_from_items_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    PERFORM symbolika_recalc_order_status_from_items(OLD."order");
+    RETURN OLD;
+  END IF;
+
+  PERFORM symbolika_recalc_order_status_from_items(NEW."order");
+
+  IF TG_OP = 'UPDATE' AND OLD."order" IS DISTINCT FROM NEW."order" THEN
+    PERFORM symbolika_recalc_order_status_from_items(OLD."order");
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION symbolika_apply_order_status_to_items_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  status_name text;
+  next_item_status character varying;
+BEGIN
+  IF pg_trigger_depth() > 1 THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT name INTO status_name
+  FROM order_statuses
+  WHERE id = NEW.order_status;
+
+  next_item_status := CASE status_name
+    WHEN U&'\041d\043e\0432\044b\0439' THEN 'new'
+    WHEN U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435' THEN 'approval'
+    WHEN U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430' THEN 'layout_revision'
+    WHEN U&'\0412 \0440\0430\0431\043e\0442\0435' THEN 'in_work'
+    WHEN U&'\0413\043e\0442\043e\0432' THEN 'ready'
+    WHEN U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d' THEN 'delivered'
+    WHEN U&'\041e\0442\043c\0435\043d\0435\043d' THEN 'cancelled'
+    ELSE NULL
+  END;
+
+  IF next_item_status IS NOT NULL THEN
+    UPDATE orders_items
+       SET item_status = next_item_status
+     WHERE "order" = NEW.id
+       AND symbolika_normalize_item_status(item_status) IS DISTINCT FROM next_item_status;
+  END IF;
+
+  RETURN NEW;
 END;
 $$;
 
@@ -914,6 +1171,21 @@ AFTER INSERT OR UPDATE OR DELETE ON orders_items
 FOR EACH ROW
 EXECUTE FUNCTION sync_office_issue_item_trigger();
 
+CREATE TRIGGER symbolika_apply_item_status_from_production
+BEFORE INSERT OR UPDATE OF item_status, production_status ON orders_items
+FOR EACH ROW
+EXECUTE FUNCTION symbolika_apply_item_status_from_production_trigger();
+
+CREATE TRIGGER symbolika_recalc_order_status_from_items
+AFTER INSERT OR UPDATE OF item_status, production_status, "order" OR DELETE ON orders_items
+FOR EACH ROW
+EXECUTE FUNCTION symbolika_recalc_order_status_from_items_trigger();
+
+CREATE TRIGGER symbolika_apply_order_status_to_items
+AFTER INSERT OR UPDATE OF order_status ON orders
+FOR EACH ROW
+EXECUTE FUNCTION symbolika_apply_order_status_to_items_trigger();
+
 CREATE TRIGGER symbolika_sync_work_order
 AFTER UPDATE OF customer, customer_company, manager_employee ON orders
 FOR EACH ROW
@@ -935,6 +1207,10 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
   IF order_id IS NULL THEN
+    RETURN;
+  END IF;
+
+  IF NOT pg_try_advisory_xact_lock(hashtext('recalc_order_payment_totals'), order_id) THEN
     RETURN;
   END IF;
 
@@ -1387,11 +1663,25 @@ INSERT INTO directus_collections (
     true, 'all', 25, 'open', false
   ),
   (
+    'product_application_methods', 'format_paint',
+    'Application methods used to route order items and later choose technical task templates.',
+    '{{name}}', true, false,
+    json_build_array(json_build_object('language','ru-RU','translation', U&'\0412\0438\0434\044b \043d\0430\043d\0435\0441\0435\043d\0438\044f'))::json,
+    true, 'all', 26, 'open', false
+  ),
+  (
+    'product_routing_rules', 'account_tree',
+    'Rules that assign contractors to order items by category, subcategory and application method.',
+    '{{name}}', true, false,
+    json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0440\0430\0432\0438\043b\0430 \043c\0430\0440\0448\0440\0443\0442\0438\0437\0430\0446\0438\0438'))::json,
+    true, 'all', 27, 'open', false
+  ),
+  (
     'contractor_work', 'assignment_ind',
     'External contractor work queue filtered by contractor user.',
     '{{product_name}}', false, false,
     json_build_array(json_build_object('language','ru-RU','translation', U&'\0420\0430\0431\043e\0442\0430 \043a\043e\043d\0442\0440\0430\0433\0435\043d\0442\0430'))::json,
-    true, 'all', 26, 'open', false
+    true, 'all', 28, 'open', false
   )
 ON CONFLICT (collection) DO UPDATE SET
   icon = EXCLUDED.icon,
@@ -1419,6 +1709,8 @@ WHERE collection IN (
   'tax_settings',
   'product_categories',
   'product_subcategories',
+  'product_application_methods',
+  'product_routing_rules',
   'contractor_payments'
 );
 
@@ -1600,7 +1892,10 @@ WHERE collection = 'employees'
 
 DELETE FROM directus_fields
 WHERE (collection = 'product_categories' AND field IN ('default_contractor_1', 'default_contractor_2'))
-   OR (collection = 'contractors' AND field IN ('has_own_view', 'directus_user', 'default_product_category', 'default_product_subcategory'));
+   OR (collection = 'contractors' AND field IN ('has_own_view', 'directus_user', 'default_product_category', 'default_product_subcategory'))
+   OR (collection = 'product_categories' AND field = 'detail_mode')
+   OR (collection = 'product_application_methods' AND field IN ('id', 'name', 'sort', 'is_active'))
+   OR (collection = 'product_routing_rules' AND field IN ('id', 'name', 'product_category', 'product_subcategory', 'application_method', 'contractor_1', 'contractor_2', 'priority', 'is_active'));
 
 INSERT INTO directus_fields (
   collection, field, special, interface, options, display, display_options,
@@ -1633,7 +1928,38 @@ INSERT INTO directus_fields (
     false, false, 10, 'half',
     json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\0434\043a\0430\0442\0435\0433\043e\0440\0438\044f \043f\043e \0443\043c\043e\043b\0447\0430\043d\0438\044e'))::json,
     false, true
-  );
+  ),
+  (
+    'product_categories', 'detail_mode', NULL, 'select-dropdown',
+    json_build_object('choices', json_build_array(
+      json_build_object('text', U&'\0411\0435\0437 \0434\0435\0442\0430\043b\0438\0437\0430\0446\0438\0438', 'value', 'none'),
+      json_build_object('text', U&'\041f\043e\0434\043a\0430\0442\0435\0433\043e\0440\0438\044f', 'value', 'subcategory'),
+      json_build_object('text', U&'\0412\0438\0434 \043d\0430\043d\0435\0441\0435\043d\0438\044f', 'value', 'application_method')
+    ))::json,
+    'labels',
+    json_build_object('choices', json_build_array(
+      json_build_object('text', U&'\0411\0435\0437 \0434\0435\0442\0430\043b\0438\0437\0430\0446\0438\0438', 'value', 'none'),
+      json_build_object('text', U&'\041f\043e\0434\043a\0430\0442\0435\0433\043e\0440\0438\044f', 'value', 'subcategory'),
+      json_build_object('text', U&'\0412\0438\0434 \043d\0430\043d\0435\0441\0435\043d\0438\044f', 'value', 'application_method')
+    ))::json,
+    false, false, 5, 'half',
+    json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0438\043f \0434\0435\0442\0430\043b\0438\0437\0430\0446\0438\0438'))::json,
+    false, true
+  ),
+  ('product_application_methods', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'full', NULL, false, true),
+  ('product_application_methods', 'name', NULL, 'input', NULL, NULL, NULL, false, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041d\0430\0437\0432\0430\043d\0438\0435'))::json, true, true),
+  ('product_application_methods', 'sort', NULL, 'input', NULL, NULL, NULL, false, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0440\0442\0438\0440\043e\0432\043a\0430'))::json, false, true),
+  ('product_application_methods', 'is_active', 'cast-boolean', 'boolean', NULL, NULL, NULL, false, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0410\043a\0442\0438\0432\043d\043e'))::json, false, true),
+  ('product_routing_rules', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'full', NULL, false, true),
+  ('product_routing_rules', 'name', NULL, 'input', NULL, NULL, NULL, false, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041d\0430\0437\0432\0430\043d\0438\0435'))::json, false, true),
+  ('product_routing_rules', 'product_category', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\0430\0442\0435\0433\043e\0440\0438\044f'))::json, true, true),
+  ('product_routing_rules', 'product_subcategory', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\0434\043a\0430\0442\0435\0433\043e\0440\0438\044f'))::json, false, true),
+  ('product_routing_rules', 'application_method', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0412\0438\0434 \043d\0430\043d\0435\0441\0435\043d\0438\044f'))::json, false, true),
+  ('product_routing_rules', 'contractor_1', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043e\043d\0442\0440\0430\0433\0435\043d\0442 1'))::json, false, true),
+  ('product_routing_rules', 'contractor_2', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 7, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043e\043d\0442\0440\0430\0433\0435\043d\0442 2'))::json, false, true),
+  ('product_routing_rules', 'priority', NULL, 'input', NULL, NULL, NULL, false, false, 8, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0440\0438\043e\0440\0438\0442\0435\0442'))::json, false, true),
+  ('product_routing_rules', 'is_active', 'cast-boolean', 'boolean', NULL, NULL, NULL, false, false, 9, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0410\043a\0442\0438\0432\043d\043e'))::json, false, true)
+  ;
 
 INSERT INTO directus_relations (
   many_collection, many_field, one_collection, one_field, one_deselect_action
@@ -1688,7 +2014,13 @@ FROM (
   VALUES
     ('contractors', 'directus_user', 'directus_users', NULL, 'nullify'),
     ('contractors', 'default_product_category', 'product_categories', NULL, 'nullify'),
-    ('contractors', 'default_product_subcategory', 'product_subcategories', NULL, 'nullify')
+    ('contractors', 'default_product_subcategory', 'product_subcategories', NULL, 'nullify'),
+    ('orders_items', 'application_method', 'product_application_methods', NULL, 'nullify'),
+    ('product_routing_rules', 'product_category', 'product_categories', NULL, 'cascade'),
+    ('product_routing_rules', 'product_subcategory', 'product_subcategories', NULL, 'cascade'),
+    ('product_routing_rules', 'application_method', 'product_application_methods', NULL, 'cascade'),
+    ('product_routing_rules', 'contractor_1', 'contractors', NULL, 'nullify'),
+    ('product_routing_rules', 'contractor_2', 'contractors', NULL, 'nullify')
 ) AS rel(many_collection, many_field, one_collection, one_field, one_deselect_action)
 WHERE NOT EXISTS (
   SELECT 1
@@ -1710,7 +2042,7 @@ WHERE collection = 'order_payments'
 
 DELETE FROM directus_fields
 WHERE collection IN ('orders_items', 'payment_allocations')
-  AND field = 'order_link';
+  AND field IN ('order_link', 'application_method');
 
 INSERT INTO directus_fields (
   collection, field, special, interface, options, display, display_options,
@@ -1729,6 +2061,7 @@ INSERT INTO directus_fields (
   readonly, hidden, sort, width, translations, required, searchable
 ) VALUES
   ('orders_items', 'order_link', NULL, 'symbolika-order-link', NULL, NULL, NULL, true, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0435\0440\0435\0439\0442\0438 \0432 \0437\0430\043a\0430\0437'))::json, false, true),
+  ('orders_items', 'application_method', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 16, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0412\0438\0434 \043d\0430\043d\0435\0441\0435\043d\0438\044f'))::json, false, true),
   ('payment_allocations', 'order_link', NULL, 'symbolika-order-link', NULL, NULL, NULL, true, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0435\0440\0435\0439\0442\0438 \0432 \0437\0430\043a\0430\0437'))::json, false, true);
 
 INSERT INTO directus_roles (id, name, icon, description, parent)
@@ -1791,7 +2124,15 @@ CROSS JOIN (
     ('screen_printing_work', 'read'),
     ('screen_printing_work', 'update'),
     ('contractor_work', 'read'),
-    ('contractor_work', 'update')
+    ('contractor_work', 'update'),
+    ('product_application_methods', 'create'),
+    ('product_application_methods', 'read'),
+    ('product_application_methods', 'update'),
+    ('product_application_methods', 'delete'),
+    ('product_routing_rules', 'create'),
+    ('product_routing_rules', 'read'),
+    ('product_routing_rules', 'update'),
+    ('product_routing_rules', 'delete')
 ) AS target(collection, action)
 WHERE p.admin_access = true;
 
@@ -1805,6 +2146,14 @@ VALUES
   ('office_issue_archive_items', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
   ('office_items_in_office', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
   ('office_items_in_office', 'update', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
+  ('product_application_methods', 'create', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
+  ('product_application_methods', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
+  ('product_application_methods', 'update', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
+  ('product_application_methods', 'delete', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
+  ('product_routing_rules', 'create', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
+  ('product_routing_rules', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
+  ('product_routing_rules', 'update', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
+  ('product_routing_rules', 'delete', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
   ('office_issue', 'read', '{}'::json, NULL, NULL, 'id,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,add_payment,overpayment,payment_type,payment_comment,order_items', '00000000-0000-4000-8000-000000000203'),
   ('office_issue', 'update', '{}'::json, NULL, NULL, 'id,office_summary,office_customer,office_payment,office_positions,office_status,add_payment,payment_type,payment_comment,order_items', '00000000-0000-4000-8000-000000000203'),
   ('office_issue_items', 'read', '{}'::json, NULL, NULL, 'id,office_issue,product_name,quantity,office_status', '00000000-0000-4000-8000-000000000203'),
@@ -1871,6 +2220,59 @@ DELETE FROM directus_permissions
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
 VALUES
   ('payment_types', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000203');
+
+DELETE FROM directus_permissions
+ WHERE collection = 'directus_notifications'
+   AND policy IN (
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202',
+    '00000000-0000-4000-8000-000000000203',
+    '00000000-0000-4000-8000-000000000204',
+    '00000000-0000-4000-8000-000000000206',
+    '00000000-0000-4000-8000-000000000207'
+   );
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+SELECT 'directus_notifications',
+       action,
+       '{"recipient":{"_eq":"$CURRENT_USER"}}'::json,
+       NULL,
+       NULL,
+       CASE
+         WHEN action = 'read' THEN 'id,status,recipient,subject,message,collection,item,timestamp'
+         ELSE 'status'
+       END,
+       policy::uuid
+FROM (
+  VALUES
+    ('read', '00000000-0000-4000-8000-000000000201'),
+    ('update', '00000000-0000-4000-8000-000000000201'),
+    ('read', '00000000-0000-4000-8000-000000000202'),
+    ('update', '00000000-0000-4000-8000-000000000202'),
+    ('read', '00000000-0000-4000-8000-000000000203'),
+    ('update', '00000000-0000-4000-8000-000000000203'),
+    ('read', '00000000-0000-4000-8000-000000000204'),
+    ('update', '00000000-0000-4000-8000-000000000204'),
+    ('read', '00000000-0000-4000-8000-000000000206'),
+    ('update', '00000000-0000-4000-8000-000000000206'),
+    ('read', '00000000-0000-4000-8000-000000000207'),
+    ('update', '00000000-0000-4000-8000-000000000207')
+) AS notification_permissions(action, policy);
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+SELECT collection, 'read', '{}'::json, NULL, NULL, '*', policy::uuid
+FROM (
+  VALUES
+    ('product_categories', '00000000-0000-4000-8000-000000000201'),
+    ('product_subcategories', '00000000-0000-4000-8000-000000000201'),
+    ('product_application_methods', '00000000-0000-4000-8000-000000000201'),
+    ('product_categories', '00000000-0000-4000-8000-000000000202'),
+    ('product_subcategories', '00000000-0000-4000-8000-000000000202'),
+    ('product_application_methods', '00000000-0000-4000-8000-000000000202'),
+    ('product_categories', '00000000-0000-4000-8000-000000000203'),
+    ('product_subcategories', '00000000-0000-4000-8000-000000000203'),
+    ('product_application_methods', '00000000-0000-4000-8000-000000000203')
+) AS refs(collection, policy);
 
 DELETE FROM directus_permissions
  WHERE policy IN (
@@ -1976,6 +2378,30 @@ UPDATE directus_permissions
    AND fields NOT LIKE '%payments%';
 
 UPDATE directus_permissions
+   SET fields = fields || ',order_number'
+ WHERE collection = 'orders'
+   AND action IN ('create', 'update')
+   AND policy IN (
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202'
+   )
+   AND fields IS NOT NULL
+   AND fields <> '*'
+   AND fields NOT LIKE '%order_number%';
+
+UPDATE directus_permissions
+   SET fields = fields || ',manager_employee'
+ WHERE collection = 'orders'
+   AND action IN ('create', 'update')
+   AND policy IN (
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202'
+   )
+   AND fields IS NOT NULL
+   AND fields <> '*'
+   AND fields NOT LIKE '%manager_employee%';
+
+UPDATE directus_permissions
    SET fields = fields || ',payment'
  WHERE collection = 'orders'
    AND action IN ('create', 'read', 'update')
@@ -2003,8 +2429,8 @@ UPDATE directus_permissions
 
 UPDATE directus_permissions
    SET fields = CASE
-     WHEN action = 'read' THEN 'id,accordion-redqc5,main,item,tech,order,order_link,product_name,quantity,price_per_unit,order_sum,product_category,item_status,production_status,deadline,production_comment,technical_task_text,manager_employee,shipping_method,office_status,url'
-     ELSE 'accordion-redqc5,main,item,tech,order,product_name,quantity,price_per_unit,order_sum,product_category,item_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url'
+     WHEN action = 'read' THEN 'id,accordion-redqc5,main,item,tech,order,order_link,product_name,quantity,price_per_unit,order_sum,product_category,product_subcategory,application_method,item_status,production_status,deadline,production_comment,technical_task_text,manager_employee,shipping_method,office_status,url'
+     ELSE 'accordion-redqc5,main,item,tech,order,product_name,quantity,price_per_unit,order_sum,product_category,product_subcategory,application_method,item_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url'
    END
  WHERE collection = 'orders_items'
    AND action IN ('create', 'read', 'update')
@@ -2026,7 +2452,7 @@ UPDATE directus_permissions
 
 UPDATE directus_permissions
    SET fields = CASE
-     WHEN action = 'read' THEN 'id,accordion-redqc5,main,item,tech,order,product_name,quantity,product_category,product_subcategory,item_status,production_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url'
+     WHEN action = 'read' THEN 'id,accordion-redqc5,main,item,tech,order,product_name,quantity,product_category,product_subcategory,application_method,item_status,production_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url'
      ELSE 'production_status,production_comment'
    END
  WHERE collection = 'orders_items'
@@ -2388,6 +2814,41 @@ WHERE id = 1
   AND position('/* End Symbolika readonly fields */' in custom_css) > 0;
 
 -- Keep Russian labels safe from shell/codepage conversions.
+UPDATE order_statuses
+SET name = U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435'
+WHERE name = U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435 \043c\0430\043a\0435\0442\0430';
+
+INSERT INTO order_statuses (name, sort, is_active)
+SELECT status_name, sort_value, true
+FROM (VALUES
+  (U&'\041d\043e\0432\044b\0439', 1),
+  (U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435', 2),
+  (U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430', 3),
+  (U&'\0412 \0440\0430\0431\043e\0442\0435', 4),
+  (U&'\0413\043e\0442\043e\0432', 5),
+  (U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d', 6),
+  (U&'\041e\0442\043c\0435\043d\0435\043d', 7)
+) AS required_statuses(status_name, sort_value)
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM order_statuses os
+  WHERE os.name = required_statuses.status_name
+);
+
+UPDATE order_statuses os
+SET sort = required_statuses.sort_value,
+    is_active = true
+FROM (VALUES
+  (U&'\041d\043e\0432\044b\0439', 1),
+  (U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435', 2),
+  (U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430', 3),
+  (U&'\0412 \0440\0430\0431\043e\0442\0435', 4),
+  (U&'\0413\043e\0442\043e\0432', 5),
+  (U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d', 6),
+  (U&'\041e\0442\043c\0435\043d\0435\043d', 7)
+) AS required_statuses(status_name, sort_value)
+WHERE os.name = required_statuses.status_name;
+
 INSERT INTO production_statuses (name, sort, is_active)
 SELECT U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430', 8, true
 WHERE NOT EXISTS (
@@ -2401,6 +2862,170 @@ ALTER TABLE orders_items ALTER COLUMN production_status SET DEFAULT 7;
 UPDATE orders_items
 SET production_status = 7
 WHERE production_status IS NULL;
+
+UPDATE production_statuses
+SET sort = CASE name
+  WHEN U&'\041d\0435 \0432 \0440\0430\0431\043e\0442\0435' THEN 1
+  WHEN U&'\0412 \0440\0430\0431\043e\0442\0435' THEN 2
+  WHEN U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430' THEN 3
+  WHEN U&'\0413\043e\0442\043e\0432' THEN 4
+  WHEN U&'\041e\0442\043c\0435\043d\0435\043d' THEN 5
+  ELSE sort
+END,
+is_active = true;
+
+UPDATE orders_items
+SET item_status = symbolika_normalize_item_status(item_status)
+WHERE item_status IS DISTINCT FROM symbolika_normalize_item_status(item_status);
+
+WITH categories(name, detail_mode, sort) AS (VALUES
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', 'subcategory', 10),
+  (U&'\0411\0430\043d\043d\0435\0440\044b', 'none', 20),
+  (U&'\041d\0430\043a\043b\0435\0439\043a\0438', 'subcategory', 30),
+  (U&'\041f\0412\0425 - \0442\0430\0431\043b\0438\0447\043a\0438', 'none', 40),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', 'application_method', 50),
+  (U&'\0423\043f\0430\043a\043e\0432\043a\0430', 'subcategory', 60),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', 'application_method', 70),
+  (U&'\0422\043a\0430\043d\0438', 'subcategory', 80),
+  (U&'\041a\043e\043d\0441\0442\0440\0443\043a\0446\0438\0438', 'subcategory', 90),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', 'application_method', 100)
+)
+INSERT INTO product_categories (name, detail_mode, sort, is_active)
+SELECT name, detail_mode, sort, true
+FROM categories c
+WHERE NOT EXISTS (SELECT 1 FROM product_categories pc WHERE pc.name = c.name);
+
+WITH categories(name, detail_mode, sort) AS (VALUES
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', 'subcategory', 10),
+  (U&'\0411\0430\043d\043d\0435\0440\044b', 'none', 20),
+  (U&'\041d\0430\043a\043b\0435\0439\043a\0438', 'subcategory', 30),
+  (U&'\041f\0412\0425 - \0442\0430\0431\043b\0438\0447\043a\0438', 'none', 40),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', 'application_method', 50),
+  (U&'\0423\043f\0430\043a\043e\0432\043a\0430', 'subcategory', 60),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', 'application_method', 70),
+  (U&'\0422\043a\0430\043d\0438', 'subcategory', 80),
+  (U&'\041a\043e\043d\0441\0442\0440\0443\043a\0446\0438\0438', 'subcategory', 90),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', 'application_method', 100)
+)
+UPDATE product_categories pc
+SET detail_mode = c.detail_mode,
+    sort = c.sort,
+    is_active = true
+FROM categories c
+WHERE pc.name = c.name;
+
+WITH subcategories(category_name, name, sort) AS (VALUES
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\0413\0440\0430\043c\043e\0442\044b', 10),
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\0412\0438\0437\0438\0442\043a\0438', 20),
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\041b\0438\0441\0442\043e\0432\043a\0438', 30),
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\0411\043b\043e\043a\043d\043e\0442\044b', 40),
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\041a\0430\043b\0435\043d\0434\0430\0440\0438', 50),
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\0411\0440\043e\0448\044e\0440\044b', 60),
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\0411\0443\043a\043b\0435\0442\044b', 70),
+  (U&'\041d\0430\043a\043b\0435\0439\043a\0438', U&'\0415\0434\0438\043d\0438\0447\043d\044b\0435 \043d\0430\043a\043b\0435\0439\043a\0438', 10),
+  (U&'\041d\0430\043a\043b\0435\0439\043a\0438', U&'\0421\0442\0438\043a\0435\0440\043f\0430\043a\0438', 20),
+  (U&'\041d\0430\043a\043b\0435\0439\043a\0438', U&'\041d\0430\043a\043b\0435\0439\043a\0438 \043d\0430 \043c\043e\043d\0442\0430\0436\043a\0435', 30),
+  (U&'\041d\0430\043a\043b\0435\0439\043a\0438', U&'\0423\0424-\0414\0422\0424', 40),
+  (U&'\0423\043f\0430\043a\043e\0432\043a\0430', U&'\041f\0430\043a\0435\0442\044b \0431\0443\043c\0430\0436\043d\044b\0435', 10),
+  (U&'\0423\043f\0430\043a\043e\0432\043a\0430', U&'\041f\0430\043a\0435\0442\044b \041f\0412\0414', 20),
+  (U&'\0423\043f\0430\043a\043e\0432\043a\0430', U&'\041a\043e\0440\043e\0431\043a\0438', 30),
+  (U&'\0422\043a\0430\043d\0438', U&'\0424\043b\0430\0433\0438 \0441\0442\0430\043d\0434\0430\0440\0442\043d\044b\0435', 10),
+  (U&'\0422\043a\0430\043d\0438', U&'\0424\043b\0430\0433\0438 \043d\0435\0441\0442\0430\043d\0434\0430\0440\0442\043d\044b\0435', 20),
+  (U&'\0422\043a\0430\043d\0438', U&'\0424\043b\0430\0433\0438 \0434\043b\044f \0432\0438\043d\0434\0435\0440\043e\0432', 30),
+  (U&'\0422\043a\0430\043d\0438', U&'\0411\0430\043d\0434\0430\043d\044b', 40),
+  (U&'\0422\043a\0430\043d\0438', U&'\041f\0440\043e\0447\0430\044f \043f\043e\043b\043d\043e\0446\0432\0435\0442\043d\0430\044f \043f\0435\0447\0430\0442\044c \043d\0430 \0442\043a\0430\043d\0438', 50),
+  (U&'\041a\043e\043d\0441\0442\0440\0443\043a\0446\0438\0438', U&'\0420\043e\043b\0430\043f', 10),
+  (U&'\041a\043e\043d\0441\0442\0440\0443\043a\0446\0438\0438', U&'\0412\0438\043d\0434\0435\0440', 20),
+  (U&'\041a\043e\043d\0441\0442\0440\0443\043a\0446\0438\0438', U&'\0414\0436\043e\043a\0435\0440', 30),
+  (U&'\041a\043e\043d\0441\0442\0440\0443\043a\0446\0438\0438', U&'\0411\0440\0443\0441', 40)
+)
+INSERT INTO product_subcategories (category, name, sort, is_active)
+SELECT pc.id, s.name, s.sort, true
+FROM subcategories s
+JOIN product_categories pc ON pc.name = s.category_name
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM product_subcategories ps
+  WHERE ps.category = pc.id
+    AND ps.name = s.name
+);
+
+WITH methods(name, sort) AS (VALUES
+  (U&'\0426\0438\0444\0440\043e\0432\0430\044f \043f\0435\0447\0430\0442\044c', 10),
+  (U&'\0421\0442\0440\0443\0439\043d\0430\044f \043f\0435\0447\0430\0442\044c', 20),
+  (U&'\0413\0440\0430\0432\0438\0440\043e\0432\043a\0430', 30),
+  (U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f', 40),
+  (U&'\0422\0438\0441\043d\0435\043d\0438\0435', 50),
+  (U&'\0421\0443\0431\043b\0438\043c\0430\0446\0438\044f', 60),
+  (U&'\0423\0424-\043f\0435\0447\0430\0442\044c', 70),
+  (U&'\0423\0424-\0414\0422\0424 \043f\0435\0447\0430\0442\044c', 80),
+  (U&'\0414\0422\0424-\043f\0435\0447\0430\0442\044c', 90),
+  (U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f \0441 \0442\0440\0430\043d\0441\0444\0435\0440\043e\043c', 100),
+  (U&'\0412\044b\0448\0438\0432\043a\0430', 110),
+  (U&'\041f\043b\0435\043d\043a\0430', 120),
+  (U&'\041f\043e\0448\0438\0432', 130)
+)
+INSERT INTO product_application_methods (name, sort, is_active)
+SELECT name, sort, true
+FROM methods m
+WHERE NOT EXISTS (SELECT 1 FROM product_application_methods pam WHERE pam.name = m.name);
+
+INSERT INTO contractors (name, comment, has_own_view)
+SELECT U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f',
+       U&'\0412\043d\0443\0442\0440\0435\043d\043d\0435\0435 \043f\043e\0434\0440\0430\0437\0434\0435\043b\0435\043d\0438\0435 \0434\043b\044f \0448\0435\043b\043a\043e\0433\0440\0430\0444\0438\0438',
+       true
+WHERE NOT EXISTS (
+  SELECT 1
+    FROM contractors
+   WHERE lower(name) = lower(U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f')
+);
+
+WITH route_seeds(category_name, method_name, contractor_pattern, priority) AS (VALUES
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f', U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%', 10),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f \0441 \0442\0440\0430\043d\0441\0444\0435\0440\043e\043c', U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%', 10),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f', U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%', 10),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0413\0440\0430\0432\0438\0440\043e\0432\043a\0430', U&'%\043f\0440\043e\0438\0437\0432\043e\0434%', 20),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0421\0443\0431\043b\0438\043c\0430\0446\0438\044f', U&'%\043f\0440\043e\0438\0437\0432\043e\0434%', 20),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0423\0424-\043f\0435\0447\0430\0442\044c', U&'%\043f\0440\043e\0438\0437\0432\043e\0434%', 20),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0423\0424-\0414\0422\0424 \043f\0435\0447\0430\0442\044c', U&'%\043f\0440\043e\0438\0437\0432\043e\0434%', 20),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f', U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%', 10),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0423\0424-\043f\0435\0447\0430\0442\044c', U&'%\043f\0440\043e\0438\0437\0432\043e\0434%', 20)
+)
+INSERT INTO product_routing_rules (name, product_category, application_method, contractor_1, priority, is_active)
+SELECT
+  pc.name || ' / ' || pam.name,
+  pc.id,
+  pam.id,
+  c.id,
+  rs.priority,
+  true
+FROM route_seeds rs
+JOIN product_categories pc ON pc.name = rs.category_name
+JOIN product_application_methods pam ON pam.name = rs.method_name
+JOIN LATERAL (
+  SELECT id
+  FROM contractors
+  WHERE name ILIKE rs.contractor_pattern
+  ORDER BY id
+  LIMIT 1
+) c ON true
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM product_routing_rules r
+  WHERE r.product_category = pc.id
+    AND r.application_method = pam.id
+    AND r.product_subcategory IS NULL
+);
+
+DO $$
+DECLARE
+  order_row record;
+BEGIN
+  FOR order_row IN SELECT DISTINCT "order" AS id FROM orders_items WHERE "order" IS NOT NULL LOOP
+    PERFORM symbolika_recalc_order_status_from_items(order_row.id);
+  END LOOP;
+END;
+$$;
 
 UPDATE directus_collections
 SET translations = json_build_array(json_build_object('language','ru-RU','translation', label))::json
@@ -2553,24 +3178,22 @@ WHERE collection IN ('orders','orders_items','office_issue','office_issue_items'
 
 UPDATE directus_fields
 SET options = jsonb_build_object('choices', jsonb_build_array(
-      jsonb_build_object('text', U&'\0416\0434\0435\043c \043c\0430\043a\0435\0442', 'value', 'waiting_layout'),
+      jsonb_build_object('text', U&'\041d\043e\0432\044b\0439', 'value', 'new'),
       jsonb_build_object('text', U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435', 'value', 'approval'),
       jsonb_build_object('text', U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430', 'value', 'layout_revision'),
-      jsonb_build_object('text', U&'\041e\0442\043f\0440\0430\0432\0438\0442\044c \0432 \0440\0430\0431\043e\0442\0443', 'value', 'send_to_work'),
-      jsonb_build_object('text', U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443', 'value', 'sent_to_work'),
+      jsonb_build_object('text', U&'\0412 \0440\0430\0431\043e\0442\0435', 'value', 'in_work'),
       jsonb_build_object('text', U&'\0413\043e\0442\043e\0432', 'value', 'ready'),
-      jsonb_build_object('text', U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d', 'value', U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d'),
+      jsonb_build_object('text', U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d', 'value', 'delivered'),
       jsonb_build_object('text', U&'\041e\0442\043c\0435\043d\0435\043d', 'value', 'cancelled')
     ))::json,
     display = 'labels',
     display_options = jsonb_build_object('choices', jsonb_build_array(
-      jsonb_build_object('text', U&'\0416\0434\0435\043c \043c\0430\043a\0435\0442', 'value', 'waiting_layout', 'foreground', '#F8FAFC', 'background', '#64748B'),
+      jsonb_build_object('text', U&'\041d\043e\0432\044b\0439', 'value', 'new', 'foreground', '#111827', 'background', '#FBBF24'),
       jsonb_build_object('text', U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435', 'value', 'approval', 'foreground', '#111827', 'background', '#FBBF24'),
       jsonb_build_object('text', U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430', 'value', 'layout_revision', 'foreground', '#F8FAFC', 'background', '#A855F7'),
-      jsonb_build_object('text', U&'\041e\0442\043f\0440\0430\0432\0438\0442\044c \0432 \0440\0430\0431\043e\0442\0443', 'value', 'send_to_work', 'foreground', '#F8FAFC', 'background', '#3B82F6'),
-      jsonb_build_object('text', U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443', 'value', 'sent_to_work', 'foreground', '#F8FAFC', 'background', '#2563EB'),
+      jsonb_build_object('text', U&'\0412 \0440\0430\0431\043e\0442\0435', 'value', 'in_work', 'foreground', '#F8FAFC', 'background', '#3B82F6'),
       jsonb_build_object('text', U&'\0413\043e\0442\043e\0432', 'value', 'ready', 'foreground', '#F8FAFC', 'background', '#16A34A'),
-      jsonb_build_object('text', U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d', 'value', U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d', 'foreground', '#F8FAFC', 'background', '#0F766E'),
+      jsonb_build_object('text', U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d', 'value', 'delivered', 'foreground', '#F8FAFC', 'background', '#0F766E'),
       jsonb_build_object('text', U&'\041e\0442\043c\0435\043d\0435\043d', 'value', 'cancelled', 'foreground', '#F8FAFC', 'background', '#DC2626')
     ))::json
 WHERE collection = 'orders_items'
@@ -2587,7 +3210,8 @@ WITH order_status_choices AS (
       END,
       'background', CASE
         WHEN name = U&'\041d\043e\0432\044b\0439' THEN '#FBBF24'
-        WHEN name = U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435 \043c\0430\043a\0435\0442\0430' THEN '#A855F7'
+        WHEN name = U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435' THEN '#F59E0B'
+        WHEN name = U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430' THEN '#A855F7'
         WHEN name = U&'\0412 \0440\0430\0431\043e\0442\0435' THEN '#3B82F6'
         WHEN name = U&'\0413\043e\0442\043e\0432' THEN '#22C55E'
         WHEN name = U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d' THEN '#16A34A'
@@ -2603,7 +3227,7 @@ UPDATE directus_fields
 SET display = 'labels',
     display_options = jsonb_build_object('choices', order_status_choices.choices)::json
 FROM order_status_choices
-WHERE collection IN ('orders', 'office_issue', 'my_orders_in_work', 'my_orders_completed', 'my_orders_unpaid')
+WHERE collection IN ('orders', 'office_issue', 'my_orders_in_work', 'my_orders_completed', 'my_orders_unpaid', 'customer_reconciliation')
   AND field = 'order_status';
 
 WITH production_status_choices AS (
@@ -2632,7 +3256,15 @@ UPDATE directus_fields
 SET display = 'labels',
     display_options = jsonb_build_object('choices', production_status_choices.choices)::json
 FROM production_status_choices
-WHERE collection IN ('orders_items', 'production_work', 'screen_printing_work')
+WHERE collection IN (
+  'orders_items',
+  'production_work',
+  'screen_printing_work',
+  'contractor_work',
+  'my_orders_in_work_items',
+  'my_orders_completed_items',
+  'my_orders_unpaid_items'
+)
   AND field = 'production_status';
 
 DROP TRIGGER IF EXISTS symbolika_sync_orders_overview_order ON orders;
@@ -2687,6 +3319,30 @@ CREATE TABLE IF NOT EXISTS orders_overview_items (
   orders_overview integer,
   product_name character varying(255),
   quantity integer
+);
+
+CREATE TABLE IF NOT EXISTS customer_reconciliation (
+  id integer PRIMARY KEY,
+  order_link integer,
+  order_number character varying(255),
+  date timestamp without time zone,
+  deadline timestamp without time zone,
+  customer integer,
+  customer_name character varying(255),
+  customer_company integer,
+  customer_company_name character varying(255),
+  counterparty_name character varying(255),
+  manager_employee integer,
+  manager_name character varying(255),
+  order_status integer,
+  order_status_name character varying(255),
+  order_sum numeric(10,2),
+  paid_amount numeric(10,2),
+  payment_due numeric(10,2),
+  overpayment numeric(10,2),
+  customer_debt_to_us numeric(10,2),
+  our_debt_to_customer numeric(10,2),
+  reconciliation_result character varying(255)
 );
 
 CREATE TABLE IF NOT EXISTS orders_due_today (LIKE orders_overview INCLUDING ALL);
@@ -2766,6 +3422,10 @@ ALTER TABLE orders_due_next_week ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE orders_due_this_month ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE orders_due_urgent ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE orders_due_next_month ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE customer_reconciliation ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE customer_reconciliation ADD COLUMN IF NOT EXISTS customer_debt_to_us numeric(10,2);
+ALTER TABLE customer_reconciliation ADD COLUMN IF NOT EXISTS our_debt_to_customer numeric(10,2);
+ALTER TABLE customer_reconciliation ADD COLUMN IF NOT EXISTS reconciliation_result character varying(255);
 ALTER TABLE my_orders_in_work ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE my_orders_completed ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE my_orders_unpaid ADD COLUMN IF NOT EXISTS order_link integer;
@@ -2819,6 +3479,54 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION refresh_customer_reconciliation()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  DELETE FROM customer_reconciliation;
+
+  INSERT INTO customer_reconciliation (
+    id, order_link, order_number, date, deadline,
+    customer, customer_name, customer_company, customer_company_name, counterparty_name,
+    manager_employee, manager_name, order_status, order_status_name,
+    order_sum, paid_amount, payment_due, overpayment,
+    customer_debt_to_us, our_debt_to_customer, reconciliation_result
+  )
+  SELECT
+    o.id,
+    o.id,
+    o.order_number,
+    o.date,
+    o.deadline,
+    o.customer,
+    c.name,
+    o.customer_company,
+    cc.name,
+    COALESCE(NULLIF(cc.name, ''), NULLIF(c.name, ''), U&'\0411\0435\0437 \0437\0430\043a\0430\0437\0447\0438\043a\0430'),
+    o.manager_employee,
+    e.full_name,
+    o.order_status,
+    os.name,
+    COALESCE(o.order_sum, 0),
+    COALESCE(o.paid_amount, 0),
+    COALESCE(o.payment_due, 0),
+    GREATEST(COALESCE(o.paid_amount, 0) - COALESCE(o.order_sum, 0), 0)::numeric(10,2),
+    GREATEST(COALESCE(o.payment_due, 0), 0)::numeric(10,2),
+    GREATEST(-COALESCE(o.payment_due, 0), 0)::numeric(10,2),
+    CASE
+      WHEN COALESCE(o.payment_due, 0) > 0 THEN U&'\041a\043b\0438\0435\043d\0442 \0434\043e\043b\0436\0435\043d'
+      WHEN COALESCE(o.payment_due, 0) < 0 THEN U&'\041c\044b \0434\043e\043b\0436\043d\044b'
+      ELSE U&'\0420\0430\0441\0447\0435\0442 \0437\0430\043a\0440\044b\0442'
+    END
+  FROM orders o
+  LEFT JOIN customers c ON c.id = o.customer
+  LEFT JOIN customer_companies cc ON cc.id = o.customer_company
+  LEFT JOIN employees e ON e.id = o.manager_employee
+  LEFT JOIN order_statuses os ON os.id = o.order_status;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION sync_my_order_buckets(order_id integer)
 RETURNS void
 LANGUAGE plpgsql
@@ -2828,12 +3536,22 @@ DECLARE
   is_completed boolean;
   is_unpaid boolean;
 BEGIN
-  DELETE FROM my_orders_in_work_items WHERE bucket_order = order_id;
-  DELETE FROM my_orders_completed_items WHERE bucket_order = order_id;
-  DELETE FROM my_orders_unpaid_items WHERE bucket_order = order_id;
-  DELETE FROM my_orders_in_work_payments WHERE bucket_order = order_id;
-  DELETE FROM my_orders_completed_payments WHERE bucket_order = order_id;
-  DELETE FROM my_orders_unpaid_payments WHERE bucket_order = order_id;
+  IF NOT pg_try_advisory_xact_lock(hashtext('sync_my_order_buckets'), order_id) THEN
+    RETURN;
+  END IF;
+
+  DELETE FROM my_orders_in_work_items
+  WHERE bucket_order = order_id OR id IN (SELECT oi.id FROM orders_items oi WHERE oi."order" = order_id);
+  DELETE FROM my_orders_completed_items
+  WHERE bucket_order = order_id OR id IN (SELECT oi.id FROM orders_items oi WHERE oi."order" = order_id);
+  DELETE FROM my_orders_unpaid_items
+  WHERE bucket_order = order_id OR id IN (SELECT oi.id FROM orders_items oi WHERE oi."order" = order_id);
+  DELETE FROM my_orders_in_work_payments
+  WHERE bucket_order = order_id OR id IN (SELECT op.id FROM order_payments op WHERE op."order" = order_id);
+  DELETE FROM my_orders_completed_payments
+  WHERE bucket_order = order_id OR id IN (SELECT op.id FROM order_payments op WHERE op."order" = order_id);
+  DELETE FROM my_orders_unpaid_payments
+  WHERE bucket_order = order_id OR id IN (SELECT op.id FROM order_payments op WHERE op."order" = order_id);
   DELETE FROM my_orders_in_work WHERE id = order_id;
   DELETE FROM my_orders_completed WHERE id = order_id;
   DELETE FROM my_orders_unpaid WHERE id = order_id;
@@ -2925,21 +3643,45 @@ BEGIN
   )
   SELECT oi.id, oi."order", oi.product_name, oi.quantity, oi.deadline, oi.item_status, oi.production_status, oi.office_status
   FROM orders_items oi
-  WHERE oi."order" = order_id AND is_completed;
+  WHERE oi."order" = order_id AND is_completed
+  ON CONFLICT (id) DO UPDATE SET
+    bucket_order = EXCLUDED.bucket_order,
+    product_name = EXCLUDED.product_name,
+    quantity = EXCLUDED.quantity,
+    deadline = EXCLUDED.deadline,
+    item_status = EXCLUDED.item_status,
+    production_status = EXCLUDED.production_status,
+    office_status = EXCLUDED.office_status;
 
   INSERT INTO my_orders_in_work_items (
     id, bucket_order, product_name, quantity, deadline, item_status, production_status, office_status
   )
   SELECT oi.id, oi."order", oi.product_name, oi.quantity, oi.deadline, oi.item_status, oi.production_status, oi.office_status
   FROM orders_items oi
-  WHERE oi."order" = order_id AND NOT is_completed;
+  WHERE oi."order" = order_id AND NOT is_completed
+  ON CONFLICT (id) DO UPDATE SET
+    bucket_order = EXCLUDED.bucket_order,
+    product_name = EXCLUDED.product_name,
+    quantity = EXCLUDED.quantity,
+    deadline = EXCLUDED.deadline,
+    item_status = EXCLUDED.item_status,
+    production_status = EXCLUDED.production_status,
+    office_status = EXCLUDED.office_status;
 
   INSERT INTO my_orders_unpaid_items (
     id, bucket_order, product_name, quantity, deadline, item_status, production_status, office_status
   )
   SELECT oi.id, oi."order", oi.product_name, oi.quantity, oi.deadline, oi.item_status, oi.production_status, oi.office_status
   FROM orders_items oi
-  WHERE oi."order" = order_id AND is_unpaid;
+  WHERE oi."order" = order_id AND is_unpaid
+  ON CONFLICT (id) DO UPDATE SET
+    bucket_order = EXCLUDED.bucket_order,
+    product_name = EXCLUDED.product_name,
+    quantity = EXCLUDED.quantity,
+    deadline = EXCLUDED.deadline,
+    item_status = EXCLUDED.item_status,
+    production_status = EXCLUDED.production_status,
+    office_status = EXCLUDED.office_status;
 
   INSERT INTO my_orders_completed_payments (
     id, bucket_order, amount, allocated_amount, unallocated_amount, payment_date, payment_type_name, comment
@@ -2955,7 +3697,15 @@ BEGIN
     op.comment
   FROM order_payments op
   LEFT JOIN payment_types pt ON pt.id = op.payment_type
-  WHERE op."order" = order_id AND is_completed;
+  WHERE op."order" = order_id AND is_completed
+  ON CONFLICT (id) DO UPDATE SET
+    bucket_order = EXCLUDED.bucket_order,
+    amount = EXCLUDED.amount,
+    allocated_amount = EXCLUDED.allocated_amount,
+    unallocated_amount = EXCLUDED.unallocated_amount,
+    payment_date = EXCLUDED.payment_date,
+    payment_type_name = EXCLUDED.payment_type_name,
+    comment = EXCLUDED.comment;
 
   INSERT INTO my_orders_in_work_payments (
     id, bucket_order, amount, allocated_amount, unallocated_amount, payment_date, payment_type_name, comment
@@ -2971,7 +3721,15 @@ BEGIN
     op.comment
   FROM order_payments op
   LEFT JOIN payment_types pt ON pt.id = op.payment_type
-  WHERE op."order" = order_id AND NOT is_completed;
+  WHERE op."order" = order_id AND NOT is_completed
+  ON CONFLICT (id) DO UPDATE SET
+    bucket_order = EXCLUDED.bucket_order,
+    amount = EXCLUDED.amount,
+    allocated_amount = EXCLUDED.allocated_amount,
+    unallocated_amount = EXCLUDED.unallocated_amount,
+    payment_date = EXCLUDED.payment_date,
+    payment_type_name = EXCLUDED.payment_type_name,
+    comment = EXCLUDED.comment;
 
   INSERT INTO my_orders_unpaid_payments (
     id, bucket_order, amount, allocated_amount, unallocated_amount, payment_date, payment_type_name, comment
@@ -2987,7 +3745,15 @@ BEGIN
     op.comment
   FROM order_payments op
   LEFT JOIN payment_types pt ON pt.id = op.payment_type
-  WHERE op."order" = order_id AND is_unpaid;
+  WHERE op."order" = order_id AND is_unpaid
+  ON CONFLICT (id) DO UPDATE SET
+    bucket_order = EXCLUDED.bucket_order,
+    amount = EXCLUDED.amount,
+    allocated_amount = EXCLUDED.allocated_amount,
+    unallocated_amount = EXCLUDED.unallocated_amount,
+    payment_date = EXCLUDED.payment_date,
+    payment_type_name = EXCLUDED.payment_type_name,
+    comment = EXCLUDED.comment;
 END;
 $$;
 
@@ -3107,6 +3873,7 @@ BEGIN
     AND EXISTS (SELECT 1 FROM orders_overview oo WHERE oo.id = order_id);
 
   PERFORM refresh_orders_due_tables();
+  PERFORM refresh_customer_reconciliation();
 END;
 $$;
 
@@ -3228,6 +3995,7 @@ FROM orders_items oi
 WHERE EXISTS (SELECT 1 FROM orders_overview oo WHERE oo.id = oi."order");
 
 SELECT refresh_orders_due_tables();
+SELECT refresh_customer_reconciliation();
 
 DELETE FROM my_orders_in_work_items;
 DELETE FROM my_orders_completed_items;
@@ -3258,6 +4026,7 @@ INSERT INTO directus_collections (
   ('orders_due_this_month', 'calendar_month', NULL, '{{order_number}}', false, false, '[{"language":"ru-RU","translation":"\u0412 \u044d\u0442\u043e\u043c \u043c\u0435\u0441\u044f\u0446\u0435"}]'::json, true, 'all', 5, 'orders_overview', 'open', false),
   ('orders_due_next_month', 'event_upcoming', NULL, '{{order_number}}', false, false, '[{"language":"ru-RU","translation":"\u0412 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0435\u043c \u043c\u0435\u0441\u044f\u0446\u0435"}]'::json, true, 'all', 6, 'orders_overview', 'open', false),
   ('orders_overview_items', 'format_list_bulleted', NULL, '{{product_name}}', true, false, '[{"language":"ru-RU","translation":"\u041f\u043e\u0437\u0438\u0446\u0438\u0438 \u0441\u0432\u043e\u0434\u043a\u0438 \u0437\u0430\u043a\u0430\u0437\u043e\u0432"}]'::json, true, 'all', 1, NULL, 'open', false),
+  ('customer_reconciliation', 'request_quote', NULL, '{{order_number}}', false, false, json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0432\0435\0440\043a\0430 \043f\043e \043a\043b\0438\0435\043d\0442\0430\043c'))::json, true, 'all', 7, 'orders_overview', 'open', false),
   ('my_orders_in_work', 'work_history', NULL, '{{order_number}}', false, false, json_build_array(json_build_object('language','ru-RU','translation', U&'\0417\0430\043a\0430\0437\044b \0432 \0440\0430\0431\043e\0442\0435'))::json, true, 'all', 1, 'orders', 'open', false),
   ('my_orders_completed', 'task_alt', NULL, '{{order_number}}', false, false, json_build_array(json_build_object('language','ru-RU','translation', U&'\0417\0430\0432\0435\0440\0448\0435\043d\043d\044b\0435 \0437\0430\043a\0430\0437\044b'))::json, true, 'all', 2, 'orders', 'open', false),
   ('my_orders_unpaid', 'payments', NULL, '{{order_number}}', false, false, json_build_array(json_build_object('language','ru-RU','translation', U&'\041d\0435\043e\043f\043b\0430\0447\0435\043d\043d\044b\0435 \0437\0430\043a\0430\0437\044b'))::json, true, 'all', 3, 'orders', 'open', false),
@@ -3286,6 +4055,7 @@ WHERE collection IN (
   'orders_due_this_month',
   'orders_due_urgent',
   'orders_due_next_month',
+  'customer_reconciliation',
   'orders_overview_items',
   'my_orders_in_work',
   'my_orders_completed',
@@ -3349,6 +4119,52 @@ SELECT
   true
 FROM summary_collections
 CROSS JOIN summary_fields;
+
+INSERT INTO directus_fields (
+  collection, field, special, interface, options, display, display_options,
+  readonly, hidden, sort, width, translations, required, searchable
+)
+SELECT
+  'customer_reconciliation',
+  fields.field_name,
+  fields.special_value,
+  fields.interface_name,
+  fields.options_value,
+  fields.display_value,
+  fields.display_options_value,
+  true,
+  fields.hidden_value,
+  fields.sort_order,
+  fields.width_value,
+  CASE WHEN fields.label IS NULL
+    THEN NULL
+    ELSE json_build_array(json_build_object('language','ru-RU','translation', fields.label))::json
+  END,
+  false,
+  true
+FROM (VALUES
+  ('id', NULL, 'numeric', NULL::json, NULL, NULL::json, 1, 'full', NULL, true),
+  ('order_link', NULL, 'symbolika-order-link', NULL::json, NULL, NULL::json, 2, 'half', U&'\041f\0435\0440\0435\0439\0442\0438 \0432 \0437\0430\043a\0430\0437', false),
+  ('order_number', NULL, 'input', NULL::json, NULL, NULL::json, 3, 'half', U&'\041d\043e\043c\0435\0440 \0437\0430\043a\0430\0437\0430', false),
+  ('counterparty_name', NULL, 'input', NULL::json, NULL, NULL::json, 4, 'half', U&'\0417\0430\043a\0430\0437\0447\0438\043a', false),
+  ('customer', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, 5, 'half', U&'\041a\043b\0438\0435\043d\0442', false),
+  ('customer_name', NULL, 'input', NULL::json, NULL, NULL::json, 6, 'half', U&'\0418\043c\044f \043a\043b\0438\0435\043d\0442\0430', true),
+  ('customer_company', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, 7, 'half', U&'\041a\043e\043c\043f\0430\043d\0438\044f', false),
+  ('customer_company_name', NULL, 'input', NULL::json, NULL, NULL::json, 8, 'half', U&'\041d\0430\0437\0432\0430\043d\0438\0435 \043a\043e\043c\043f\0430\043d\0438\0438', true),
+  ('manager_employee', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}"}'::json, 'related-values', '{"template":"{{full_name}}"}'::json, 9, 'half', U&'\041c\0435\043d\0435\0434\0436\0435\0440', false),
+  ('manager_name', NULL, 'input', NULL::json, NULL, NULL::json, 10, 'half', U&'\041c\0435\043d\0435\0434\0436\0435\0440', true),
+  ('date', NULL, 'datetime', NULL::json, NULL, NULL::json, 11, 'half', U&'\0414\0430\0442\0430', false),
+  ('deadline', NULL, 'datetime', NULL::json, NULL, NULL::json, 12, 'half', U&'\0421\0440\043e\043a', false),
+  ('order_status', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'labels', NULL::json, 13, 'half', U&'\0421\0442\0430\0442\0443\0441 \0437\0430\043a\0430\0437\0430', false),
+  ('order_status_name', NULL, 'input', NULL::json, NULL, NULL::json, 14, 'half', U&'\0421\0442\0430\0442\0443\0441', true),
+  ('order_sum', NULL, 'input', NULL::json, NULL, NULL::json, 15, 'half', U&'\0421\0443\043c\043c\0430 \0437\0430\043a\0430\0437\0430', false),
+  ('paid_amount', NULL, 'input', NULL::json, NULL, NULL::json, 16, 'half', U&'\041e\043f\043b\0430\0447\0435\043d\043e', false),
+  ('payment_due', NULL, 'input', NULL::json, NULL, NULL::json, 17, 'half', U&'\041e\0441\0442\0430\0442\043e\043a', false),
+  ('overpayment', NULL, 'input', NULL::json, NULL, NULL::json, 18, 'half', U&'\041f\0435\0440\0435\043f\043b\0430\0442\0430', false),
+  ('customer_debt_to_us', NULL, 'input', NULL::json, NULL, NULL::json, 19, 'half', U&'\041a\043b\0438\0435\043d\0442 \0434\043e\043b\0436\0435\043d', false),
+  ('our_debt_to_customer', NULL, 'input', NULL::json, NULL, NULL::json, 20, 'half', U&'\041c\044b \0434\043e\043b\0436\043d\044b', false),
+  ('reconciliation_result', NULL, 'input', NULL::json, NULL, NULL::json, 21, 'half', U&'\0418\0442\043e\0433 \0441\0432\0435\0440\043a\0438', false)
+) AS fields(field_name, special_value, interface_name, options_value, display_value, display_options_value, sort_order, width_value, label, hidden_value);
 
 WITH my_collections(collection_name) AS (VALUES
   ('my_orders_in_work'),
@@ -3509,6 +4325,7 @@ WHERE (many_collection = 'orders_overview_items' AND many_field = 'orders_overvi
    OR (many_collection IN ('my_orders_in_work_items', 'my_orders_completed_items', 'my_orders_unpaid_items') AND many_field = 'bucket_order')
    OR (many_collection IN ('my_orders_in_work_items', 'my_orders_completed_items', 'my_orders_unpaid_items') AND many_field = 'production_status')
    OR (many_collection IN ('my_orders_in_work_payments', 'my_orders_completed_payments', 'my_orders_unpaid_payments') AND many_field = 'bucket_order')
+   OR (many_collection = 'customer_reconciliation' AND many_field IN ('customer', 'customer_company', 'manager_employee', 'order_status'))
    OR many_collection IN ('my_orders_in_work', 'my_orders_completed', 'my_orders_unpaid');
 
 INSERT INTO directus_relations (
@@ -3532,7 +4349,11 @@ INSERT INTO directus_relations (
   ('my_orders_unpaid_items', 'production_status', 'production_statuses', NULL, 'nullify'),
   ('my_orders_in_work_payments', 'bucket_order', 'my_orders_in_work', 'payments', 'nullify'),
   ('my_orders_completed_payments', 'bucket_order', 'my_orders_completed', 'payments', 'nullify'),
-  ('my_orders_unpaid_payments', 'bucket_order', 'my_orders_unpaid', 'payments', 'nullify');
+  ('my_orders_unpaid_payments', 'bucket_order', 'my_orders_unpaid', 'payments', 'nullify'),
+  ('customer_reconciliation', 'customer', 'customers', NULL, 'nullify'),
+  ('customer_reconciliation', 'customer_company', 'customer_companies', NULL, 'nullify'),
+  ('customer_reconciliation', 'manager_employee', 'employees', NULL, 'nullify'),
+  ('customer_reconciliation', 'order_status', 'order_statuses', NULL, 'nullify');
 
 UPDATE directus_fields
 SET display = 'related-values',
@@ -3659,6 +4480,7 @@ WHERE collection IN (
   'orders_due_next_week',
   'orders_due_this_month',
   'orders_due_next_month',
+  'customer_reconciliation',
   'orders_overview_items',
   'my_orders_in_work',
   'my_orders_completed',
@@ -3682,6 +4504,7 @@ FROM (
     ('orders_due_next_week'),
     ('orders_due_this_month'),
     ('orders_due_next_month'),
+    ('customer_reconciliation'),
     ('orders_overview_items')
 ) AS collections(collection_name)
 CROSS JOIN (
@@ -3691,6 +4514,19 @@ CROSS JOIN (
     ('00000000-0000-4000-8000-000000000203'),
     ('00000000-0000-4000-8000-000000000205')
 ) AS policies(policy_id);
+
+DELETE FROM directus_permissions
+WHERE collection = 'customer_reconciliation';
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+SELECT 'customer_reconciliation', 'read', permissions_value::json, NULL, NULL, '*', policy_id::uuid
+FROM (
+  VALUES
+    ('00000000-0000-4000-8000-000000000201', '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'),
+    ('00000000-0000-4000-8000-000000000202', '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'),
+    ('00000000-0000-4000-8000-000000000203', '{}'),
+    ('00000000-0000-4000-8000-000000000205', '{}')
+) AS policies(policy_id, permissions_value);
 
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
 SELECT collection_name, 'read', permissions_value::json, NULL, NULL, '*', policy_id::uuid
@@ -3774,6 +4610,12 @@ SET layout = 'tabular',
     layout_options = '{"tabular":{"spacing":"compact"}}'::json
 WHERE collection IN ('my_orders_in_work', 'my_orders_completed', 'my_orders_unpaid');
 
+UPDATE directus_presets
+SET layout = 'tabular',
+    layout_query = '{"tabular":{"fields":["counterparty_name","order_number","deadline","manager_employee","order_status_name","order_sum","paid_amount","payment_due","overpayment","reconciliation_result"],"page":1}}'::json,
+    layout_options = '{"tabular":{"spacing":"compact"}}'::json
+WHERE collection = 'customer_reconciliation';
+
 INSERT INTO directus_presets ("user", collection, layout, layout_query, layout_options)
 SELECT
   du.id,
@@ -3840,6 +4682,7 @@ CROSS JOIN (
   VALUES
     ('office_issue', '{"tabular":{"fields":["manager_employee","customer_name","order_number","order_items","office_payment_due","office_status"],"page":1}}'),
     ('office_issue_archive', '{"tabular":{"fields":["manager_employee","customer_name","order_number","order_items","office_payment_due","office_status"],"page":1}}'),
+    ('customer_reconciliation', '{"tabular":{"fields":["counterparty_name","order_number","deadline","manager_employee","order_status_name","order_sum","paid_amount","payment_due","overpayment","reconciliation_result"],"page":1}}'),
     ('my_orders_in_work', '{"tabular":{"fields":["order_number","deadline","customer_display","order_items","order_status","office_status","order_sum","paid_amount","payment_due"],"page":1}}'),
     ('my_orders_completed', '{"tabular":{"fields":["order_number","deadline","customer_display","order_items","order_status","office_status","order_sum","paid_amount","payment_due"],"page":1}}'),
     ('my_orders_unpaid', '{"tabular":{"fields":["order_number","deadline","customer_display","order_items","order_status","office_status","order_sum","paid_amount","payment_due"],"page":1}}')
@@ -3876,6 +4719,7 @@ manager_presets(collection_name, layout_query_value) AS (VALUES
   ('orders_due_next_week', '{"tabular":{"fields":["order_number","deadline","customer_display","manager_name","shipping_method_name","order_sum","paid_amount","payment_due"],"page":1}}'),
   ('orders_due_this_month', '{"tabular":{"fields":["order_number","deadline","customer_display","manager_name","shipping_method_name","order_sum","paid_amount","payment_due"],"page":1}}'),
   ('orders_due_next_month', '{"tabular":{"fields":["order_number","deadline","customer_display","manager_name","shipping_method_name","order_sum","paid_amount","payment_due"],"page":1}}'),
+  ('customer_reconciliation', '{"tabular":{"fields":["counterparty_name","order_number","deadline","manager_employee","order_status_name","order_sum","paid_amount","payment_due","overpayment","reconciliation_result"],"page":1}}'),
   ('my_orders_in_work', '{"tabular":{"fields":["order_number","deadline","customer_display","order_items","order_status","office_status","order_sum","paid_amount","payment_due"],"page":1}}'),
   ('my_orders_completed', '{"tabular":{"fields":["order_number","deadline","customer_display","order_items","order_status","office_status","order_sum","paid_amount","payment_due"],"page":1}}'),
   ('my_orders_unpaid', '{"tabular":{"fields":["order_number","deadline","customer_display","order_items","order_status","office_status","order_sum","paid_amount","payment_due"],"page":1}}'),
@@ -3934,6 +4778,7 @@ admin_presets(collection_name, layout_query_value) AS (VALUES
   ('orders_due_next_week', '{"tabular":{"fields":["order_number","deadline","customer_display","manager_name","shipping_method_name","order_sum","paid_amount","payment_due"],"page":1}}'),
   ('orders_due_this_month', '{"tabular":{"fields":["order_number","deadline","customer_display","manager_name","shipping_method_name","order_sum","paid_amount","payment_due"],"page":1}}'),
   ('orders_due_next_month', '{"tabular":{"fields":["order_number","deadline","customer_display","manager_name","shipping_method_name","order_sum","paid_amount","payment_due"],"page":1}}'),
+  ('customer_reconciliation', '{"tabular":{"fields":["counterparty_name","order_number","deadline","manager_employee","order_status_name","order_sum","paid_amount","payment_due","overpayment","reconciliation_result"],"page":1}}'),
   ('my_orders_in_work', '{"tabular":{"fields":["order_number","deadline","customer_display","order_items","order_status","office_status","order_sum","paid_amount","payment_due"],"page":1}}'),
   ('my_orders_completed', '{"tabular":{"fields":["order_number","deadline","customer_display","order_items","order_status","office_status","order_sum","paid_amount","payment_due"],"page":1}}'),
   ('my_orders_unpaid', '{"tabular":{"fields":["order_number","deadline","customer_display","order_items","order_status","office_status","order_sum","paid_amount","payment_due"],"page":1}}')
@@ -3977,6 +4822,7 @@ WHERE "user" IS NOT NULL
     'office_issue', 'office_issue_archive', 'office_items_in_office',
     'orders_overview', 'orders_due_urgent', 'orders_due_today', 'orders_due_this_week',
     'orders_due_next_week', 'orders_due_this_month', 'orders_due_next_month',
+    'customer_reconciliation',
     'my_orders_in_work', 'my_orders_completed', 'my_orders_unpaid'
   );
 
@@ -4085,6 +4931,18 @@ BEGIN
     NEW.layout_options := '{"tabular":{"spacing":"compact"}}'::json;
   END IF;
 
+  IF NEW.collection = 'customer_reconciliation'
+     AND (
+       NEW.layout_query IS NULL
+       OR NOT (NEW.layout_query::jsonb #> '{tabular,fields}' IS NOT NULL)
+       OR jsonb_typeof(NEW.layout_query::jsonb #> '{tabular,fields}') <> 'array'
+       OR jsonb_array_length(NEW.layout_query::jsonb #> '{tabular,fields}') = 0
+     ) THEN
+    NEW.layout := 'tabular';
+    NEW.layout_query := '{"tabular":{"fields":["counterparty_name","order_number","deadline","manager_employee","order_status_name","order_sum","paid_amount","payment_due","overpayment","reconciliation_result"],"page":1}}'::json;
+    NEW.layout_options := '{"tabular":{"spacing":"compact"}}'::json;
+  END IF;
+
   RETURN NEW;
 END;
 $$;
@@ -4092,7 +4950,7 @@ $$;
 CREATE TRIGGER symbolika_normalize_list_presets
 BEFORE INSERT OR UPDATE ON directus_presets
 FOR EACH ROW
-WHEN (NEW.collection IN ('orders', 'orders_items', 'office_items_in_office', 'order_payments', 'office_issue', 'office_issue_archive', 'orders_overview', 'orders_due_urgent', 'orders_due_today', 'orders_due_this_week', 'orders_due_next_week', 'orders_due_this_month', 'orders_due_next_month', 'my_orders_in_work', 'my_orders_completed', 'my_orders_unpaid'))
+WHEN (NEW.collection IN ('orders', 'orders_items', 'office_items_in_office', 'order_payments', 'office_issue', 'office_issue_archive', 'orders_overview', 'orders_due_urgent', 'orders_due_today', 'orders_due_this_week', 'orders_due_next_week', 'orders_due_this_month', 'orders_due_next_month', 'customer_reconciliation', 'my_orders_in_work', 'my_orders_completed', 'my_orders_unpaid'))
 EXECUTE FUNCTION normalize_symbolika_list_presets();
 
 INSERT INTO payment_allocations (payment, "order", amount, comment)
@@ -4229,7 +5087,8 @@ WITH layout(collection_name, field_name, group_name, sort_value, width_value, hi
   ('orders_items', 'order_sum', 'main', 5, 'half', false),
   ('orders_items', 'deadline', 'main', 6, 'half', false),
   ('orders_items', 'product_category', 'main', 7, 'half', false),
-  ('orders_items', 'product_subcategory', 'main', 8, 'half', true),
+  ('orders_items', 'product_subcategory', 'main', 8, 'half', false),
+  ('orders_items', 'application_method', 'main', 9, 'half', false),
   ('orders_items', 'item', NULL, 2, 'full', false),
   ('orders_items', 'item_status', 'item', 1, 'half', false),
   ('orders_items', 'production_status', 'item', 2, 'half', false),
@@ -4414,6 +5273,8 @@ WHERE collection = 'orders_items'
 SELECT sync_office_issue_order(id)
 FROM orders
 WHERE shipping_method = 'office_pickup';
+
+SELECT refresh_customer_reconciliation();
 
 COMMIT;
 

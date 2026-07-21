@@ -18,6 +18,7 @@ symbolika_directus_clean_install/extensions/**/node_modules/
 
 database_before_pg_resetwal/
 db_backups/
+backups/
 
 *.sql
 !full_directus_backup.sql
