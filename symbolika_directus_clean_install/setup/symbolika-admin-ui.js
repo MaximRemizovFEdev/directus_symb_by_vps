@@ -73,6 +73,29 @@
     saveError: '\u041e\u0448\u0438\u0431\u043a\u0430 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u044f',
   };
   const formAutosaveEnabled = false;
+  const serviceNavigationCollections = new Set([
+    'service_directory',
+    'contractors',
+    'product_categories',
+    'product_subcategories',
+    'product_application_methods',
+    'product_routing_rules',
+    'order_statuses',
+    'production_statuses',
+    'employees',
+    'employee_positions',
+    'payment_types',
+    'customer_company_links',
+    'contractor_payments',
+  ]);
+  const serviceNavigationRoles = new Set([
+    'Administrator',
+    '\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u044e\u0449\u0438\u0439',
+  ]);
+  const serviceNavigationState = {
+    roleName: null,
+    loading: false,
+  };
   const tableState = {
     byCollection: new Map(),
     collectionMeta: new Map(),
@@ -87,6 +110,48 @@
     document.documentElement.setAttribute('translate', 'no');
     if (document.body) {
       document.body.setAttribute('translate', 'no');
+    }
+  }
+
+  async function loadCurrentRoleName() {
+    if (serviceNavigationState.roleName || serviceNavigationState.loading) return serviceNavigationState.roleName;
+    serviceNavigationState.loading = true;
+    try {
+      const response = await fetch('/users/me?fields=role.name', { credentials: 'include' });
+      if (!response.ok) return null;
+      const payload = await response.json();
+      serviceNavigationState.roleName = payload?.data?.role?.name || null;
+      return serviceNavigationState.roleName;
+    } catch (error) {
+      console.warn('[Symbolika service navigation]', error);
+      return null;
+    } finally {
+      serviceNavigationState.loading = false;
+    }
+  }
+
+  function getNavigationCollectionFromLink(link) {
+    const href = link?.getAttribute?.('href') || '';
+    const match = href.match(/\/admin\/content\/([^/?#]+)/);
+    return match ? match[1] : null;
+  }
+
+  function getNavigationItem(link) {
+    return link.closest('.v-list-item, .navigation-item, li, a') || link;
+  }
+
+  async function applyServiceNavigationVisibility() {
+    if (window.location.pathname.includes('/admin/login')) return;
+    const roleName = serviceNavigationState.roleName || await loadCurrentRoleName();
+    if (!roleName) return;
+    const canSeeServiceNavigation = serviceNavigationRoles.has(roleName);
+
+    for (const link of document.querySelectorAll('a[href*="/admin/content/"]')) {
+      const collection = getNavigationCollectionFromLink(link);
+      if (!collection || !serviceNavigationCollections.has(collection)) continue;
+      const item = getNavigationItem(link);
+      item.dataset.symbolikaServiceNavigation = canSeeServiceNavigation ? 'visible' : 'hidden';
+      item.style.display = canSeeServiceNavigation ? '' : 'none';
     }
   }
 
@@ -1096,6 +1161,7 @@
     pollTimer: null,
     currentUserId: null,
     lastNotificationTime: localStorage.getItem('symbolika:lastNotificationTime') || '',
+    seenNotificationIds: new Set(JSON.parse(localStorage.getItem('symbolika:seenNotificationIds') || '[]')),
   };
 
   function urlBase64ToUint8Array(value) {
@@ -1157,6 +1223,11 @@
 
   function showForegroundNotification(notification) {
     if (!notification?.id || Notification.permission !== 'granted') return;
+    const notificationId = String(notification.id);
+    if (pushUi.seenNotificationIds.has(notificationId)) return;
+
+    pushUi.seenNotificationIds.add(notificationId);
+    localStorage.setItem('symbolika:seenNotificationIds', JSON.stringify([...pushUi.seenNotificationIds].slice(-100)));
 
     const browserNotification = new Notification(notification.subject || '\u0421\u0438\u043c\u0432\u043e\u043b\u0438\u043a\u0430', {
       body: notification.message || '',
@@ -1211,12 +1282,17 @@
       const payload = await response.json();
       const notifications = Array.isArray(payload?.data) ? payload.data : [];
 
+      const newestTimestamp = notifications.reduce((timestamp, notification) => (
+        !timestamp || notification.timestamp > timestamp ? notification.timestamp : timestamp
+      ), pushUi.lastNotificationTime);
+
+      if (newestTimestamp && newestTimestamp !== pushUi.lastNotificationTime) {
+        pushUi.lastNotificationTime = newestTimestamp;
+        localStorage.setItem('symbolika:lastNotificationTime', pushUi.lastNotificationTime);
+      }
+
       for (const notification of notifications) {
         showForegroundNotification(notification);
-        if (!pushUi.lastNotificationTime || notification.timestamp > pushUi.lastNotificationTime) {
-          pushUi.lastNotificationTime = notification.timestamp;
-          localStorage.setItem('symbolika:lastNotificationTime', pushUi.lastNotificationTime);
-        }
       }
     } catch (error) {
       console.warn('[Symbolika notification poll]', error);
@@ -1312,6 +1388,7 @@
       }
       enhanceInlineTables();
       applyVisibleInlineOverrides();
+      applyServiceNavigationVisibility();
     });
   });
 
@@ -1325,12 +1402,14 @@
   enhanceInlineTables();
   applyVisibleInlineOverrides();
   createPushButton();
+  applyServiceNavigationVisibility();
 
   let attempts = 0;
   const interval = window.setInterval(() => {
     scan();
     enhanceInlineTables();
     createPushButton();
+    applyServiceNavigationVisibility();
     attempts += 1;
     if (attempts >= 20) window.clearInterval(interval);
   }, 500);

@@ -69,6 +69,14 @@ CREATE TABLE IF NOT EXISTS symbolika_push_subscriptions (
   updated_at timestamptz DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS symbolika_work_assignment_notifications (
+  id serial PRIMARY KEY,
+  item integer NOT NULL,
+  channel text NOT NULL,
+  created_at timestamptz DEFAULT now(),
+  UNIQUE (item, channel)
+);
+
 DO $$
 BEGIN
   IF to_regclass('public.customer_company_links') IS NOT NULL THEN
@@ -185,12 +193,215 @@ ALTER TABLE contractors ADD COLUMN IF NOT EXISTS directus_user uuid REFERENCES d
 ALTER TABLE product_categories DROP COLUMN IF EXISTS default_contractor_1;
 ALTER TABLE product_categories DROP COLUMN IF EXISTS default_contractor_2;
 
+CREATE TABLE IF NOT EXISTS finance_dashboard_metrics (
+  metric_key character varying(255) PRIMARY KEY,
+  title character varying(255) NOT NULL,
+  metric_group character varying(255) NOT NULL,
+  value numeric(14,2) DEFAULT 0,
+  sort integer DEFAULT 100,
+  updated_at timestamp with time zone DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS finance_dashboard_monthly (
+  month_start date PRIMARY KEY,
+  month_label character varying(255) NOT NULL,
+  revenue numeric(14,2) DEFAULT 0,
+  paid numeric(14,2) DEFAULT 0,
+  profit numeric(14,2) DEFAULT 0,
+  expenses numeric(14,2) DEFAULT 0,
+  receivable numeric(14,2) DEFAULT 0,
+  updated_at timestamp with time zone DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS finance_dashboard_series (
+  id serial PRIMARY KEY,
+  month_start date NOT NULL,
+  month_label character varying(255) NOT NULL,
+  metric_key character varying(255) NOT NULL,
+  metric_name character varying(255) NOT NULL,
+  value numeric(14,2) DEFAULT 0,
+  sort integer DEFAULT 100,
+  updated_at timestamp with time zone DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION refresh_finance_dashboard_metrics()
+RETURNS void AS $$
+DECLARE
+  month_begin date := date_trunc('month', current_date)::date;
+  year_begin date := date_trunc('year', current_date)::date;
+BEGIN
+  DELETE FROM finance_dashboard_metrics;
+
+  INSERT INTO finance_dashboard_metrics(metric_key, title, metric_group, value, sort)
+  VALUES
+    (
+      'revenue_month',
+      U&'\0412\044b\0440\0443\0447\043a\0430 \0437\0430 \043c\0435\0441\044f\0446',
+      'month',
+      COALESCE((SELECT SUM(order_sum) FROM orders WHERE date >= month_begin AND date < (month_begin + interval '1 month')::date), 0),
+      10
+    ),
+    (
+      'revenue_year',
+      U&'\0412\044b\0440\0443\0447\043a\0430 \0437\0430 \0433\043e\0434',
+      'year',
+      COALESCE((SELECT SUM(order_sum) FROM orders WHERE date >= year_begin AND date < (year_begin + interval '1 year')::date), 0),
+      20
+    ),
+    (
+      'paid_month',
+      U&'\041e\043f\043b\0430\0447\0435\043d\043e \0437\0430 \043c\0435\0441\044f\0446',
+      'month',
+      COALESCE((SELECT SUM(amount) FROM order_payments WHERE payment_direction = 'incoming' AND payment_date >= month_begin AND payment_date < (month_begin + interval '1 month')::date), 0),
+      30
+    ),
+    (
+      'paid_year',
+      U&'\041e\043f\043b\0430\0447\0435\043d\043e \0437\0430 \0433\043e\0434',
+      'year',
+      COALESCE((SELECT SUM(amount) FROM order_payments WHERE payment_direction = 'incoming' AND payment_date >= year_begin AND payment_date < (year_begin + interval '1 year')::date), 0),
+      40
+    ),
+    (
+      'profit_month',
+      U&'\0427\0438\0441\0442\0430\044f \043f\0440\0438\0431\044b\043b\044c \0437\0430 \043c\0435\0441\044f\0446',
+      'month',
+      COALESCE((SELECT SUM(profit_sum) FROM orders WHERE date >= month_begin AND date < (month_begin + interval '1 month')::date), 0),
+      50
+    ),
+    (
+      'profit_year',
+      U&'\0427\0438\0441\0442\0430\044f \043f\0440\0438\0431\044b\043b\044c \0437\0430 \0433\043e\0434',
+      'year',
+      COALESCE((SELECT SUM(profit_sum) FROM orders WHERE date >= year_begin AND date < (year_begin + interval '1 year')::date), 0),
+      60
+    ),
+    (
+      'expenses_month',
+      U&'\0420\0430\0441\0445\043e\0434\044b \0437\0430 \043c\0435\0441\044f\0446',
+      'month',
+      COALESCE((SELECT SUM(items_total_cost) FROM orders WHERE date >= month_begin AND date < (month_begin + interval '1 month')::date), 0),
+      70
+    ),
+    (
+      'expenses_year',
+      U&'\0420\0430\0441\0445\043e\0434\044b \0437\0430 \0433\043e\0434',
+      'year',
+      COALESCE((SELECT SUM(items_total_cost) FROM orders WHERE date >= year_begin AND date < (year_begin + interval '1 year')::date), 0),
+      80
+    ),
+    (
+      'receivable',
+      U&'\041d\0430\043c \0434\043e\043b\0436\043d\044b',
+      'balance',
+      COALESCE((SELECT SUM(GREATEST(payment_due, 0)) FROM orders), 0),
+      90
+    ),
+    (
+      'we_owe_contractors',
+      U&'\041c\044b \0434\043e\043b\0436\043d\044b \043a\043e\043d\0442\0440\0430\0433\0435\043d\0442\0430\043c',
+      'balance',
+      COALESCE((SELECT SUM(debt_to_contractor) FROM contractors), 0),
+      100
+    ),
+    (
+      'contractors_owe_us',
+      U&'\041a\043e\043d\0442\0440\0430\0433\0435\043d\0442\044b \0434\043e\043b\0436\043d\044b \043d\0430\043c',
+      'balance',
+      COALESCE((SELECT SUM(contractor_debt_to_us) FROM contractors), 0),
+      110
+    ),
+    (
+      'orders_month',
+      U&'\0417\0430\043a\0430\0437\043e\0432 \0437\0430 \043c\0435\0441\044f\0446',
+      'orders',
+      COALESCE((SELECT COUNT(*) FROM orders WHERE date >= month_begin AND date < (month_begin + interval '1 month')::date), 0),
+      120
+    ),
+    (
+      'orders_active',
+      U&'\0410\043a\0442\0438\0432\043d\044b\0445 \0437\0430\043a\0430\0437\043e\0432',
+      'orders',
+      COALESCE((
+        SELECT COUNT(*)
+        FROM orders o
+        LEFT JOIN order_statuses os ON os.id = o.order_status
+        WHERE COALESCE(os.name, '') NOT IN (U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d', U&'\041e\0442\043c\0435\043d\0435\043d')
+      ), 0),
+      130
+    ),
+    (
+      'orders_unpaid',
+      U&'\041d\0435\043e\043f\043b\0430\0447\0435\043d\043d\044b\0445 \0437\0430\043a\0430\0437\043e\0432',
+      'orders',
+      COALESCE((SELECT COUNT(*) FROM orders WHERE payment_due > 0), 0),
+      140
+    ),
+    (
+      'avg_order_month',
+      U&'\0421\0440\0435\0434\043d\0438\0439 \0447\0435\043a \0437\0430 \043c\0435\0441\044f\0446',
+      'month',
+      COALESCE((SELECT AVG(order_sum) FROM orders WHERE date >= month_begin AND date < (month_begin + interval '1 month')::date), 0),
+      150
+    );
+
+  DELETE FROM finance_dashboard_monthly;
+
+  INSERT INTO finance_dashboard_monthly(month_start, month_label, revenue, paid, profit, expenses, receivable)
+  SELECT
+    months.month_start,
+    to_char(months.month_start, 'MM.YY'),
+    COALESCE(SUM(o.order_sum), 0),
+    COALESCE((
+      SELECT SUM(op.amount)
+      FROM order_payments op
+      WHERE op.payment_direction = 'incoming'
+        AND op.payment_date >= months.month_start
+        AND op.payment_date < (months.month_start + interval '1 month')::date
+    ), 0),
+    COALESCE(SUM(o.profit_sum), 0),
+    COALESCE(SUM(o.items_total_cost), 0),
+    COALESCE(SUM(GREATEST(o.payment_due, 0)), 0)
+  FROM generate_series(
+    (date_trunc('month', current_date) - interval '11 months')::date,
+    date_trunc('month', current_date)::date,
+    interval '1 month'
+  ) AS months(month_start)
+  LEFT JOIN orders o
+    ON o.date >= months.month_start
+   AND o.date < (months.month_start + interval '1 month')::date
+  GROUP BY months.month_start
+  ORDER BY months.month_start;
+
+  DELETE FROM finance_dashboard_series;
+
+  INSERT INTO finance_dashboard_series(month_start, month_label, metric_key, metric_name, value, sort)
+  SELECT month_start, month_label, 'revenue', U&'\0412\044b\0440\0443\0447\043a\0430', revenue, 10
+  FROM finance_dashboard_monthly
+  UNION ALL
+  SELECT month_start, month_label, 'paid', U&'\041e\043f\043b\0430\0447\0435\043d\043e', paid, 20
+  FROM finance_dashboard_monthly
+  UNION ALL
+  SELECT month_start, month_label, 'profit', U&'\041f\0440\0438\0431\044b\043b\044c', profit, 30
+  FROM finance_dashboard_monthly
+  UNION ALL
+  SELECT month_start, month_label, 'expenses', U&'\0420\0430\0441\0445\043e\0434\044b', expenses, 40
+  FROM finance_dashboard_monthly
+  UNION ALL
+  SELECT month_start, month_label, 'receivable', U&'\0414\0435\0431\0438\0442\043e\0440\043a\0430', receivable, 50
+  FROM finance_dashboard_monthly;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT refresh_finance_dashboard_metrics();
+
 CREATE TABLE IF NOT EXISTS product_application_methods (
   id serial PRIMARY KEY,
   name character varying(255) NOT NULL,
   sort integer,
   is_active boolean DEFAULT true
 );
+ALTER TABLE product_application_methods ADD COLUMN IF NOT EXISTS category integer REFERENCES product_categories(id) ON DELETE CASCADE;
 
 CREATE TABLE IF NOT EXISTS product_routing_rules (
   id serial PRIMARY KEY,
@@ -216,6 +427,7 @@ CREATE TABLE IF NOT EXISTS production_work (
   production_comment text,
   url character varying(255),
   production_status integer,
+  date timestamp without time zone,
   deadline timestamp without time zone
 );
 
@@ -231,6 +443,7 @@ CREATE TABLE IF NOT EXISTS screen_printing_work (
   production_comment text,
   url character varying(255),
   production_status integer,
+  date timestamp without time zone,
   deadline timestamp without time zone
 );
 
@@ -256,8 +469,10 @@ CREATE TABLE IF NOT EXISTS contractor_work (
 
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS production_comment text;
+ALTER TABLE production_work ADD COLUMN IF NOT EXISTS date timestamp without time zone;
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS production_comment text;
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS date timestamp without time zone;
 ALTER TABLE contractor_work ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE contractor_work ADD COLUMN IF NOT EXISTS production_comment text;
 
@@ -287,6 +502,28 @@ BEGIN
      OR NEW.product_category IS DISTINCT FROM OLD.product_category
      OR NEW.product_subcategory IS DISTINCT FROM OLD.product_subcategory
      OR NEW.application_method IS DISTINCT FROM OLD.application_method THEN
+    IF NEW.product_subcategory IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1
+         FROM product_subcategories ps
+         WHERE ps.id = NEW.product_subcategory
+           AND ps.category = NEW.product_category
+           AND COALESCE(ps.is_active, true) = true
+       ) THEN
+      NEW.product_subcategory := NULL;
+    END IF;
+
+    IF NEW.application_method IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1
+         FROM product_application_methods pam
+         WHERE pam.id = NEW.application_method
+           AND COALESCE(pam.is_active, true) = true
+           AND (pam.category = NEW.product_category OR pam.category IS NULL)
+       ) THEN
+      NEW.application_method := NULL;
+    END IF;
+
     SELECT ARRAY[rule_match.contractor_1, rule_match.contractor_2]
       INTO matched_contractors
       FROM (
@@ -309,22 +546,6 @@ BEGIN
         ORDER BY specificity DESC, priority, id
         LIMIT 1
       ) rule_match;
-
-    IF matched_contractors IS NULL THEN
-      SELECT array_agg(id ORDER BY priority, id)
-        INTO matched_contractors
-        FROM (
-          SELECT c.id, 1 AS priority
-          FROM contractors c
-          WHERE NEW.product_subcategory IS NOT NULL
-            AND c.default_product_subcategory = NEW.product_subcategory
-          UNION
-          SELECT c.id, 2 AS priority
-          FROM contractors c
-          WHERE NEW.product_category IS NOT NULL
-            AND c.default_product_category = NEW.product_category
-        ) fallback_matches;
-    END IF;
 
     NEW.contractor_1 := matched_contractors[1];
     NEW.contractor_2 := matched_contractors[2];
@@ -648,8 +869,7 @@ IMMUTABLE
 AS $$
   SELECT CASE status_value
     WHEN 'waiting_layout' THEN 'new'
-    WHEN 'send_to_work' THEN 'in_work'
-    WHEN 'sent_to_work' THEN 'in_work'
+    WHEN 'send_to_work' THEN 'sent_to_work'
     WHEN U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d' THEN 'delivered'
     ELSE COALESCE(status_value, 'new')
   END
@@ -687,6 +907,7 @@ BEGIN
     WHEN bool_and(item_status = 'ready') THEN U&'\0413\043e\0442\043e\0432'
     WHEN bool_or(item_status = 'layout_revision') THEN U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430'
     WHEN bool_or(item_status = 'in_work') THEN U&'\0412 \0440\0430\0431\043e\0442\0435'
+    WHEN bool_or(item_status = 'sent_to_work') THEN U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443'
     WHEN bool_or(item_status = 'approval') THEN U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435'
     ELSE U&'\041d\043e\0432\044b\0439'
   END
@@ -768,6 +989,7 @@ BEGIN
     WHEN U&'\041d\043e\0432\044b\0439' THEN 'new'
     WHEN U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435' THEN 'approval'
     WHEN U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430' THEN 'layout_revision'
+    WHEN U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443' THEN 'sent_to_work'
     WHEN U&'\0412 \0440\0430\0431\043e\0442\0435' THEN 'in_work'
     WHEN U&'\0413\043e\0442\043e\0432' THEN 'ready'
     WHEN U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d' THEN 'delivered'
@@ -921,18 +1143,37 @@ CREATE OR REPLACE FUNCTION sync_work_item(item_id integer)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  order_status_name text;
+  item_work_status character varying;
 BEGIN
   DELETE FROM production_work WHERE id = item_id;
   DELETE FROM screen_printing_work WHERE id = item_id;
   DELETE FROM contractor_work WHERE order_item = item_id;
 
+  SELECT os.name, symbolika_normalize_item_status(oi.item_status)
+    INTO order_status_name, item_work_status
+  FROM orders_items oi
+  JOIN orders o ON o.id = oi."order"
+  LEFT JOIN order_statuses os ON os.id = o.order_status
+  WHERE oi.id = item_id;
+
+  IF item_work_status NOT IN ('sent_to_work', 'in_work', 'ready')
+     AND order_status_name NOT IN (
+       U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443',
+       U&'\0412 \0440\0430\0431\043e\0442\0435',
+       U&'\0413\043e\0442\043e\0432'
+     ) THEN
+    RETURN;
+  END IF;
+
   INSERT INTO production_work (
     id, "order", customer, customer_company, manager_employee,
-    product_name, quantity, technical_task_text, production_comment, url, production_status, deadline
+    product_name, quantity, technical_task_text, production_comment, url, production_status, date, deadline
   )
   SELECT
     oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
-    oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, oi.deadline
+    oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, o.date, oi.deadline
   FROM orders_items oi
   JOIN orders o ON o.id = oi."order"
   LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
@@ -942,11 +1183,11 @@ BEGIN
 
   INSERT INTO screen_printing_work (
     id, "order", customer, customer_company, manager_employee,
-    product_name, quantity, technical_task_text, production_comment, url, production_status, deadline
+    product_name, quantity, technical_task_text, production_comment, url, production_status, date, deadline
   )
   SELECT
     oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
-    oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, oi.deadline
+    oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, o.date, oi.deadline
   FROM orders_items oi
   JOIN orders o ON o.id = oi."order"
   LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
@@ -1521,31 +1762,53 @@ DELETE FROM screen_printing_work;
 DELETE FROM contractor_work;
 INSERT INTO production_work (
   id, "order", customer, customer_company, manager_employee,
-  product_name, quantity, technical_task_text, production_comment, url, production_status, deadline
+  product_name, quantity, technical_task_text, production_comment, url, production_status, date, deadline
 )
 SELECT
   oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
-  oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, oi.deadline
+  oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, o.date, oi.deadline
 FROM orders_items oi
 JOIN orders o ON o.id = oi."order"
+LEFT JOIN order_statuses os ON os.id = o.order_status
 LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
 LEFT JOIN contractors c2 ON c2.id = oi.contractor_2
-WHERE c1.name ILIKE U&'%\043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432%'
-   OR c2.name ILIKE U&'%\043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432%';
+WHERE (
+    os.name IN (
+      U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443',
+      U&'\0412 \0440\0430\0431\043e\0442\0435',
+      U&'\0413\043e\0442\043e\0432'
+    )
+    OR symbolika_normalize_item_status(oi.item_status) IN ('sent_to_work', 'in_work', 'ready')
+  )
+  AND (
+    c1.name ILIKE U&'%\043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432%'
+    OR c2.name ILIKE U&'%\043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432%'
+  );
 
 INSERT INTO screen_printing_work (
   id, "order", customer, customer_company, manager_employee,
-  product_name, quantity, technical_task_text, production_comment, url, production_status, deadline
+  product_name, quantity, technical_task_text, production_comment, url, production_status, date, deadline
 )
 SELECT
   oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
-  oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, oi.deadline
+  oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, o.date, oi.deadline
 FROM orders_items oi
 JOIN orders o ON o.id = oi."order"
+LEFT JOIN order_statuses os ON os.id = o.order_status
 LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
 LEFT JOIN contractors c2 ON c2.id = oi.contractor_2
-WHERE c1.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%'
-   OR c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%';
+WHERE (
+    os.name IN (
+      U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443',
+      U&'\0412 \0440\0430\0431\043e\0442\0435',
+      U&'\0413\043e\0442\043e\0432'
+    )
+    OR symbolika_normalize_item_status(oi.item_status) IN ('sent_to_work', 'in_work', 'ready')
+  )
+  AND (
+    c1.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%'
+    OR c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%'
+  );
 
 INSERT INTO contractor_work (
   id, order_item, contractor, contractor_slot, contractor_has_own_view, access_user,
@@ -1713,6 +1976,59 @@ WHERE collection IN (
   'product_routing_rules',
   'contractor_payments'
 );
+
+INSERT INTO directus_collections (
+  collection, icon, hidden, singleton, sort, collapse, translations
+) VALUES (
+  'service_directory', 'folder', false, false, 39, 'open',
+  json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043f\0440\0430\0432\043e\0447\043d\0438\043a\0438'))::json
+)
+ON CONFLICT (collection) DO UPDATE SET
+  icon = EXCLUDED.icon,
+  hidden = EXCLUDED.hidden,
+  singleton = EXCLUDED.singleton,
+  sort = EXCLUDED.sort,
+  collapse = EXCLUDED.collapse,
+  translations = EXCLUDED.translations;
+
+INSERT INTO directus_collections (
+  collection, icon, hidden, singleton, sort, collapse, translations
+) VALUES (
+  'service_directory', 'folder', false, false, 39, 'open',
+  json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043f\0440\0430\0432\043e\0447\043d\0438\043a\0438'))::json
+)
+ON CONFLICT (collection) DO UPDATE SET
+  icon = EXCLUDED.icon,
+  hidden = EXCLUDED.hidden,
+  singleton = EXCLUDED.singleton,
+  sort = EXCLUDED.sort,
+  collapse = EXCLUDED.collapse,
+  translations = EXCLUDED.translations;
+
+WITH service_menu(collection_name, icon_value, label_value, sort_value) AS (VALUES
+  ('contractors', 'groups', U&'\041a\043e\043d\0442\0440\0430\0433\0435\043d\0442\044b', 40),
+  ('product_categories', 'category', U&'\041a\0430\0442\0435\0433\043e\0440\0438\0438', 41),
+  ('product_subcategories', 'subdirectory_arrow_right', U&'\041f\043e\0434\043a\0430\0442\0435\0433\043e\0440\0438\0438', 42),
+  ('product_application_methods', 'format_paint', U&'\0412\0438\0434\044b \043d\0430\043d\0435\0441\0435\043d\0438\044f', 43),
+  ('product_routing_rules', 'account_tree', U&'\041f\0440\0430\0432\0438\043b\0430 \043c\0430\0440\0448\0440\0443\0442\0438\0437\0430\0446\0438\0438', 44),
+  ('order_statuses', 'flag', U&'\0421\0442\0430\0442\0443\0441\044b \0437\0430\043a\0430\0437\043e\0432', 45),
+  ('production_statuses', 'precision_manufacturing', U&'\0421\0442\0430\0442\0443\0441\044b \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\0430', 46),
+  ('employees', 'badge', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a\0438', 47),
+  ('employee_positions', 'assignment_ind', U&'\0414\043e\043b\0436\043d\043e\0441\0442\0438', 48),
+  ('payment_types', 'payments', U&'\0422\0438\043f\044b \043e\043f\043b\0430\0442', 49),
+  ('shipping_methods', 'local_shipping', U&'\0421\043f\043e\0441\043e\0431\044b \043e\0442\0433\0440\0443\0437\043a\0438', 50),
+  ('customer_company_links', 'hub', U&'\0421\0432\044f\0437\0438 \043a\043b\0438\0435\043d\0442\043e\0432 \0438 \043a\043e\043c\043f\0430\043d\0438\0439', 51),
+  ('contractor_payments', 'receipt_long', U&'\041e\043f\043b\0430\0442\044b \043a\043e\043d\0442\0440\0430\0433\0435\043d\0442\0430\043c', 52)
+)
+UPDATE directus_collections dc
+SET hidden = false,
+    icon = service_menu.icon_value,
+    sort = service_menu.sort_value,
+    "group" = 'service_directory',
+    collapse = 'open',
+    translations = json_build_array(json_build_object('language','ru-RU','translation', service_menu.label_value))::json
+FROM service_menu
+WHERE dc.collection = service_menu.collection_name;
 
 INSERT INTO directus_fields (
   collection, field, special, interface, options, display, display_options,
@@ -1894,7 +2210,7 @@ DELETE FROM directus_fields
 WHERE (collection = 'product_categories' AND field IN ('default_contractor_1', 'default_contractor_2'))
    OR (collection = 'contractors' AND field IN ('has_own_view', 'directus_user', 'default_product_category', 'default_product_subcategory'))
    OR (collection = 'product_categories' AND field = 'detail_mode')
-   OR (collection = 'product_application_methods' AND field IN ('id', 'name', 'sort', 'is_active'))
+   OR (collection = 'product_application_methods' AND field IN ('id', 'category', 'name', 'sort', 'is_active'))
    OR (collection = 'product_routing_rules' AND field IN ('id', 'name', 'product_category', 'product_subcategory', 'application_method', 'contractor_1', 'contractor_2', 'priority', 'is_active'));
 
 INSERT INTO directus_fields (
@@ -1918,14 +2234,14 @@ INSERT INTO directus_fields (
   (
     'contractors', 'default_product_category', 'm2o', 'select-dropdown-m2o',
     '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json,
-    false, false, 9, 'half',
+    true, true, 1002, 'half',
     json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\0430\0442\0435\0433\043e\0440\0438\044f \043f\043e \0443\043c\043e\043b\0447\0430\043d\0438\044e'))::json,
     false, true
   ),
   (
     'contractors', 'default_product_subcategory', 'm2o', 'select-dropdown-m2o',
     '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json,
-    false, false, 10, 'half',
+    true, true, 1003, 'half',
     json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\0434\043a\0430\0442\0435\0433\043e\0440\0438\044f \043f\043e \0443\043c\043e\043b\0447\0430\043d\0438\044e'))::json,
     false, true
   ),
@@ -1947,9 +2263,10 @@ INSERT INTO directus_fields (
     false, true
   ),
   ('product_application_methods', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'full', NULL, false, true),
-  ('product_application_methods', 'name', NULL, 'input', NULL, NULL, NULL, false, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041d\0430\0437\0432\0430\043d\0438\0435'))::json, true, true),
-  ('product_application_methods', 'sort', NULL, 'input', NULL, NULL, NULL, false, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0440\0442\0438\0440\043e\0432\043a\0430'))::json, false, true),
-  ('product_application_methods', 'is_active', 'cast-boolean', 'boolean', NULL, NULL, NULL, false, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0410\043a\0442\0438\0432\043d\043e'))::json, false, true),
+  ('product_application_methods', 'category', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\0430\0442\0435\0433\043e\0440\0438\044f'))::json, false, true),
+  ('product_application_methods', 'name', NULL, 'input', NULL, NULL, NULL, false, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041d\0430\0437\0432\0430\043d\0438\0435'))::json, true, true),
+  ('product_application_methods', 'sort', NULL, 'input', NULL, NULL, NULL, false, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0440\0442\0438\0440\043e\0432\043a\0430'))::json, false, true),
+  ('product_application_methods', 'is_active', 'cast-boolean', 'boolean', NULL, NULL, NULL, false, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0410\043a\0442\0438\0432\043d\043e'))::json, false, true),
   ('product_routing_rules', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'full', NULL, false, true),
   ('product_routing_rules', 'name', NULL, 'input', NULL, NULL, NULL, false, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041d\0430\0437\0432\0430\043d\0438\0435'))::json, false, true),
   ('product_routing_rules', 'product_category', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\0430\0442\0435\0433\043e\0440\0438\044f'))::json, true, true),
@@ -2015,6 +2332,7 @@ FROM (
     ('contractors', 'directus_user', 'directus_users', NULL, 'nullify'),
     ('contractors', 'default_product_category', 'product_categories', NULL, 'nullify'),
     ('contractors', 'default_product_subcategory', 'product_subcategories', NULL, 'nullify'),
+    ('product_application_methods', 'category', 'product_categories', NULL, 'cascade'),
     ('orders_items', 'application_method', 'product_application_methods', NULL, 'nullify'),
     ('product_routing_rules', 'product_category', 'product_categories', NULL, 'cascade'),
     ('product_routing_rules', 'product_subcategory', 'product_subcategories', NULL, 'cascade'),
@@ -2063,6 +2381,70 @@ INSERT INTO directus_fields (
   ('orders_items', 'order_link', NULL, 'symbolika-order-link', NULL, NULL, NULL, true, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0435\0440\0435\0439\0442\0438 \0432 \0437\0430\043a\0430\0437'))::json, false, true),
   ('orders_items', 'application_method', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 16, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0412\0438\0434 \043d\0430\043d\0435\0441\0435\043d\0438\044f'))::json, false, true),
   ('payment_allocations', 'order_link', NULL, 'symbolika-order-link', NULL, NULL, NULL, true, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0435\0440\0435\0439\0442\0438 \0432 \0437\0430\043a\0430\0437'))::json, false, true);
+
+UPDATE directus_fields
+SET options = '{"template":"{{name}}","filter":{"_and":[{"category":{"_eq":"{{product_category}}"}},{"is_active":{"_eq":true}}]}}'::json,
+    display = 'related-values',
+    display_options = '{"template":"{{name}}"}'::json
+WHERE collection = 'orders_items'
+  AND field = 'product_subcategory';
+
+UPDATE directus_fields
+SET options = '{"template":"{{name}}","filter":{"_and":[{"category":{"_eq":"{{product_category}}"}},{"is_active":{"_eq":true}}]}}'::json,
+    display = 'related-values',
+    display_options = '{"template":"{{name}}"}'::json
+WHERE collection = 'orders_items'
+  AND field = 'application_method';
+
+UPDATE directus_fields
+SET options = '{"template":"{{name}}","filter":{"_and":[{"category":{"_eq":"{{product_category}}"}},{"is_active":{"_eq":true}}]}}'::json,
+    display = 'related-values',
+    display_options = '{"template":"{{name}}"}'::json
+WHERE collection = 'product_routing_rules'
+  AND field = 'product_subcategory';
+
+UPDATE directus_fields
+SET options = '{"template":"{{name}}","filter":{"_and":[{"category":{"_eq":"{{product_category}}"}},{"is_active":{"_eq":true}}]}}'::json,
+    display = 'related-values',
+    display_options = '{"template":"{{name}}"}'::json
+WHERE collection = 'product_routing_rules'
+  AND field = 'application_method';
+
+UPDATE directus_presets
+SET layout = 'tabular',
+    layout_query = CASE collection
+      WHEN 'product_categories' THEN '{"tabular":{"page":1,"sort":["sort"],"fields":["name","detail_mode"]}}'::json
+      WHEN 'product_subcategories' THEN '{"tabular":{"page":1,"sort":["category","sort"],"fields":["category","name"]}}'::json
+      WHEN 'product_application_methods' THEN '{"tabular":{"page":1,"sort":["category","sort"],"fields":["category","name"]}}'::json
+      WHEN 'contractors' THEN '{"tabular":{"page":1,"sort":["name"],"fields":["name","contact_name","phone","email","balance","has_own_view"]}}'::json
+      WHEN 'product_routing_rules' THEN '{"tabular":{"page":1,"sort":["product_category","product_subcategory","application_method","priority"],"fields":["product_category","product_subcategory","application_method","contractor_1","contractor_2","priority"]}}'::json
+      ELSE layout_query
+    END,
+    layout_options = '{"tabular":{"spacing":"compact"}}'::json
+WHERE collection IN ('product_categories', 'product_subcategories', 'product_application_methods', 'contractors', 'product_routing_rules')
+  AND bookmark IS NULL;
+
+INSERT INTO directus_presets (collection, layout, layout_query, layout_options)
+SELECT preset.collection_name,
+       'tabular',
+       preset.layout_query,
+       '{"tabular":{"spacing":"compact"}}'::json
+FROM (
+  VALUES
+    ('product_categories', '{"tabular":{"page":1,"sort":["sort"],"fields":["name","detail_mode"]}}'::json),
+    ('product_subcategories', '{"tabular":{"page":1,"sort":["category","sort"],"fields":["category","name"]}}'::json),
+    ('product_application_methods', '{"tabular":{"page":1,"sort":["category","sort"],"fields":["category","name"]}}'::json),
+    ('contractors', '{"tabular":{"page":1,"sort":["name"],"fields":["name","contact_name","phone","email","balance","has_own_view"]}}'::json),
+    ('product_routing_rules', '{"tabular":{"page":1,"sort":["product_category","product_subcategory","application_method","priority"],"fields":["product_category","product_subcategory","application_method","contractor_1","contractor_2","priority"]}}'::json)
+) AS preset(collection_name, layout_query)
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM directus_presets dp
+  WHERE dp.collection = preset.collection_name
+    AND dp.bookmark IS NULL
+    AND dp."user" IS NULL
+    AND dp.role IS NULL
+);
 
 INSERT INTO directus_roles (id, name, icon, description, parent)
 VALUES
@@ -2181,12 +2563,12 @@ VALUES
 
   ('production_work', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
   ('production_work', 'update', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
-  ('production_work', 'read', '{}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,product_name,quantity,deadline,technical_task_text,production_comment,url,production_status', '00000000-0000-4000-8000-000000000204'),
+  ('production_work', 'read', '{}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,product_name,quantity,date,deadline,technical_task_text,production_comment,url,production_status', '00000000-0000-4000-8000-000000000204'),
   ('production_work', 'update', '{}'::json, NULL, NULL, 'production_status,production_comment', '00000000-0000-4000-8000-000000000204'),
 
   ('screen_printing_work', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
   ('screen_printing_work', 'update', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
-  ('screen_printing_work', 'read', '{}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,product_name,quantity,deadline,technical_task_text,production_comment,url,production_status', '00000000-0000-4000-8000-000000000206'),
+  ('screen_printing_work', 'read', '{}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,product_name,quantity,date,deadline,technical_task_text,production_comment,url,production_status', '00000000-0000-4000-8000-000000000206'),
   ('screen_printing_work', 'update', '{}'::json, NULL, NULL, 'production_status,production_comment', '00000000-0000-4000-8000-000000000206'),
 
   ('contractor_work', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
@@ -2824,10 +3206,11 @@ FROM (VALUES
   (U&'\041d\043e\0432\044b\0439', 1),
   (U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435', 2),
   (U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430', 3),
-  (U&'\0412 \0440\0430\0431\043e\0442\0435', 4),
-  (U&'\0413\043e\0442\043e\0432', 5),
-  (U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d', 6),
-  (U&'\041e\0442\043c\0435\043d\0435\043d', 7)
+  (U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443', 4),
+  (U&'\0412 \0440\0430\0431\043e\0442\0435', 5),
+  (U&'\0413\043e\0442\043e\0432', 6),
+  (U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d', 7),
+  (U&'\041e\0442\043c\0435\043d\0435\043d', 8)
 ) AS required_statuses(status_name, sort_value)
 WHERE NOT EXISTS (
   SELECT 1
@@ -2842,10 +3225,11 @@ FROM (VALUES
   (U&'\041d\043e\0432\044b\0439', 1),
   (U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435', 2),
   (U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430', 3),
-  (U&'\0412 \0440\0430\0431\043e\0442\0435', 4),
-  (U&'\0413\043e\0442\043e\0432', 5),
-  (U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d', 6),
-  (U&'\041e\0442\043c\0435\043d\0435\043d', 7)
+  (U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443', 4),
+  (U&'\0412 \0440\0430\0431\043e\0442\0435', 5),
+  (U&'\0413\043e\0442\043e\0432', 6),
+  (U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d', 7),
+  (U&'\041e\0442\043c\0435\043d\0435\043d', 8)
 ) AS required_statuses(status_name, sort_value)
 WHERE os.name = required_statuses.status_name;
 
@@ -2950,6 +3334,39 @@ WHERE NOT EXISTS (
     AND ps.name = s.name
 );
 
+WITH subcategories(category_name, name, sort) AS (VALUES
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\0413\0440\0430\043c\043e\0442\044b', 10),
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\0412\0438\0437\0438\0442\043a\0438', 20),
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\041b\0438\0441\0442\043e\0432\043a\0438', 30),
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\0411\043b\043e\043a\043d\043e\0442\044b', 40),
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\041a\0430\043b\0435\043d\0434\0430\0440\0438', 50),
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\0411\0440\043e\0448\044e\0440\044b', 60),
+  (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\0411\0443\043a\043b\0435\0442\044b', 70),
+  (U&'\041d\0430\043a\043b\0435\0439\043a\0438', U&'\0415\0434\0438\043d\0438\0447\043d\044b\0435 \043d\0430\043a\043b\0435\0439\043a\0438', 10),
+  (U&'\041d\0430\043a\043b\0435\0439\043a\0438', U&'\0421\0442\0438\043a\0435\0440\043f\0430\043a\0438', 20),
+  (U&'\041d\0430\043a\043b\0435\0439\043a\0438', U&'\041d\0430\043a\043b\0435\0439\043a\0438 \043d\0430 \043c\043e\043d\0442\0430\0436\043a\0435', 30),
+  (U&'\041d\0430\043a\043b\0435\0439\043a\0438', U&'\0423\0424-\0414\0422\0424', 40),
+  (U&'\0423\043f\0430\043a\043e\0432\043a\0430', U&'\041f\0430\043a\0435\0442\044b \0431\0443\043c\0430\0436\043d\044b\0435', 10),
+  (U&'\0423\043f\0430\043a\043e\0432\043a\0430', U&'\041f\0430\043a\0435\0442\044b \041f\0412\0414', 20),
+  (U&'\0423\043f\0430\043a\043e\0432\043a\0430', U&'\041a\043e\0440\043e\0431\043a\0438', 30),
+  (U&'\0422\043a\0430\043d\0438', U&'\0424\043b\0430\0433\0438 \0441\0442\0430\043d\0434\0430\0440\0442\043d\044b\0435', 10),
+  (U&'\0422\043a\0430\043d\0438', U&'\0424\043b\0430\0433\0438 \043d\0435\0441\0442\0430\043d\0434\0430\0440\0442\043d\044b\0435', 20),
+  (U&'\0422\043a\0430\043d\0438', U&'\0424\043b\0430\0433\0438 \0434\043b\044f \0432\0438\043d\0434\0435\0440\043e\0432', 30),
+  (U&'\0422\043a\0430\043d\0438', U&'\0411\0430\043d\0434\0430\043d\044b', 40),
+  (U&'\0422\043a\0430\043d\0438', U&'\041f\0440\043e\0447\0430\044f \043f\043e\043b\043d\043e\0446\0432\0435\0442\043d\0430\044f \043f\0435\0447\0430\0442\044c \043d\0430 \0442\043a\0430\043d\0438', 50),
+  (U&'\041a\043e\043d\0441\0442\0440\0443\043a\0446\0438\0438', U&'\0420\043e\043b\0430\043f', 10),
+  (U&'\041a\043e\043d\0441\0442\0440\0443\043a\0446\0438\0438', U&'\0412\0438\043d\0434\0435\0440', 20),
+  (U&'\041a\043e\043d\0441\0442\0440\0443\043a\0446\0438\0438', U&'\0414\0436\043e\043a\0435\0440', 30),
+  (U&'\041a\043e\043d\0441\0442\0440\0443\043a\0446\0438\0438', U&'\0411\0440\0443\0441', 40)
+)
+UPDATE product_subcategories ps
+SET sort = s.sort,
+    is_active = true
+FROM subcategories s
+JOIN product_categories pc ON pc.name = s.category_name
+WHERE ps.category = pc.id
+  AND ps.name = s.name;
+
 WITH methods(name, sort) AS (VALUES
   (U&'\0426\0438\0444\0440\043e\0432\0430\044f \043f\0435\0447\0430\0442\044c', 10),
   (U&'\0421\0442\0440\0443\0439\043d\0430\044f \043f\0435\0447\0430\0442\044c', 20),
@@ -2969,6 +3386,102 @@ INSERT INTO product_application_methods (name, sort, is_active)
 SELECT name, sort, true
 FROM methods m
 WHERE NOT EXISTS (SELECT 1 FROM product_application_methods pam WHERE pam.name = m.name);
+
+WITH methods(name, sort) AS (VALUES
+  (U&'\0426\0438\0444\0440\043e\0432\0430\044f \043f\0435\0447\0430\0442\044c', 10),
+  (U&'\0421\0442\0440\0443\0439\043d\0430\044f \043f\0435\0447\0430\0442\044c', 20),
+  (U&'\0413\0440\0430\0432\0438\0440\043e\0432\043a\0430', 30),
+  (U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f', 40),
+  (U&'\0422\0438\0441\043d\0435\043d\0438\0435', 50),
+  (U&'\0421\0443\0431\043b\0438\043c\0430\0446\0438\044f', 60),
+  (U&'\0423\0424-\043f\0435\0447\0430\0442\044c', 70),
+  (U&'\0423\0424-\0414\0422\0424 \043f\0435\0447\0430\0442\044c', 80),
+  (U&'\0414\0422\0424-\043f\0435\0447\0430\0442\044c', 90),
+  (U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f \0441 \0442\0440\0430\043d\0441\0444\0435\0440\043e\043c', 100),
+  (U&'\0412\044b\0448\0438\0432\043a\0430', 110),
+  (U&'\041f\043b\0435\043d\043a\0430', 120),
+  (U&'\041f\043e\0448\0438\0432', 130)
+)
+UPDATE product_application_methods pam
+SET sort = m.sort,
+    is_active = true
+FROM methods m
+WHERE pam.name = m.name;
+
+WITH category_methods(category_name, method_name, sort) AS (VALUES
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0423\0424-\043f\0435\0447\0430\0442\044c', 10),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0413\0440\0430\0432\0438\0440\043e\0432\043a\0430', 20),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0421\0443\0431\043b\0438\043c\0430\0446\0438\044f', 30),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f', 40),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0422\0438\0441\043d\0435\043d\0438\0435', 50),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0423\0424-\0414\0422\0424', 60),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f', 10),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f \0441 \0442\0440\0430\043d\0441\0444\0435\0440\043e\043c', 20),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\0412\044b\0448\0438\0432\043a\0430', 30),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\0421\0443\0431\043b\0438\043c\0430\0446\0438\044f', 40),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\0414\0422\0424', 50),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\041f\043b\0435\043d\043a\0430', 60),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\041f\043e\0448\0438\0432', 70),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0426\0438\0444\0440\043e\0432\0430\044f \043f\0435\0447\0430\0442\044c', 10),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0421\0442\0440\0443\0439\043d\0430\044f \043f\0435\0447\0430\0442\044c', 20),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0413\0440\0430\0432\0438\0440\043e\0432\043a\0430', 30),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f', 40),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0422\0438\0441\043d\0435\043d\0438\0435', 50),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0421\0443\0431\043b\0438\043c\0430\0446\0438\044f', 60),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0423\0424-\043f\0435\0447\0430\0442\044c', 70),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0423\0424-\0414\0422\0424 \043f\0435\0447\0430\0442\044c', 80),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0414\0422\0424-\043f\0435\0447\0430\0442\044c', 90),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f \0441 \0442\0440\0430\043d\0441\0444\0435\0440\043e\043c', 100),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0412\044b\0448\0438\0432\043a\0430', 110)
+),
+resolved_methods AS (
+  SELECT pc.id AS category_id, cm.method_name, cm.sort
+  FROM category_methods cm
+  JOIN product_categories pc ON pc.name = cm.category_name
+)
+INSERT INTO product_application_methods (category, name, sort, is_active)
+SELECT rm.category_id, rm.method_name, rm.sort, true
+FROM resolved_methods rm
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM product_application_methods pam
+  WHERE pam.category = rm.category_id
+    AND pam.name = rm.method_name
+);
+
+WITH category_methods(category_name, method_name, sort) AS (VALUES
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0423\0424-\043f\0435\0447\0430\0442\044c', 10),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0413\0440\0430\0432\0438\0440\043e\0432\043a\0430', 20),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0421\0443\0431\043b\0438\043c\0430\0446\0438\044f', 30),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f', 40),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0422\0438\0441\043d\0435\043d\0438\0435', 50),
+  (U&'\0421\0443\0432\0435\043d\0438\0440\044b, \043c\0435\0440\0447', U&'\0423\0424-\0414\0422\0424', 60),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f', 10),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f \0441 \0442\0440\0430\043d\0441\0444\0435\0440\043e\043c', 20),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\0412\044b\0448\0438\0432\043a\0430', 30),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\0421\0443\0431\043b\0438\043c\0430\0446\0438\044f', 40),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\0414\0422\0424', 50),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\041f\043b\0435\043d\043a\0430', 60),
+  (U&'\0422\0435\043a\0441\0442\0438\043b\044c', U&'\041f\043e\0448\0438\0432', 70),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0426\0438\0444\0440\043e\0432\0430\044f \043f\0435\0447\0430\0442\044c', 10),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0421\0442\0440\0443\0439\043d\0430\044f \043f\0435\0447\0430\0442\044c', 20),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0413\0440\0430\0432\0438\0440\043e\0432\043a\0430', 30),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f', 40),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0422\0438\0441\043d\0435\043d\0438\0435', 50),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0421\0443\0431\043b\0438\043c\0430\0446\0438\044f', 60),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0423\0424-\043f\0435\0447\0430\0442\044c', 70),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0423\0424-\0414\0422\0424 \043f\0435\0447\0430\0442\044c', 80),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0414\0422\0424-\043f\0435\0447\0430\0442\044c', 90),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f \0441 \0442\0440\0430\043d\0441\0444\0435\0440\043e\043c', 100),
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', U&'\0412\044b\0448\0438\0432\043a\0430', 110)
+)
+UPDATE product_application_methods pam
+SET sort = cm.sort,
+    is_active = true
+FROM category_methods cm
+JOIN product_categories pc ON pc.name = cm.category_name
+WHERE pam.category = pc.id
+  AND pam.name = cm.method_name;
 
 INSERT INTO contractors (name, comment, has_own_view)
 SELECT U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f',
@@ -3001,7 +3514,14 @@ SELECT
   true
 FROM route_seeds rs
 JOIN product_categories pc ON pc.name = rs.category_name
-JOIN product_application_methods pam ON pam.name = rs.method_name
+JOIN LATERAL (
+  SELECT id, name
+  FROM product_application_methods
+  WHERE name = rs.method_name
+    AND (category = pc.id OR category IS NULL)
+  ORDER BY CASE WHEN category = pc.id THEN 0 ELSE 1 END, id
+  LIMIT 1
+) pam ON true
 JOIN LATERAL (
   SELECT id
   FROM contractors
@@ -3181,6 +3701,7 @@ SET options = jsonb_build_object('choices', jsonb_build_array(
       jsonb_build_object('text', U&'\041d\043e\0432\044b\0439', 'value', 'new'),
       jsonb_build_object('text', U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435', 'value', 'approval'),
       jsonb_build_object('text', U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430', 'value', 'layout_revision'),
+      jsonb_build_object('text', U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443', 'value', 'sent_to_work'),
       jsonb_build_object('text', U&'\0412 \0440\0430\0431\043e\0442\0435', 'value', 'in_work'),
       jsonb_build_object('text', U&'\0413\043e\0442\043e\0432', 'value', 'ready'),
       jsonb_build_object('text', U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d', 'value', 'delivered'),
@@ -3191,6 +3712,7 @@ SET options = jsonb_build_object('choices', jsonb_build_array(
       jsonb_build_object('text', U&'\041d\043e\0432\044b\0439', 'value', 'new', 'foreground', '#111827', 'background', '#FBBF24'),
       jsonb_build_object('text', U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435', 'value', 'approval', 'foreground', '#111827', 'background', '#FBBF24'),
       jsonb_build_object('text', U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430', 'value', 'layout_revision', 'foreground', '#F8FAFC', 'background', '#A855F7'),
+      jsonb_build_object('text', U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443', 'value', 'sent_to_work', 'foreground', '#111827', 'background', '#FB923C'),
       jsonb_build_object('text', U&'\0412 \0440\0430\0431\043e\0442\0435', 'value', 'in_work', 'foreground', '#F8FAFC', 'background', '#3B82F6'),
       jsonb_build_object('text', U&'\0413\043e\0442\043e\0432', 'value', 'ready', 'foreground', '#F8FAFC', 'background', '#16A34A'),
       jsonb_build_object('text', U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d', 'value', 'delivered', 'foreground', '#F8FAFC', 'background', '#0F766E'),
@@ -3212,6 +3734,7 @@ WITH order_status_choices AS (
         WHEN name = U&'\041d\043e\0432\044b\0439' THEN '#FBBF24'
         WHEN name = U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435' THEN '#F59E0B'
         WHEN name = U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430' THEN '#A855F7'
+        WHEN name = U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443' THEN '#FB923C'
         WHEN name = U&'\0412 \0440\0430\0431\043e\0442\0435' THEN '#3B82F6'
         WHEN name = U&'\0413\043e\0442\043e\0432' THEN '#22C55E'
         WHEN name = U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d' THEN '#16A34A'
@@ -5270,9 +5793,368 @@ SET hidden = true
 WHERE collection = 'orders_items'
   AND field = 'accordion-redqc5';
 
+INSERT INTO directus_fields (
+  collection, field, special, interface, options, display, display_options,
+  readonly, hidden, sort, width, translations, required, conditions
+)
+SELECT work.collection_name, 'date', NULL, 'datetime', NULL, NULL, NULL,
+       true, false, 1, 'half',
+       json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0430\0442\0430'))::json,
+       false, NULL::json
+FROM (VALUES ('production_work'), ('screen_printing_work')) AS work(collection_name)
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM directus_fields df
+  WHERE df.collection = work.collection_name
+    AND df.field = 'date'
+);
+
+UPDATE directus_fields
+SET translations = json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0430\0442\0430'))::json,
+    interface = 'datetime',
+    readonly = true,
+    hidden = false
+WHERE collection IN ('production_work', 'screen_printing_work')
+  AND field = 'date';
+
+WITH work_labels(collection_name, field_name, label_value) AS (VALUES
+  ('production_work', 'date', U&'\0414\0430\0442\0430'),
+  ('production_work', 'deadline', U&'\0421\0440\043e\043a\0438'),
+  ('production_work', 'order', U&'\0417\0430\043a\0430\0437'),
+  ('production_work', 'customer', U&'\0417\0430\043a\0430\0437\0447\0438\043a'),
+  ('production_work', 'product_name', U&'\041d\0430\0438\043c\0435\043d\043e\0432\0430\043d\0438\0435'),
+  ('production_work', 'quantity', U&'\041a\043e\043b\0438\0447\0435\0441\0442\0432\043e'),
+  ('production_work', 'production_status', U&'\0421\0442\0430\0442\0443\0441 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\0430'),
+  ('screen_printing_work', 'date', U&'\0414\0430\0442\0430'),
+  ('screen_printing_work', 'deadline', U&'\0421\0440\043e\043a\0438'),
+  ('screen_printing_work', 'order', U&'\0417\0430\043a\0430\0437'),
+  ('screen_printing_work', 'customer', U&'\0417\0430\043a\0430\0437\0447\0438\043a'),
+  ('screen_printing_work', 'product_name', U&'\041d\0430\0438\043c\0435\043d\043e\0432\0430\043d\0438\0435'),
+  ('screen_printing_work', 'quantity', U&'\041a\043e\043b\0438\0447\0435\0441\0442\0432\043e'),
+  ('screen_printing_work', 'production_status', U&'\0421\0442\0430\0442\0443\0441 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\0430')
+)
+UPDATE directus_fields df
+SET translations = json_build_array(json_build_object('language','ru-RU','translation', work_labels.label_value))::json
+FROM work_labels
+WHERE df.collection = work_labels.collection_name
+  AND df.field = work_labels.field_name;
+
+WITH work_layout(collection_name, field_name, sort_value, width_value, hidden_value) AS (VALUES
+  ('production_work', 'date', 1, 'half', false),
+  ('production_work', 'deadline', 2, 'half', false),
+  ('production_work', 'order', 3, 'half', false),
+  ('production_work', 'customer', 4, 'half', false),
+  ('production_work', 'product_name', 5, 'half', false),
+  ('production_work', 'quantity', 6, 'half', false),
+  ('production_work', 'production_status', 7, 'half', false),
+  ('production_work', 'technical_task_text', 8, 'full', false),
+  ('production_work', 'url', 9, 'full', false),
+  ('production_work', 'production_comment', 10, 'full', false),
+  ('production_work', 'order_link', 11, 'half', true),
+  ('production_work', 'customer_company', 12, 'half', true),
+  ('production_work', 'manager_employee', 13, 'half', true),
+  ('screen_printing_work', 'date', 1, 'half', false),
+  ('screen_printing_work', 'deadline', 2, 'half', false),
+  ('screen_printing_work', 'order', 3, 'half', false),
+  ('screen_printing_work', 'customer', 4, 'half', false),
+  ('screen_printing_work', 'product_name', 5, 'half', false),
+  ('screen_printing_work', 'quantity', 6, 'half', false),
+  ('screen_printing_work', 'production_status', 7, 'half', false),
+  ('screen_printing_work', 'technical_task_text', 8, 'full', false),
+  ('screen_printing_work', 'url', 9, 'full', false),
+  ('screen_printing_work', 'production_comment', 10, 'full', false),
+  ('screen_printing_work', 'order_link', 11, 'half', true),
+  ('screen_printing_work', 'customer_company', 12, 'half', true),
+  ('screen_printing_work', 'manager_employee', 13, 'half', true)
+)
+UPDATE directus_fields df
+SET sort = work_layout.sort_value,
+    width = work_layout.width_value,
+    hidden = work_layout.hidden_value
+FROM work_layout
+WHERE df.collection = work_layout.collection_name
+  AND df.field = work_layout.field_name;
+
+UPDATE directus_presets
+SET layout = 'tabular',
+    layout_query = '{"tabular":{"fields":["date","deadline","order","customer","product_name","quantity","production_status"],"page":1}}'::json,
+    layout_options = '{"tabular":{"spacing":"compact"}}'::json
+WHERE collection IN ('production_work', 'screen_printing_work')
+  AND bookmark IS NULL;
+
+INSERT INTO directus_presets (collection, layout, layout_query, layout_options)
+SELECT work.collection_name,
+       'tabular',
+       '{"tabular":{"fields":["date","deadline","order","customer","product_name","quantity","production_status"],"page":1}}'::json,
+       '{"tabular":{"spacing":"compact"}}'::json
+FROM (VALUES ('production_work'), ('screen_printing_work')) AS work(collection_name)
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM directus_presets dp
+  WHERE dp.collection = work.collection_name
+    AND dp.bookmark IS NULL
+    AND dp."user" IS NULL
+    AND dp.role IS NULL
+);
+
+INSERT INTO directus_presets ("user", collection, layout, layout_query, layout_options)
+SELECT du.id,
+       work.collection_name,
+       'tabular',
+       '{"tabular":{"fields":["date","deadline","order","customer","product_name","quantity","production_status"],"page":1}}'::json,
+       '{"tabular":{"spacing":"compact"}}'::json
+FROM directus_users du
+CROSS JOIN (VALUES ('production_work'), ('screen_printing_work')) AS work(collection_name)
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM directus_presets dp
+  WHERE dp."user" = du.id
+    AND dp.collection = work.collection_name
+    AND dp.bookmark IS NULL
+);
+
+WITH service_menu(collection_name, icon_value, label_value, sort_value) AS (VALUES
+  ('contractors', 'groups', U&'\041a\043e\043d\0442\0440\0430\0433\0435\043d\0442\044b', 40),
+  ('product_categories', 'category', U&'\041a\0430\0442\0435\0433\043e\0440\0438\0438', 41),
+  ('product_subcategories', 'account_tree', U&'\041f\043e\0434\043a\0430\0442\0435\0433\043e\0440\0438\0438', 42),
+  ('product_application_methods', 'format_paint', U&'\0412\0438\0434\044b \043d\0430\043d\0435\0441\0435\043d\0438\044f', 43),
+  ('product_routing_rules', 'device_hub', U&'\041f\0440\0430\0432\0438\043b\0430 \043c\0430\0440\0448\0440\0443\0442\0438\0437\0430\0446\0438\0438', 44),
+  ('order_statuses', 'fact_check', U&'\0421\0442\0430\0442\0443\0441\044b \0437\0430\043a\0430\0437\043e\0432', 45),
+  ('production_statuses', 'engineering', U&'\0421\0442\0430\0442\0443\0441\044b \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\0430', 46),
+  ('employees', 'badge', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a\0438', 47),
+  ('employee_positions', 'work', U&'\0414\043e\043b\0436\043d\043e\0441\0442\0438', 48),
+  ('payment_types', 'payments', U&'\0422\0438\043f\044b \043e\043f\043b\0430\0442', 49),
+  ('customer_company_links', 'hub', U&'\0421\0432\044f\0437\0438 \043a\043b\0438\0435\043d\0442\043e\0432 \0438 \043a\043e\043c\043f\0430\043d\0438\0439', 51),
+  ('contractor_payments', 'receipt_long', U&'\041e\043f\043b\0430\0442\044b \043a\043e\043d\0442\0440\0430\0433\0435\043d\0442\0430\043c', 52)
+)
+UPDATE directus_collections dc
+SET hidden = false,
+    icon = service_menu.icon_value,
+    sort = service_menu.sort_value,
+    "group" = 'service_directory',
+    collapse = 'open',
+    translations = json_build_array(json_build_object('language','ru-RU','translation', service_menu.label_value))::json
+FROM service_menu
+WHERE dc.collection = service_menu.collection_name;
+
+INSERT INTO directus_collections (
+  collection, icon, note, display_template, hidden, singleton, translations,
+  archive_app_filter, accountability, sort, collapse, versioning
+) VALUES
+  (
+    'finance_dashboard_metrics', 'monitoring',
+    'Aggregated finance metrics for Directus Analytics dashboards.',
+    '{{title}}: {{value}}', true, false,
+    json_build_array(json_build_object('language','ru-RU','translation', U&'\0424\0438\043d\0430\043d\0441\043e\0432\044b\0435 \043c\0435\0442\0440\0438\043a\0438'))::json,
+    true, 'all', 90, 'open', false
+  ),
+  (
+    'finance_dashboard_monthly', 'stacked_line_chart',
+    'Monthly finance aggregates for Directus Analytics dashboards.',
+    '{{month_label}}', true, false,
+    json_build_array(json_build_object('language','ru-RU','translation', U&'\0424\0438\043d\0430\043d\0441\044b \043f\043e \043c\0435\0441\044f\0446\0430\043c'))::json,
+    true, 'all', 91, 'open', false
+  ),
+  (
+    'finance_dashboard_series', 'multiline_chart',
+    'Monthly finance series for Directus Analytics line charts.',
+    '{{month_label}} {{metric_name}}', true, false,
+    json_build_array(json_build_object('language','ru-RU','translation', U&'\0424\0438\043d\0430\043d\0441\043e\0432\0430\044f \0434\0438\043d\0430\043c\0438\043a\0430'))::json,
+    true, 'all', 92, 'open', false
+  )
+ON CONFLICT (collection) DO UPDATE SET
+  icon = EXCLUDED.icon,
+  note = EXCLUDED.note,
+  display_template = EXCLUDED.display_template,
+  hidden = EXCLUDED.hidden,
+  singleton = EXCLUDED.singleton,
+  translations = EXCLUDED.translations,
+  sort = EXCLUDED.sort,
+  collapse = EXCLUDED.collapse;
+
+DELETE FROM directus_fields
+WHERE collection IN ('finance_dashboard_metrics', 'finance_dashboard_monthly', 'finance_dashboard_series');
+
+INSERT INTO directus_fields (
+  collection, field, special, interface, options, display, display_options,
+  readonly, hidden, sort, width, translations, required, searchable
+) VALUES
+  ('finance_dashboard_metrics', 'metric_key', NULL, 'input', NULL, NULL, NULL, true, true, 1, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043b\044e\0447'))::json, true, true),
+  ('finance_dashboard_metrics', 'title', NULL, 'input', NULL, NULL, NULL, true, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\043a\0430\0437\0430\0442\0435\043b\044c'))::json, true, true),
+  ('finance_dashboard_metrics', 'metric_group', NULL, 'input', NULL, NULL, NULL, true, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0413\0440\0443\043f\043f\0430'))::json, true, true),
+  ('finance_dashboard_metrics', 'value', NULL, 'input', NULL, NULL, NULL, true, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0443\043c\043c\0430'))::json, false, true),
+  ('finance_dashboard_metrics', 'sort', NULL, 'input', NULL, NULL, NULL, true, true, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0440\0442\0438\0440\043e\0432\043a\0430'))::json, false, true),
+  ('finance_dashboard_metrics', 'updated_at', NULL, 'datetime', NULL, NULL, NULL, true, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\0431\043d\043e\0432\043b\0435\043d\043e'))::json, false, true),
+  ('finance_dashboard_monthly', 'month_start', NULL, 'datetime', NULL, NULL, NULL, true, false, 1, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041c\0435\0441\044f\0446'))::json, true, true),
+  ('finance_dashboard_monthly', 'month_label', NULL, 'input', NULL, NULL, NULL, true, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0435\0440\0438\043e\0434'))::json, true, true),
+  ('finance_dashboard_monthly', 'revenue', NULL, 'input', NULL, NULL, NULL, true, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0412\044b\0440\0443\0447\043a\0430'))::json, false, true),
+  ('finance_dashboard_monthly', 'paid', NULL, 'input', NULL, NULL, NULL, true, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\043f\043b\0430\0447\0435\043d\043e'))::json, false, true),
+  ('finance_dashboard_monthly', 'profit', NULL, 'input', NULL, NULL, NULL, true, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0440\0438\0431\044b\043b\044c'))::json, false, true),
+  ('finance_dashboard_monthly', 'expenses', NULL, 'input', NULL, NULL, NULL, true, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0420\0430\0441\0445\043e\0434\044b'))::json, false, true),
+  ('finance_dashboard_monthly', 'receivable', NULL, 'input', NULL, NULL, NULL, true, false, 7, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0435\0431\0438\0442\043e\0440\043a\0430'))::json, false, true),
+  ('finance_dashboard_monthly', 'updated_at', NULL, 'datetime', NULL, NULL, NULL, true, false, 8, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\0431\043d\043e\0432\043b\0435\043d\043e'))::json, false, true),
+  ('finance_dashboard_series', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'half', NULL, true, true),
+  ('finance_dashboard_series', 'month_start', NULL, 'datetime', NULL, NULL, NULL, true, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041c\0435\0441\044f\0446'))::json, true, true),
+  ('finance_dashboard_series', 'month_label', NULL, 'input', NULL, NULL, NULL, true, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0435\0440\0438\043e\0434'))::json, true, true),
+  ('finance_dashboard_series', 'metric_key', NULL, 'input', NULL, NULL, NULL, true, true, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043b\044e\0447'))::json, true, true),
+  ('finance_dashboard_series', 'metric_name', NULL, 'input', NULL, NULL, NULL, true, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\043a\0430\0437\0430\0442\0435\043b\044c'))::json, true, true),
+  ('finance_dashboard_series', 'value', NULL, 'input', NULL, NULL, NULL, true, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0443\043c\043c\0430'))::json, false, true),
+  ('finance_dashboard_series', 'sort', NULL, 'input', NULL, NULL, NULL, true, true, 7, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0440\0442\0438\0440\043e\0432\043a\0430'))::json, false, true),
+  ('finance_dashboard_series', 'updated_at', NULL, 'datetime', NULL, NULL, NULL, true, false, 8, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\0431\043d\043e\0432\043b\0435\043d\043e'))::json, false, true);
+
+DELETE FROM directus_permissions
+WHERE collection IN ('finance_dashboard_metrics', 'finance_dashboard_monthly', 'finance_dashboard_series')
+  AND policy = '00000000-0000-4000-8000-000000000205';
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+SELECT collection_name, 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'
+FROM (VALUES ('finance_dashboard_metrics'), ('finance_dashboard_monthly'), ('finance_dashboard_series')) AS finance(collection_name);
+
+INSERT INTO directus_dashboards (id, name, icon, note, color)
+VALUES (
+  '00000000-0000-4000-8000-000000000901',
+  U&'\0424\0438\043d\0430\043d\0441\044b',
+  'monitoring',
+  U&'\0412\044b\0440\0443\0447\043a\0430, \043e\043f\043b\0430\0442\044b, \043f\0440\0438\0431\044b\043b\044c, \0440\0430\0441\0445\043e\0434\044b \0438 \0432\0437\0430\0438\043c\043e\0440\0430\0441\0447\0435\0442\044b.',
+  '#F97316'
+)
+ON CONFLICT (id) DO UPDATE SET
+  name = EXCLUDED.name,
+  icon = EXCLUDED.icon,
+  note = EXCLUDED.note,
+  color = EXCLUDED.color;
+
+DELETE FROM directus_panels
+WHERE dashboard = '00000000-0000-4000-8000-000000000901';
+
+WITH finance_panels(panel_id, panel_name, filter_key, x, y, w, h, color_value, suffix_value) AS (VALUES
+  ('00000000-0000-4000-8000-000000000911'::uuid, U&'\0412\044b\0440\0443\0447\043a\0430 \0437\0430 \043c\0435\0441\044f\0446', 'revenue_month', 1, 1, 28, 9, '#F97316', ' ₽'),
+  ('00000000-0000-4000-8000-000000000912'::uuid, U&'\041f\0440\0438\0431\044b\043b\044c \0437\0430 \043c\0435\0441\044f\0446', 'profit_month', 30, 1, 28, 9, '#14B8A6', ' ₽'),
+  ('00000000-0000-4000-8000-000000000913'::uuid, U&'\041e\043f\043b\0430\0447\0435\043d\043e \0437\0430 \043c\0435\0441\044f\0446', 'paid_month', 1, 11, 28, 9, '#22C55E', ' ₽'),
+  ('00000000-0000-4000-8000-000000000914'::uuid, U&'\041d\0430\043c \0434\043e\043b\0436\043d\044b', 'receivable', 30, 11, 28, 9, '#EAB308', ' ₽'),
+  ('00000000-0000-4000-8000-000000000915'::uuid, U&'\0412\044b\0440\0443\0447\043a\0430 \0437\0430 \0433\043e\0434', 'revenue_year', 1, 21, 28, 9, '#FB923C', ' ₽'),
+  ('00000000-0000-4000-8000-000000000916'::uuid, U&'\041f\0440\0438\0431\044b\043b\044c \0437\0430 \0433\043e\0434', 'profit_year', 30, 21, 28, 9, '#0D9488', ' ₽'),
+  ('00000000-0000-4000-8000-000000000917'::uuid, U&'\0410\043a\0442\0438\0432\043d\044b\0445 \0437\0430\043a\0430\0437\043e\0432', 'orders_active', 1, 31, 28, 9, '#38BDF8', ''),
+  ('00000000-0000-4000-8000-000000000918'::uuid, U&'\041d\0435\043e\043f\043b\0430\0447\0435\043d\043d\044b\0445 \0437\0430\043a\0430\0437\043e\0432', 'orders_unpaid', 30, 31, 28, 9, '#F43F5E', '')
+)
+INSERT INTO directus_panels (
+  id, dashboard, name, icon, color, show_header, type,
+  position_x, position_y, width, height, options
+)
+SELECT
+  panel_id,
+  '00000000-0000-4000-8000-000000000901',
+  panel_name,
+  'payments',
+  color_value,
+  true,
+  'metric',
+  x,
+  y,
+  w,
+  h,
+  json_build_object(
+    'collection', 'finance_dashboard_metrics',
+    'field', 'value',
+    'function', 'sum',
+    'filter', json_build_object('metric_key', json_build_object('_eq', filter_key)),
+    'prefix', '',
+    'suffix', suffix_value,
+    'decimals', 0
+  )::json
+FROM finance_panels;
+
+INSERT INTO directus_panels (
+  id, dashboard, name, icon, color, show_header, type,
+  position_x, position_y, width, height, options
+) VALUES
+  (
+    '00000000-0000-4000-8000-000000000922',
+    '00000000-0000-4000-8000-000000000901',
+    U&'\0414\0438\043d\0430\043c\0438\043a\0430 \0434\0435\043d\0435\0433 \0437\0430 12 \043c\0435\0441\044f\0446\0435\0432',
+    'show_chart',
+    '#F97316',
+    true,
+    'line-chart',
+    1,
+    41,
+    57,
+    17,
+    json_build_object(
+      'collection', 'finance_dashboard_series',
+      'xAxis', 'month_label',
+      'yAxis', 'value',
+      'aggregation', 'sum',
+      'grouping', 'metric_name',
+      'filter', json_build_object('metric_key', json_build_object('_in', json_build_array('revenue', 'paid', 'profit', 'expenses'))),
+      'decimals', 0,
+      'color', '#F97316',
+      'curveType', 'smooth',
+      'fillType', 'gradient',
+      'showAxisLabels', 'both',
+      'showMarker', true,
+      'showLegend', true
+    )::json
+  ),
+  (
+    '00000000-0000-4000-8000-000000000923',
+    '00000000-0000-4000-8000-000000000901',
+    U&'\0412\0437\0430\0438\043c\043e\0440\0430\0441\0447\0435\0442\044b',
+    'bar_chart',
+    '#EAB308',
+    true,
+    'bar-chart',
+    1,
+    59,
+    28,
+    14,
+    json_build_object(
+      'collection', 'finance_dashboard_metrics',
+      'horizontal', true,
+      'xAxis', 'title',
+      'yAxis', 'value',
+      'function', 'sum',
+      'filter', json_build_object('metric_group', json_build_object('_eq', 'balance')),
+      'decimals', 0,
+      'color', '#EAB308',
+      'showAxisLabels', 'both',
+      'showDataLabel', true
+    )::json
+  ),
+  (
+    '00000000-0000-4000-8000-000000000924',
+    '00000000-0000-4000-8000-000000000901',
+    U&'\0414\0435\0431\0438\0442\043e\0440\043a\0430 \043f\043e \043c\0435\0441\044f\0446\0430\043c',
+    'stacked_line_chart',
+    '#38BDF8',
+    true,
+    'line-chart',
+    30,
+    59,
+    28,
+    14,
+    json_build_object(
+      'collection', 'finance_dashboard_series',
+      'xAxis', 'month_label',
+      'yAxis', 'value',
+      'aggregation', 'sum',
+      'grouping', 'metric_name',
+      'filter', json_build_object('metric_key', json_build_object('_eq', 'receivable')),
+      'decimals', 0,
+      'color', '#38BDF8',
+      'curveType', 'smooth',
+      'fillType', 'gradient',
+      'showAxisLabels', 'both',
+      'showMarker', true,
+      'showLegend', false
+    )::json
+  );
+
 SELECT sync_office_issue_order(id)
 FROM orders
 WHERE shipping_method = 'office_pickup';
+
+SELECT refresh_finance_dashboard_metrics();
 
 SELECT refresh_customer_reconciliation();
 

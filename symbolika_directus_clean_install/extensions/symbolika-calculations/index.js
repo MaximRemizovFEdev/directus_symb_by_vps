@@ -21,6 +21,7 @@ export default ({ filter, action }, { database, logger, env }) => {
   const prevContractorPayments = new Map();
   let pushConfigured = false;
   let pushTableReady = false;
+  let workNotificationTableReady = false;
 
   async function generateOrderNumber() {
     const last = await database('orders')
@@ -136,6 +137,28 @@ export default ({ filter, action }, { database, logger, env }) => {
         });
       }
       pushTableReady = true;
+      return true;
+    } catch (error) {
+      logger.warn(error);
+      return false;
+    }
+  }
+
+  async function ensureWorkNotificationTable() {
+    if (workNotificationTableReady) return true;
+
+    try {
+      const exists = await database.schema.hasTable('symbolika_work_assignment_notifications');
+      if (!exists) {
+        await database.schema.createTable('symbolika_work_assignment_notifications', (table) => {
+          table.increments('id').primary();
+          table.integer('item').notNullable();
+          table.text('channel').notNullable();
+          table.timestamp('created_at', { useTz: true }).defaultTo(database.fn.now());
+          table.unique(['item', 'channel']);
+        });
+      }
+      workNotificationTableReady = true;
       return true;
     } catch (error) {
       logger.warn(error);
@@ -326,6 +349,27 @@ export default ({ filter, action }, { database, logger, env }) => {
     return null;
   }
 
+  async function isOrderVisibleForWork(orderId) {
+    if (!orderId) return false;
+
+    const order = await database('orders as o')
+      .leftJoin('order_statuses as os', 'os.id', 'o.order_status')
+      .where('o.id', orderId)
+      .select('os.name as status_name')
+      .first();
+
+    return [
+      '\u041e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d \u0432 \u0440\u0430\u0431\u043e\u0442\u0443',
+      '\u0412 \u0440\u0430\u0431\u043e\u0442\u0435',
+      '\u0413\u043e\u0442\u043e\u0432',
+    ].includes(order?.status_name);
+  }
+
+  function isItemVisibleForWork(item) {
+    const status = String(item?.item_status || '');
+    return ['sent_to_work', 'in_work', 'ready'].includes(status);
+  }
+
   async function buildWorkAssignmentMessage(item, target) {
     const orderLabel = await getOrderLabel(item.order);
     const productName = item.product_name || '\u041f\u043e\u0437\u0438\u0446\u0438\u044f';
@@ -353,37 +397,92 @@ export default ({ filter, action }, { database, logger, env }) => {
       .select('id', 'name');
   }
 
+  async function markWorkAssignmentNotified(itemId, channel) {
+    if (!itemId || !channel) return false;
+    if (!await ensureWorkNotificationTable()) return false;
+
+    try {
+      await database('symbolika_work_assignment_notifications')
+        .insert({ item: itemId, channel });
+      return true;
+    } catch (error) {
+      if (error?.code === '23505') return false;
+      logger.warn(error);
+      return false;
+    }
+  }
+
+  async function notifyWorkAssignment(item, target) {
+    if (!item?.id || !target) return;
+    if (!isItemVisibleForWork(item) && !await isOrderVisibleForWork(item.order)) return;
+
+    const shouldNotify = await markWorkAssignmentNotified(item.id, target.vkChannel);
+    if (!shouldNotify) return;
+
+    const recipients = await getRoleUserIds(target.roleName);
+    const orderLabel = await getOrderLabel(item.order);
+    const message = await buildWorkAssignmentMessage(item, target);
+    const subject = `\u041d\u043e\u0432\u044b\u0439 \u0437\u0430\u043a\u0430\u0437 \u0434\u043b\u044f ${target.roleName}: ${orderLabel}`;
+
+    await notifyUsers(
+      recipients,
+      subject,
+      message,
+      target.collection,
+      item.id
+    );
+
+    await sendVkMessage(
+      target.vkChannel,
+      `${subject}\n\n${message}`
+    );
+  }
+
   async function notifyNewProductionAssignments(item, prevItem = null) {
     if (!item?.id) return;
 
     const contractors = await getItemContractors(item);
     if (!contractors.length) return;
 
-    const prevContractorIds = new Set([prevItem?.contractor_1, prevItem?.contractor_2].filter(Boolean));
     for (const contractor of contractors) {
-      if (prevContractorIds.has(contractor.id)) continue;
-
       const target = getWorkNotificationTarget(contractor.name);
       if (!target) continue;
 
-      const recipients = await getRoleUserIds(target.roleName);
-      const orderLabel = await getOrderLabel(item.order);
-      const message = await buildWorkAssignmentMessage(item, target);
-      const subject = `\u041d\u043e\u0432\u044b\u0439 \u0437\u0430\u043a\u0430\u0437 \u0434\u043b\u044f ${target.roleName}: ${orderLabel}`;
-
-      await notifyUsers(
-        recipients,
-        subject,
-        message,
-        target.collection,
-        item.id
-      );
-
-      await sendVkMessage(
-        target.vkChannel,
-        `${subject}\n\n${message}`
-      );
+      await notifyWorkAssignment(item, target);
     }
+  }
+
+  async function notifyWorkAssignmentsForOrder(orderId) {
+    if (!orderId || !await isOrderVisibleForWork(orderId)) return;
+
+    const items = await database('orders_items')
+      .where({ order: orderId })
+      .select('*');
+
+    for (const item of items) {
+      await notifyNewProductionAssignments(item);
+    }
+  }
+
+  async function notifyWorkAssignmentFromCollection(collection, key) {
+    const targets = {
+      production_work: {
+        roleName: '\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e',
+        collection: 'production_work',
+        vkChannel: 'production',
+      },
+      screen_printing_work: {
+        roleName: '\u0428\u0435\u043b\u043a\u043e\u0433\u0440\u0430\u0444\u0438\u044f',
+        collection: 'screen_printing_work',
+        vkChannel: 'screen_printing',
+      },
+    };
+
+    const target = targets[collection];
+    if (!target || !key) return;
+
+    const item = await database('orders_items').where({ id: key }).first();
+    await notifyWorkAssignment(item, target);
   }
 
   async function notifyLayoutRevisionIfNeeded(item, prevItem = null) {
@@ -1048,6 +1147,7 @@ export default ({ filter, action }, { database, logger, env }) => {
 
       const updatedOrder = await database('orders').where({ id: orderId }).first();
       await notifyOrderStatusChanged(updatedOrder, prevOrder);
+      await notifyWorkAssignmentsForOrder(orderId);
       await recalcOrderParties(updatedOrder, prevOrder);
       }
     } catch (error) {
@@ -1084,6 +1184,28 @@ export default ({ filter, action }, { database, logger, env }) => {
         await notifyNewProductionAssignments(item, prevItem);
         await notifyLayoutRevisionIfNeeded(item, prevItem);
         await recalcOrder(orderId);
+      }
+    } catch (error) {
+      logger.error(error);
+    }
+  });
+
+  // WORK VIEW ASSIGNMENTS
+  action('items.create', async ({ collection, key }) => {
+    try {
+      if (!['production_work', 'screen_printing_work'].includes(collection)) return;
+      await notifyWorkAssignmentFromCollection(collection, key);
+    } catch (error) {
+      logger.error(error);
+    }
+  });
+
+  action('items.update', async ({ collection, keys }) => {
+    try {
+      if (!['production_work', 'screen_printing_work'].includes(collection)) return;
+
+      for (const key of keys) {
+        await notifyWorkAssignmentFromCollection(collection, key);
       }
     } catch (error) {
       logger.error(error);
