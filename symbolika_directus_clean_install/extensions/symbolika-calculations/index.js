@@ -1,7 +1,14 @@
-export default ({ filter, action }, { database, logger }) => {
+import webPush from 'web-push';
+
+export default ({ filter, action }, { database, logger, env }) => {
   const num = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
   const round = (v) => Math.round(num(v) * 100) / 100;
   const isEmpty = (v) => v === null || v === undefined || v === '';
+  const toDateOnly = (v) => {
+    if (isEmpty(v)) return null;
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    return String(v).slice(0, 10);
+  };
 
   const OFFICE_PICKUP = 'office_pickup';
   const NOT_IN_OFFICE = 'not_in_office';
@@ -12,6 +19,9 @@ export default ({ filter, action }, { database, logger }) => {
   const prevItems = new Map();
   const prevPayments = new Map();
   const prevContractorPayments = new Map();
+  let pushConfigured = false;
+  let pushTableReady = false;
+  let workNotificationTableReady = false;
 
   async function generateOrderNumber() {
     const last = await database('orders')
@@ -39,10 +49,459 @@ export default ({ filter, action }, { database, logger }) => {
 
   async function getDeliveredStatusId() {
     const status = await database('order_statuses')
-      .whereILike('name', 'Доставлен')
+      .whereILike('name', '\u0414\u043e\u0441\u0442\u0430\u0432\u043b\u0435\u043d')
       .first();
 
     return status?.id || null;
+  }
+
+  async function getReadyStatusId() {
+    const status = await database('order_statuses')
+      .whereILike('name', '\u0413\u043e\u0442\u043e\u0432')
+      .first();
+
+    return status?.id || null;
+  }
+
+  async function getRoleUserIds(roleName) {
+    if (!roleName) return [];
+
+    const role = await database('directus_roles')
+      .where({ name: roleName })
+      .first();
+
+    if (!role?.id) return [];
+
+    const users = await database('directus_users')
+      .where({ role: role.id, status: 'active' })
+      .select('id');
+
+    return users.map((user) => user.id).filter(Boolean);
+  }
+
+  async function getEmployeeUserId(employeeId) {
+    if (!employeeId) return null;
+
+    const employee = await database('employees')
+      .where({ id: employeeId })
+      .first();
+
+    return employee?.directus_user || null;
+  }
+
+  async function getOrderLabel(orderId) {
+    if (!orderId) return '\u0437\u0430\u043a\u0430\u0437';
+
+    const order = await database('orders')
+      .where({ id: orderId })
+      .first();
+
+    return order?.order_number || `#${orderId}`;
+  }
+
+  async function getOrderStatusName(statusId) {
+    if (!statusId) return '\u043d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d';
+
+    const status = await database('order_statuses')
+      .where({ id: statusId })
+      .first();
+
+    return status?.name || String(statusId);
+  }
+
+  async function getProductionStatusName(statusId) {
+    if (!statusId) return '\u043d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d';
+
+    const status = await database('production_statuses')
+      .where({ id: statusId })
+      .first();
+
+    return status?.name || String(statusId);
+  }
+
+  async function ensurePushTable() {
+    if (pushTableReady) return true;
+
+    try {
+      const exists = await database.schema.hasTable('symbolika_push_subscriptions');
+      if (!exists) {
+        await database.schema.createTable('symbolika_push_subscriptions', (table) => {
+        table.increments('id').primary();
+        table.uuid('user').notNullable();
+        table.text('endpoint').notNullable().unique();
+        table.jsonb('subscription').notNullable();
+        table.text('user_agent');
+        table.text('last_error');
+        table.timestamp('created_at', { useTz: true }).defaultTo(database.fn.now());
+        table.timestamp('updated_at', { useTz: true }).defaultTo(database.fn.now());
+        });
+      }
+      pushTableReady = true;
+      return true;
+    } catch (error) {
+      logger.warn(error);
+      return false;
+    }
+  }
+
+  async function ensureWorkNotificationTable() {
+    if (workNotificationTableReady) return true;
+
+    try {
+      const exists = await database.schema.hasTable('symbolika_work_assignment_notifications');
+      if (!exists) {
+        await database.schema.createTable('symbolika_work_assignment_notifications', (table) => {
+          table.increments('id').primary();
+          table.integer('item').notNullable();
+          table.text('channel').notNullable();
+          table.timestamp('created_at', { useTz: true }).defaultTo(database.fn.now());
+          table.unique(['item', 'channel']);
+        });
+      }
+      workNotificationTableReady = true;
+      return true;
+    } catch (error) {
+      logger.warn(error);
+      return false;
+    }
+  }
+
+  function configurePush() {
+    if (pushConfigured) return true;
+
+    const publicKey = env?.SYMBOLIKA_PUSH_PUBLIC_KEY;
+    const privateKey = env?.SYMBOLIKA_PUSH_PRIVATE_KEY;
+    if (!publicKey || !privateKey) return false;
+
+    webPush.setVapidDetails(
+      env?.SYMBOLIKA_PUSH_SUBJECT || 'mailto:admin@symbcorp.ru',
+      publicKey,
+      privateKey
+    );
+
+    pushConfigured = true;
+    return true;
+  }
+
+  function getNotificationUrl(collection, item) {
+    if (!collection || item == null) return '/admin';
+    return `/admin/content/${collection}/${item}`;
+  }
+
+  function getPublicUrl(path = '/admin') {
+    const baseUrl = env?.SYMBOLIKA_PUBLIC_URL || env?.PUBLIC_URL || env?.DIRECTUS_PUBLIC_URL || '';
+    if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) return path;
+
+    try {
+      return new URL(path, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).href;
+    } catch {
+      return path;
+    }
+  }
+
+  function getVkPeerId(channel) {
+    if (channel === 'production') return env?.SYMBOLIKA_VK_PRODUCTION_PEER_ID || null;
+    if (channel === 'screen_printing') return env?.SYMBOLIKA_VK_SCREEN_PRINTING_PEER_ID || null;
+    return null;
+  }
+
+  async function sendVkMessage(channel, message) {
+    const token = env?.SYMBOLIKA_VK_TOKEN;
+    const peerId = getVkPeerId(channel);
+    if (!token || !peerId || !message) return;
+
+    try {
+      const body = new URLSearchParams({
+        access_token: token,
+        v: env?.SYMBOLIKA_VK_API_VERSION || '5.199',
+        peer_id: String(peerId),
+        random_id: String(Date.now() * 1000 + Math.floor(Math.random() * 1000)),
+        message,
+      });
+
+      const response = await fetch('https://api.vk.com/method/messages.send', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || payload?.error) {
+        logger.warn({
+          channel,
+          error: payload?.error || response.statusText,
+        }, '[Symbolika VK] send failed');
+      }
+    } catch (error) {
+      logger.warn(error);
+    }
+  }
+
+  async function sendBrowserPush(recipient, subject, message, collection = null, item = null) {
+    if (!recipient || !configurePush()) return;
+    if (!await ensurePushTable()) return;
+
+    const subscriptions = await database('symbolika_push_subscriptions')
+      .where({ user: recipient })
+      .select('id', 'subscription');
+
+    if (!subscriptions.length) return;
+
+    const payload = JSON.stringify({
+      title: subject,
+      body: message || '',
+      url: getNotificationUrl(collection, item),
+      tag: collection && item != null ? `${collection}:${item}` : undefined,
+    });
+
+    for (const row of subscriptions) {
+      try {
+        await webPush.sendNotification(row.subscription, payload);
+        await database('symbolika_push_subscriptions')
+          .where({ id: row.id })
+          .update({ last_error: null, updated_at: database.fn.now() });
+      } catch (error) {
+        if (error?.statusCode === 404 || error?.statusCode === 410) {
+          await database('symbolika_push_subscriptions').where({ id: row.id }).delete();
+          continue;
+        }
+
+        await database('symbolika_push_subscriptions')
+          .where({ id: row.id })
+          .update({
+            last_error: String(error?.message || error).slice(0, 500),
+            updated_at: database.fn.now(),
+          });
+        logger.warn(error);
+      }
+    }
+  }
+
+  async function notifyUser(recipient, subject, message, collection = null, item = null) {
+    if (!recipient || !subject) return;
+
+    await database('directus_notifications').insert({
+      status: 'inbox',
+      recipient,
+      subject,
+      message,
+      collection,
+      item: item == null ? null : String(item),
+    });
+
+    await sendBrowserPush(recipient, subject, message, collection, item);
+  }
+
+  async function notifyUsers(recipients, subject, message, collection = null, item = null) {
+    const uniqueRecipients = Array.from(new Set((recipients || []).filter(Boolean)));
+
+    for (const recipient of uniqueRecipients) {
+      await notifyUser(recipient, subject, message, collection, item);
+    }
+  }
+
+  async function notifyManager(employeeId, subject, message, collection = null, item = null) {
+    const userId = await getEmployeeUserId(employeeId);
+    await notifyUser(userId, subject, message, collection, item);
+  }
+
+  async function notifyOrderStatusChanged(order, prevOrder) {
+    if (!order || !prevOrder) return;
+    if (order.order_status === prevOrder.order_status) return;
+
+    const managerUserId = await getEmployeeUserId(order.manager_employee);
+    if (!managerUserId) return;
+
+    const orderLabel = order.order_number || `#${order.id}`;
+    const prevStatus = await getOrderStatusName(prevOrder.order_status);
+    const nextStatus = await getOrderStatusName(order.order_status);
+
+    await notifyUser(
+      managerUserId,
+      `\u0418\u0437\u043c\u0435\u043d\u0438\u043b\u0441\u044f \u0441\u0442\u0430\u0442\u0443\u0441 \u0437\u0430\u043a\u0430\u0437\u0430 ${orderLabel}`,
+      `\u0421\u0442\u0430\u0442\u0443\u0441: ${prevStatus} \u2192 ${nextStatus}.`,
+      'orders',
+      order.id
+    );
+  }
+
+  function contractorMatches(contractorName, pattern) {
+    return String(contractorName || '').toLowerCase().includes(pattern);
+  }
+
+  function getWorkNotificationTarget(contractorName) {
+    if (contractorMatches(contractorName, '\u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432')) {
+      return {
+        roleName: '\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e',
+        collection: 'production_work',
+        vkChannel: 'production',
+      };
+    }
+
+    if (contractorMatches(contractorName, '\u0448\u0435\u043b\u043a\u043e\u0433\u0440\u0430\u0444')) {
+      return {
+        roleName: '\u0428\u0435\u043b\u043a\u043e\u0433\u0440\u0430\u0444\u0438\u044f',
+        collection: 'screen_printing_work',
+        vkChannel: 'screen_printing',
+      };
+    }
+
+    return null;
+  }
+
+  async function isOrderVisibleForWork(orderId) {
+    if (!orderId) return false;
+
+    const order = await database('orders as o')
+      .leftJoin('order_statuses as os', 'os.id', 'o.order_status')
+      .where('o.id', orderId)
+      .select('os.name as status_name')
+      .first();
+
+    return [
+      '\u041e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d \u0432 \u0440\u0430\u0431\u043e\u0442\u0443',
+      '\u0412 \u0440\u0430\u0431\u043e\u0442\u0435',
+      '\u0413\u043e\u0442\u043e\u0432',
+    ].includes(order?.status_name);
+  }
+
+  function isItemVisibleForWork(item) {
+    const status = String(item?.item_status || '');
+    return ['sent_to_work', 'in_work', 'ready'].includes(status);
+  }
+
+  async function buildWorkAssignmentMessage(item, target) {
+    const orderLabel = await getOrderLabel(item.order);
+    const productName = item.product_name || '\u041f\u043e\u0437\u0438\u0446\u0438\u044f';
+    const quantity = item.quantity || '-';
+    const techTask = item.technical_task_text || '-';
+    const layoutUrl = item.url || '-';
+    const adminUrl = getPublicUrl(getNotificationUrl(target.collection, item.id));
+
+    return [
+      `\u0417\u0430\u043a\u0430\u0437: ${orderLabel}`,
+      `\u041f\u043e\u0437\u0438\u0446\u0438\u044f: ${productName}`,
+      `\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e: ${quantity}`,
+      `\u0422\u0417: ${techTask}`,
+      `\u0421\u0441\u044b\u043b\u043a\u0430 \u043d\u0430 \u043c\u0430\u043a\u0435\u0442: ${layoutUrl}`,
+      `\u0412 \u0441\u0438\u0441\u0442\u0435\u043c\u0435: ${adminUrl}`,
+    ].join('\n');
+  }
+
+  async function getItemContractors(item) {
+    const ids = [item?.contractor_1, item?.contractor_2].filter(Boolean);
+    if (!ids.length) return [];
+
+    return await database('contractors')
+      .whereIn('id', ids)
+      .select('id', 'name');
+  }
+
+  async function markWorkAssignmentNotified(itemId, channel) {
+    if (!itemId || !channel) return false;
+    if (!await ensureWorkNotificationTable()) return false;
+
+    try {
+      await database('symbolika_work_assignment_notifications')
+        .insert({ item: itemId, channel });
+      return true;
+    } catch (error) {
+      if (error?.code === '23505') return false;
+      logger.warn(error);
+      return false;
+    }
+  }
+
+  async function notifyWorkAssignment(item, target) {
+    if (!item?.id || !target) return;
+    if (!isItemVisibleForWork(item) && !await isOrderVisibleForWork(item.order)) return;
+
+    const shouldNotify = await markWorkAssignmentNotified(item.id, target.vkChannel);
+    if (!shouldNotify) return;
+
+    const recipients = await getRoleUserIds(target.roleName);
+    const orderLabel = await getOrderLabel(item.order);
+    const message = await buildWorkAssignmentMessage(item, target);
+    const subject = `\u041d\u043e\u0432\u044b\u0439 \u0437\u0430\u043a\u0430\u0437 \u0434\u043b\u044f ${target.roleName}: ${orderLabel}`;
+
+    await notifyUsers(
+      recipients,
+      subject,
+      message,
+      target.collection,
+      item.id
+    );
+
+    await sendVkMessage(
+      target.vkChannel,
+      `${subject}\n\n${message}`
+    );
+  }
+
+  async function notifyNewProductionAssignments(item, prevItem = null) {
+    if (!item?.id) return;
+
+    const contractors = await getItemContractors(item);
+    if (!contractors.length) return;
+
+    for (const contractor of contractors) {
+      const target = getWorkNotificationTarget(contractor.name);
+      if (!target) continue;
+
+      await notifyWorkAssignment(item, target);
+    }
+  }
+
+  async function notifyWorkAssignmentsForOrder(orderId) {
+    if (!orderId || !await isOrderVisibleForWork(orderId)) return;
+
+    const items = await database('orders_items')
+      .where({ order: orderId })
+      .select('*');
+
+    for (const item of items) {
+      await notifyNewProductionAssignments(item);
+    }
+  }
+
+  async function notifyWorkAssignmentFromCollection(collection, key) {
+    const targets = {
+      production_work: {
+        roleName: '\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e',
+        collection: 'production_work',
+        vkChannel: 'production',
+      },
+      screen_printing_work: {
+        roleName: '\u0428\u0435\u043b\u043a\u043e\u0433\u0440\u0430\u0444\u0438\u044f',
+        collection: 'screen_printing_work',
+        vkChannel: 'screen_printing',
+      },
+    };
+
+    const target = targets[collection];
+    if (!target || !key) return;
+
+    const item = await database('orders_items').where({ id: key }).first();
+    await notifyWorkAssignment(item, target);
+  }
+
+  async function notifyLayoutRevisionIfNeeded(item, prevItem = null) {
+    if (!item?.id || !item.manager_employee) return;
+    if (item.production_status === prevItem?.production_status) return;
+
+    const nextStatus = await getProductionStatusName(item.production_status);
+    if (nextStatus !== '\u0414\u043e\u0440\u0430\u0431\u043e\u0442\u043a\u0430 \u043c\u0430\u043a\u0435\u0442\u0430') return;
+
+    const orderLabel = await getOrderLabel(item.order);
+    const productName = item.product_name || '\u041f\u043e\u0437\u0438\u0446\u0438\u044f';
+
+    await notifyManager(
+      item.manager_employee,
+      `\u041d\u0443\u0436\u043d\u0430 \u0434\u043e\u0440\u0430\u0431\u043e\u0442\u043a\u0430 \u043c\u0430\u043a\u0435\u0442\u0430`,
+      `${orderLabel}: ${productName}. \u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e \u043f\u043e\u043c\u0435\u0442\u0438\u043b\u043e \u0441\u0442\u0430\u0442\u0443\u0441 "\u0414\u043e\u0440\u0430\u0431\u043e\u0442\u043a\u0430 \u043c\u0430\u043a\u0435\u0442\u0430".`,
+      'orders_items',
+      item.id
+    );
   }
 
   async function getManagerPercent(orderId) {
@@ -113,6 +572,13 @@ export default ({ filter, action }, { database, logger }) => {
       customer_companies: order.customer_company,
       is_default: defaultLink ? false : true,
     });
+
+    const customer = await database('customers').where({ id: order.customer }).first();
+    if (customer && !customer.company) {
+      await database('customers').where({ id: order.customer }).update({
+        company: order.customer_company,
+      });
+    }
   }
 
   async function recalcCustomerBalance(customerId) {
@@ -277,6 +743,27 @@ export default ({ filter, action }, { database, logger }) => {
       });
   }
 
+  async function syncItemDeadlinesFromOrder(orderId, prevDeadline, nextDeadline) {
+    if (!orderId) return;
+
+    const nextDate = toDateOnly(nextDeadline);
+    const prevDate = toDateOnly(prevDeadline);
+
+    if (nextDate === prevDate) return;
+
+    const query = database('orders_items').where({ order: orderId });
+
+    if (prevDate) {
+      query.andWhere((builder) => {
+        builder.whereNull('deadline').orWhereRaw('deadline::date = ?', [prevDate]);
+      });
+    } else {
+      query.whereNull('deadline');
+    }
+
+    await query.update({ deadline: nextDate });
+  }
+
   async function setAllItemsOfficeStatus(orderId, officeStatus) {
     if (!orderId || !officeStatus) return;
 
@@ -296,6 +783,7 @@ export default ({ filter, action }, { database, logger }) => {
 
     const allIssued = items.every((item) => item.office_status === ISSUED);
     const allInOffice = items.every((item) => item.office_status === IN_OFFICE || item.office_status === ISSUED);
+    const hasNotInOffice = items.some((item) => !item.office_status || item.office_status === NOT_IN_OFFICE);
 
     const update = {};
 
@@ -304,10 +792,20 @@ export default ({ filter, action }, { database, logger }) => {
 
       const deliveredId = await getDeliveredStatusId();
       if (deliveredId) update.order_status = deliveredId;
+    } else if (hasNotInOffice) {
+      update.office_status = NOT_IN_OFFICE;
     } else if (allInOffice) {
       update.office_status = IN_OFFICE;
     } else {
       update.office_status = NOT_IN_OFFICE;
+    }
+
+    const order = await database('orders').where({ id: orderId }).first();
+    const deliveredId = await getDeliveredStatusId();
+
+    if (update.office_status !== ISSUED && deliveredId && order?.order_status === deliveredId) {
+      const readyId = await getReadyStatusId();
+      if (readyId) update.order_status = readyId;
     }
 
     await database('orders').where({ id: orderId }).update(update);
@@ -445,6 +943,21 @@ export default ({ filter, action }, { database, logger }) => {
     await recalcCompanyBalance(updatedPayment.customer_company);
   }
 
+  // BEFORE CREATE CUSTOMER / COMPANY
+  filter('items.create', async (payload, meta, context) => {
+    if (!['customers', 'customer_companies'].includes(meta.collection)) return payload;
+
+    const next = { ...payload };
+    const userId = context?.accountability?.user || meta?.accountability?.user;
+
+    if (userId) {
+      const emp = await getEmployeeByUser(userId);
+      if (emp?.id) next.manager = emp.id;
+    }
+
+    return next;
+  });
+
   // BEFORE CREATE ORDER
   filter('items.create', async (payload, meta, context) => {
     if (meta.collection !== 'orders') return payload;
@@ -463,6 +976,25 @@ export default ({ filter, action }, { database, logger }) => {
 
     if (!next.office_status) {
       next.office_status = NOT_IN_OFFICE;
+    }
+
+    return next;
+  });
+
+  // BEFORE CREATE ORDER ITEM
+  filter('items.create', async (payload, meta) => {
+    if (meta.collection !== 'orders_items') return payload;
+
+    const next = { ...payload };
+
+    if (isEmpty(next.deadline) && next.order) {
+      const order = await database('orders')
+        .where({ id: next.order })
+        .first();
+
+      if (!isEmpty(order?.deadline)) {
+        next.deadline = toDateOnly(order.deadline);
+      }
     }
 
     return next;
@@ -562,6 +1094,10 @@ export default ({ filter, action }, { database, logger }) => {
           await syncItemsShippingFromOrder(orderId);
         }
 
+        if (Object.prototype.hasOwnProperty.call(payload || {}, 'deadline')) {
+          await syncItemDeadlinesFromOrder(orderId, prevOrder?.deadline, order?.deadline);
+        }
+
         if (Object.prototype.hasOwnProperty.call(payload || {}, 'office_status')) {
           if (payload.office_status === IN_OFFICE) {
             await setAllItemsOfficeStatus(orderId, IN_OFFICE);
@@ -583,6 +1119,17 @@ export default ({ filter, action }, { database, logger }) => {
           }
         }
 
+        if (Object.prototype.hasOwnProperty.call(payload || {}, 'order_status')) {
+          const deliveredId = await getDeliveredStatusId();
+
+          if (deliveredId && Number(payload.order_status) === Number(deliveredId)) {
+            await setAllItemsOfficeStatus(orderId, ISSUED);
+            await database('orders').where({ id: orderId }).update({
+              office_status: ISSUED,
+            });
+          }
+        }
+
         if (Object.prototype.hasOwnProperty.call(payload || {}, 'payment_type')) {
           const items = await database('orders_items').where({ order: orderId });
 
@@ -595,11 +1142,13 @@ export default ({ filter, action }, { database, logger }) => {
           }
         }
 
-        await syncPaymentsFromOrder(orderId);
-        await recalcOrder(orderId, prevOrder);
+      await syncPaymentsFromOrder(orderId);
+      await recalcOrder(orderId, prevOrder);
 
-        const updatedOrder = await database('orders').where({ id: orderId }).first();
-        await recalcOrderParties(updatedOrder, prevOrder);
+      const updatedOrder = await database('orders').where({ id: orderId }).first();
+      await notifyOrderStatusChanged(updatedOrder, prevOrder);
+      await notifyWorkAssignmentsForOrder(orderId);
+      await recalcOrderParties(updatedOrder, prevOrder);
       }
     } catch (error) {
       logger.error(error);
@@ -612,6 +1161,9 @@ export default ({ filter, action }, { database, logger }) => {
       if (collection !== 'orders_items') return;
 
       const orderId = await recalcItem(key);
+      const item = await database('orders_items').where({ id: key }).first();
+      await notifyNewProductionAssignments(item);
+      await notifyLayoutRevisionIfNeeded(item);
       await recalcOrder(orderId);
     } catch (error) {
       logger.error(error);
@@ -628,7 +1180,32 @@ export default ({ filter, action }, { database, logger }) => {
         prevItems.delete(String(key));
 
         const orderId = await recalcItem(key, prevItem);
+        const item = await database('orders_items').where({ id: key }).first();
+        await notifyNewProductionAssignments(item, prevItem);
+        await notifyLayoutRevisionIfNeeded(item, prevItem);
         await recalcOrder(orderId);
+      }
+    } catch (error) {
+      logger.error(error);
+    }
+  });
+
+  // WORK VIEW ASSIGNMENTS
+  action('items.create', async ({ collection, key }) => {
+    try {
+      if (!['production_work', 'screen_printing_work'].includes(collection)) return;
+      await notifyWorkAssignmentFromCollection(collection, key);
+    } catch (error) {
+      logger.error(error);
+    }
+  });
+
+  action('items.update', async ({ collection, keys }) => {
+    try {
+      if (!['production_work', 'screen_printing_work'].includes(collection)) return;
+
+      for (const key of keys) {
+        await notifyWorkAssignmentFromCollection(collection, key);
       }
     } catch (error) {
       logger.error(error);
@@ -664,7 +1241,7 @@ export default ({ filter, action }, { database, logger }) => {
             payment: key,
             order: updatedPayment.order,
             amount: updatedPayment.amount,
-            comment: 'Автоматическое распределение',
+            comment: '\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u043e\u0435 \u0440\u0430\u0441\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u0438\u0435',
           });
         }
 
@@ -784,3 +1361,4 @@ export default ({ filter, action }, { database, logger }) => {
     }
   });
 };
+

@@ -14,10 +14,14 @@ logs/
 
 symbolika_directus_clean_install/database/
 symbolika_directus_clean_install/uploads/
+symbolika_directus_clean_install/extensions/**/node_modules/
 
 database_before_pg_resetwal/
 db_backups/
+backups/
+exports/
 
 *.sql
 !full_directus_backup.sql
+!symbolika_directus_clean_install/setup/create-work-views.sql
 !.gitignore
