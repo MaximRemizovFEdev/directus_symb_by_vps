@@ -87,14 +87,23 @@
     'payment_types',
     'customer_company_links',
     'contractor_payments',
+    'business_expenses',
   ]);
   const serviceNavigationRoles = new Set([
     'Administrator',
     '\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u044e\u0449\u0438\u0439',
   ]);
+  const standardContentRoles = new Set([
+    'Administrator',
+  ]);
+  const symbolikaDefaultModulePath = '/admin/symbolika-orders';
   const serviceNavigationState = {
     roleName: null,
     loading: false,
+  };
+  const contentNavigationState = {
+    installed: false,
+    redirecting: false,
   };
   const tableState = {
     byCollection: new Map(),
@@ -140,8 +149,75 @@
     return link.closest('.v-list-item, .navigation-item, li, a') || link;
   }
 
+  function isAdminLoginPath(pathname = window.location.pathname) {
+    return pathname.includes('/admin/login');
+  }
+
+  function isStandardContentPath(pathname = window.location.pathname) {
+    return /^\/admin\/content(?:\/|$)/.test(pathname);
+  }
+
+  function isContentModuleLink(link) {
+    const href = link?.getAttribute?.('href') || '';
+    if (!href) return false;
+    try {
+      const url = new URL(href, window.location.origin);
+      return url.pathname === '/admin/content';
+    } catch (error) {
+      return href === '/admin/content' || href.endsWith('/admin/content');
+    }
+  }
+
+  async function applyStandardContentVisibility() {
+    if (isAdminLoginPath()) return;
+    const roleName = serviceNavigationState.roleName || await loadCurrentRoleName();
+    if (!roleName) return;
+    const canUseStandardContent = standardContentRoles.has(roleName);
+    document.documentElement.dataset.symbolikaStandardContent = canUseStandardContent ? 'visible' : 'hidden';
+
+    for (const link of document.querySelectorAll('a[href]')) {
+      if (!isContentModuleLink(link)) continue;
+      const item = getNavigationItem(link);
+      item.dataset.symbolikaStandardContentNavigation = canUseStandardContent ? 'visible' : 'hidden';
+      item.style.display = canUseStandardContent ? '' : 'none';
+    }
+
+    if (!canUseStandardContent && isStandardContentPath() && !contentNavigationState.redirecting) {
+      contentNavigationState.redirecting = true;
+      window.location.assign(symbolikaDefaultModulePath);
+      window.setTimeout(() => {
+        contentNavigationState.redirecting = false;
+      }, 1200);
+    }
+  }
+
+  function installStandardContentRouteGuard() {
+    if (contentNavigationState.installed) return;
+    contentNavigationState.installed = true;
+
+    const schedule = () => {
+      window.setTimeout(() => {
+        applyStandardContentVisibility();
+      }, 0);
+    };
+
+    const originalPushState = history.pushState;
+    const originalReplaceState = history.replaceState;
+    history.pushState = function (...args) {
+      const result = originalPushState.apply(this, args);
+      schedule();
+      return result;
+    };
+    history.replaceState = function (...args) {
+      const result = originalReplaceState.apply(this, args);
+      schedule();
+      return result;
+    };
+    window.addEventListener('popstate', schedule);
+  }
+
   async function applyServiceNavigationVisibility() {
-    if (window.location.pathname.includes('/admin/login')) return;
+    if (isAdminLoginPath()) return;
     const roleName = serviceNavigationState.roleName || await loadCurrentRoleName();
     if (!roleName) return;
     const canSeeServiceNavigation = serviceNavigationRoles.has(roleName);
@@ -1177,6 +1253,17 @@
     return output;
   }
 
+  function withPushTimeout(promise, timeoutMs, message) {
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+      timer = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    });
+
+    return Promise.race([promise, timeout]).finally(() => {
+      if (timer) window.clearTimeout(timer);
+    });
+  }
+
   function setPushButtonState(state, text) {
     if (state === 'enabled') {
       if (pushUi.button) {
@@ -1217,8 +1304,14 @@
   }
 
   function getNotificationTargetUrl(notification) {
-    if (!notification?.collection || notification.item == null) return '/admin';
-    return `/admin/content/${notification.collection}/${notification.item}`;
+    if (!notification?.collection || notification.item == null) return '/admin/symbolika-orders';
+    if (notification.collection === 'production_work' || notification.collection === 'screen_printing_work') {
+      return '/admin/symbolika-production';
+    }
+    if (notification.collection === 'customers' || notification.collection === 'customer_companies') {
+      return '/admin/symbolika-clients';
+    }
+    return '/admin/symbolika-orders';
   }
 
   function showForegroundNotification(notification) {
@@ -1318,7 +1411,11 @@
 
     try {
       if (Notification.permission !== 'granted') {
-        const permission = await Notification.requestPermission();
+        const permission = await withPushTimeout(
+          Notification.requestPermission(),
+          15000,
+          'Push permission request timed out',
+        );
         if (permission !== 'granted') {
           setPushButtonState(permission === 'denied' ? 'denied' : 'default', permission === 'denied'
             ? '\u0423\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f \u0437\u0430\u043f\u0440\u0435\u0449\u0435\u043d\u044b'
@@ -1327,25 +1424,35 @@
         }
       }
 
-      const publicKey = await getPushPublicKey();
-      const registration = await navigator.serviceWorker.register('/admin/symbolika-push-sw.js', {
-        scope: '/admin/',
-      });
-      await navigator.serviceWorker.ready;
+      const publicKey = await withPushTimeout(getPushPublicKey(), 10000, 'Push public key request timed out');
+      const registration = await withPushTimeout(
+        navigator.serviceWorker.register('/admin/symbolika-push-sw.js', { scope: '/admin/' }),
+        15000,
+        'Push service worker registration timed out',
+      );
+      await withPushTimeout(navigator.serviceWorker.ready, 15000, 'Push service worker ready timed out');
 
-      const subscription = await registration.pushManager.getSubscription()
-        || await registration.pushManager.subscribe({
+      const currentSubscription = await withPushTimeout(
+        registration.pushManager.getSubscription(),
+        10000,
+        'Push subscription lookup timed out',
+      );
+      const subscription = currentSubscription || await withPushTimeout(
+        registration.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToUint8Array(publicKey),
-        });
+        }),
+        15000,
+        'Push subscription request timed out',
+      );
 
-      await savePushSubscription(subscription);
+      await withPushTimeout(savePushSubscription(subscription), 10000, 'Push subscription save timed out');
       pushUi.isReady = true;
       setPushButtonState('enabled', '\u0423\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f \u0432\u043a\u043b\u044e\u0447\u0435\u043d\u044b');
       startNotificationPolling();
     } catch (error) {
       console.warn('[Symbolika push]', error);
-      setPushButtonState('error', '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0432\u043a\u043b\u044e\u0447\u0438\u0442\u044c');
+      setPushButtonState('error', '\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c \u043f\u0443\u0448\u0438');
     } finally {
       pushUi.isBusy = false;
     }
@@ -1389,6 +1496,7 @@
       enhanceInlineTables();
       applyVisibleInlineOverrides();
       applyServiceNavigationVisibility();
+      applyStandardContentVisibility();
     });
   });
 
@@ -1402,7 +1510,9 @@
   enhanceInlineTables();
   applyVisibleInlineOverrides();
   createPushButton();
+  installStandardContentRouteGuard();
   applyServiceNavigationVisibility();
+  applyStandardContentVisibility();
 
   let attempts = 0;
   const interval = window.setInterval(() => {
@@ -1410,6 +1520,7 @@
     enhanceInlineTables();
     createPushButton();
     applyServiceNavigationVisibility();
+    applyStandardContentVisibility();
     attempts += 1;
     if (attempts >= 20) window.clearInterval(interval);
   }, 500);

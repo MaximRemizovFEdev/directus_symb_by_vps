@@ -165,7 +165,7 @@ export default {
 
           if (this.shouldLeaveCurrentViewAfterSave) {
             window.setTimeout(() => {
-              window.location.assign('/admin/content/office_items_in_office');
+              window.location.assign('/admin/symbolika-orders');
             }, 700);
             return;
           }

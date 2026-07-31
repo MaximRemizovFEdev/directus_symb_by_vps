@@ -184,8 +184,12 @@ export default ({ filter, action }, { database, logger, env }) => {
   }
 
   function getNotificationUrl(collection, item) {
-    if (!collection || item == null) return '/admin';
-    return `/admin/content/${collection}/${item}`;
+    if (!collection || item == null) return '/admin/symbolika-orders';
+    if (collection === 'production_work') return '/admin/symbolika-production';
+    if (collection === 'screen_printing_work') return '/admin/symbolika-production';
+    if (collection === 'office_issue' || collection === 'office_items_in_office') return '/admin/symbolika-orders';
+    if (collection === 'customers' || collection === 'customer_companies') return '/admin/symbolika-clients';
+    return '/admin/symbolika-orders';
   }
 
   function getPublicUrl(path = '/admin') {
@@ -1011,7 +1015,7 @@ export default ({ filter, action }, { database, logger, env }) => {
       }
     }
 
-    if (meta.collection === 'orders_items') {
+    if (['orders_items', 'contractor_costing'].includes(meta.collection)) {
       for (const id of keys) {
         const row = await database('orders_items').where({ id }).first();
         if (row) prevItems.set(String(id), row);
@@ -1173,7 +1177,7 @@ export default ({ filter, action }, { database, logger, env }) => {
   // ORDER ITEMS UPDATE
   action('items.update', async ({ collection, keys }) => {
     try {
-      if (collection !== 'orders_items') return;
+      if (!['orders_items', 'contractor_costing'].includes(collection)) return;
 
       for (const key of keys) {
         const prevItem = prevItems.get(String(key)) || null;

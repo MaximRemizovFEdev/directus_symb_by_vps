@@ -109,7 +109,7 @@ export default {
 
       openOrder() {
         if (!this.canOpen) return;
-        window.location.assign(`/admin/content/orders/${this.orderId}`);
+        window.location.assign('/admin/symbolika-orders');
       },
     },
 

@@ -81,7 +81,7 @@ export default {
     methods: {
       openIssue() {
         if (!this.canOpen) return;
-        window.location.assign(`/admin/content/office_issue/${this.issueId}`);
+        window.location.assign('/admin/symbolika-orders');
       },
     },
 

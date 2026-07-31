@@ -224,12 +224,455 @@ CREATE TABLE IF NOT EXISTS finance_dashboard_series (
   updated_at timestamp with time zone DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS business_expenses (
+  id serial PRIMARY KEY,
+  expense_date date NOT NULL DEFAULT current_date,
+  expense_type character varying(255) NOT NULL DEFAULT 'other',
+  amount numeric(14,2) NOT NULL DEFAULT 0,
+  employee integer REFERENCES employees(id) ON DELETE SET NULL,
+  payment_type integer REFERENCES payment_types(id) ON DELETE SET NULL,
+  comment text,
+  created_at timestamp with time zone DEFAULT now()
+);
+
+ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS expense_date date NOT NULL DEFAULT current_date;
+ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS expense_type character varying(255) NOT NULL DEFAULT 'other';
+ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS amount numeric(14,2) NOT NULL DEFAULT 0;
+ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS employee integer REFERENCES employees(id) ON DELETE SET NULL;
+ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS payment_type integer REFERENCES payment_types(id) ON DELETE SET NULL;
+ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS comment text;
+ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS created_at timestamp with time zone DEFAULT now();
+
+DROP TABLE IF EXISTS employee_salary_monthly CASCADE;
+DROP TABLE IF EXISTS employee_salary_summary CASCADE;
+
+CREATE OR REPLACE VIEW employee_salary_summary AS
+WITH period AS (
+  SELECT date_trunc('month', current_date)::date AS month_start
+),
+employee_orders AS (
+  SELECT
+    e.id AS employee,
+    COALESCE(SUM(o.order_sum), 0) AS orders_sum,
+    COALESCE(SUM(o.paid_amount), 0) AS paid_orders_sum,
+    COALESCE(SUM(GREATEST(o.payment_due, 0)), 0) AS unpaid_orders_sum
+  FROM employees e
+  CROSS JOIN period p
+  LEFT JOIN orders o
+    ON o.manager_employee = e.id
+   AND o.date >= p.month_start
+   AND o.date < (p.month_start + interval '1 month')::date
+  GROUP BY e.id
+),
+employee_payments AS (
+  SELECT
+    be.employee,
+    COALESCE(SUM(be.amount) FILTER (WHERE be.expense_type = 'salary_payment'), 0) AS salary_paid,
+    COALESCE(SUM(be.amount) FILTER (WHERE be.expense_type = 'employee_advance'), 0) AS advances_paid
+  FROM business_expenses be
+  CROSS JOIN period p
+  WHERE be.employee IS NOT NULL
+    AND be.expense_date >= p.month_start
+    AND be.expense_date < (p.month_start + interval '1 month')::date
+  GROUP BY be.employee
+)
+SELECT
+  e.id,
+  e.id AS employee,
+  e.full_name AS employee_name,
+  ep.name AS position_name,
+  p.month_start,
+  COALESCE(e.salary_fixed, 0) AS salary_fixed,
+  COALESCE(e.order_percent, 0) AS order_percent,
+  COALESCE(eo.orders_sum, 0) AS orders_sum,
+  COALESCE(eo.paid_orders_sum, 0) AS paid_orders_sum,
+  COALESCE(eo.unpaid_orders_sum, 0) AS unpaid_orders_sum,
+  ROUND(COALESCE(eo.paid_orders_sum, 0) * COALESCE(e.order_percent, 0) / 100, 2) AS commission_accrued,
+  ROUND(COALESCE(e.salary_fixed, 0) + COALESCE(eo.paid_orders_sum, 0) * COALESCE(e.order_percent, 0) / 100, 2) AS salary_accrued,
+  COALESCE(pay.salary_paid, 0) AS salary_paid,
+  COALESCE(pay.advances_paid, 0) AS advances_paid,
+  ROUND(
+    COALESCE(e.salary_fixed, 0)
+    + COALESCE(eo.paid_orders_sum, 0) * COALESCE(e.order_percent, 0) / 100
+    - COALESCE(pay.salary_paid, 0)
+    - COALESCE(pay.advances_paid, 0),
+    2
+  ) AS salary_debt
+FROM employees e
+CROSS JOIN period p
+LEFT JOIN employee_positions ep ON ep.id = e.position
+LEFT JOIN employee_orders eo ON eo.employee = e.id
+LEFT JOIN employee_payments pay ON pay.employee = e.id
+WHERE COALESCE(e.is_active, true) = true;
+
+CREATE OR REPLACE VIEW employee_salary_monthly AS
+WITH months AS (
+  SELECT generate_series(
+    (date_trunc('month', current_date) - interval '11 months')::date,
+    date_trunc('month', current_date)::date,
+    interval '1 month'
+  )::date AS month_start
+),
+base AS (
+  SELECT
+    e.id AS employee,
+    e.full_name AS employee_name,
+    m.month_start,
+    to_char(m.month_start, 'MM.YY') AS month_label,
+    COALESCE(e.salary_fixed, 0) AS salary_fixed,
+    COALESCE(e.order_percent, 0) AS order_percent,
+    COALESCE(SUM(o.order_sum), 0) AS orders_sum,
+    COALESCE(SUM(o.paid_amount), 0) AS paid_orders_sum,
+    COALESCE(SUM(GREATEST(o.payment_due, 0)), 0) AS unpaid_orders_sum
+  FROM employees e
+  CROSS JOIN months m
+  LEFT JOIN orders o
+    ON o.manager_employee = e.id
+   AND o.date >= m.month_start
+   AND o.date < (m.month_start + interval '1 month')::date
+  WHERE COALESCE(e.is_active, true) = true
+  GROUP BY e.id, e.full_name, m.month_start, e.salary_fixed, e.order_percent
+),
+payments AS (
+  SELECT
+    be.employee,
+    date_trunc('month', be.expense_date)::date AS month_start,
+    COALESCE(SUM(be.amount) FILTER (WHERE be.expense_type = 'salary_payment'), 0) AS salary_paid,
+    COALESCE(SUM(be.amount) FILTER (WHERE be.expense_type = 'employee_advance'), 0) AS advances_paid
+  FROM business_expenses be
+  WHERE be.employee IS NOT NULL
+  GROUP BY be.employee, date_trunc('month', be.expense_date)::date
+)
+SELECT
+  row_number() OVER (ORDER BY b.month_start DESC, b.employee)::integer AS id,
+  b.employee,
+  b.employee_name,
+  b.month_start,
+  b.month_label,
+  b.salary_fixed,
+  b.order_percent,
+  b.orders_sum,
+  b.paid_orders_sum,
+  b.unpaid_orders_sum,
+  ROUND(b.paid_orders_sum * b.order_percent / 100, 2) AS commission_accrued,
+  ROUND(b.salary_fixed + b.paid_orders_sum * b.order_percent / 100, 2) AS salary_accrued,
+  COALESCE(p.salary_paid, 0) AS salary_paid,
+  COALESCE(p.advances_paid, 0) AS advances_paid,
+  ROUND(b.salary_fixed + b.paid_orders_sum * b.order_percent / 100 - COALESCE(p.salary_paid, 0) - COALESCE(p.advances_paid, 0), 2) AS salary_debt
+FROM base b
+LEFT JOIN payments p ON p.employee = b.employee AND p.month_start = b.month_start;
+
+DROP VIEW IF EXISTS employee_salary_monthly CASCADE;
+DROP VIEW IF EXISTS employee_salary_summary CASCADE;
+
+CREATE TABLE IF NOT EXISTS employee_salary_summary (
+  id integer PRIMARY KEY,
+  employee integer,
+  employee_name character varying(255),
+  position_name character varying(255),
+  month_start date,
+  salary_fixed numeric(14,2) DEFAULT 0,
+  order_percent numeric(14,2) DEFAULT 0,
+  orders_sum numeric(14,2) DEFAULT 0,
+  paid_orders_sum numeric(14,2) DEFAULT 0,
+  unpaid_orders_sum numeric(14,2) DEFAULT 0,
+  commission_accrued numeric(14,2) DEFAULT 0,
+  salary_accrued numeric(14,2) DEFAULT 0,
+  salary_paid numeric(14,2) DEFAULT 0,
+  advances_paid numeric(14,2) DEFAULT 0,
+  salary_debt numeric(14,2) DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS employee_salary_monthly (
+  id integer PRIMARY KEY,
+  employee integer,
+  employee_name character varying(255),
+  month_start date,
+  month_label character varying(255),
+  salary_fixed numeric(14,2) DEFAULT 0,
+  order_percent numeric(14,2) DEFAULT 0,
+  orders_sum numeric(14,2) DEFAULT 0,
+  paid_orders_sum numeric(14,2) DEFAULT 0,
+  unpaid_orders_sum numeric(14,2) DEFAULT 0,
+  commission_accrued numeric(14,2) DEFAULT 0,
+  salary_accrued numeric(14,2) DEFAULT 0,
+  salary_paid numeric(14,2) DEFAULT 0,
+  advances_paid numeric(14,2) DEFAULT 0,
+  salary_debt numeric(14,2) DEFAULT 0
+);
+
+CREATE OR REPLACE FUNCTION refresh_employee_salary_tables()
+RETURNS void AS $$
+DECLARE
+  month_begin date := date_trunc('month', current_date)::date;
+BEGIN
+  DELETE FROM employee_salary_summary;
+
+  INSERT INTO employee_salary_summary (
+    id, employee, employee_name, position_name, month_start,
+    salary_fixed, order_percent, orders_sum, paid_orders_sum, unpaid_orders_sum,
+    commission_accrued, salary_accrued, salary_paid, advances_paid, salary_debt
+  )
+  SELECT
+    e.id,
+    e.id,
+    e.full_name,
+    ep.name,
+    month_begin,
+    COALESCE(e.salary_fixed, 0),
+    COALESCE(e.order_percent, 0),
+    COALESCE(SUM(o.order_sum), 0),
+    COALESCE(SUM(o.paid_amount), 0),
+    COALESCE(SUM(GREATEST(o.payment_due, 0)), 0),
+    ROUND(COALESCE(SUM(o.paid_amount), 0) * COALESCE(e.order_percent, 0) / 100, 2),
+    ROUND(COALESCE(e.salary_fixed, 0) + COALESCE(SUM(o.paid_amount), 0) * COALESCE(e.order_percent, 0) / 100, 2),
+    COALESCE((
+      SELECT SUM(be.amount)
+      FROM business_expenses be
+      WHERE be.employee = e.id
+        AND be.expense_type = 'salary_payment'
+        AND be.expense_date >= month_begin
+        AND be.expense_date < (month_begin + interval '1 month')::date
+    ), 0),
+    COALESCE((
+      SELECT SUM(be.amount)
+      FROM business_expenses be
+      WHERE be.employee = e.id
+        AND be.expense_type = 'employee_advance'
+        AND be.expense_date >= month_begin
+        AND be.expense_date < (month_begin + interval '1 month')::date
+    ), 0),
+    ROUND(
+      COALESCE(e.salary_fixed, 0)
+      + COALESCE(SUM(o.paid_amount), 0) * COALESCE(e.order_percent, 0) / 100
+      - COALESCE((
+        SELECT SUM(be.amount)
+        FROM business_expenses be
+        WHERE be.employee = e.id
+          AND be.expense_type = 'salary_payment'
+          AND be.expense_date >= month_begin
+          AND be.expense_date < (month_begin + interval '1 month')::date
+      ), 0)
+      - COALESCE((
+        SELECT SUM(be.amount)
+        FROM business_expenses be
+        WHERE be.employee = e.id
+          AND be.expense_type = 'employee_advance'
+          AND be.expense_date >= month_begin
+          AND be.expense_date < (month_begin + interval '1 month')::date
+      ), 0),
+      2
+    )
+  FROM employees e
+  LEFT JOIN employee_positions ep ON ep.id = e.position
+  LEFT JOIN orders o
+    ON o.manager_employee = e.id
+   AND o.date >= month_begin
+   AND o.date < (month_begin + interval '1 month')::date
+  WHERE COALESCE(e.is_active, true) = true
+  GROUP BY e.id, e.full_name, ep.name, e.salary_fixed, e.order_percent;
+
+  DELETE FROM employee_salary_monthly;
+
+  INSERT INTO employee_salary_monthly (
+    id, employee, employee_name, month_start, month_label,
+    salary_fixed, order_percent, orders_sum, paid_orders_sum, unpaid_orders_sum,
+    commission_accrued, salary_accrued, salary_paid, advances_paid, salary_debt
+  )
+  WITH months AS (
+    SELECT generate_series(
+      (date_trunc('month', current_date) - interval '11 months')::date,
+      date_trunc('month', current_date)::date,
+      interval '1 month'
+    )::date AS month_start
+  ),
+  base AS (
+    SELECT
+      e.id AS employee,
+      e.full_name AS employee_name,
+      m.month_start,
+      to_char(m.month_start, 'MM.YY') AS month_label,
+      COALESCE(e.salary_fixed, 0) AS salary_fixed,
+      COALESCE(e.order_percent, 0) AS order_percent,
+      COALESCE(SUM(o.order_sum), 0) AS orders_sum,
+      COALESCE(SUM(o.paid_amount), 0) AS paid_orders_sum,
+      COALESCE(SUM(GREATEST(o.payment_due, 0)), 0) AS unpaid_orders_sum
+    FROM employees e
+    CROSS JOIN months m
+    LEFT JOIN orders o
+      ON o.manager_employee = e.id
+     AND o.date >= m.month_start
+     AND o.date < (m.month_start + interval '1 month')::date
+    WHERE COALESCE(e.is_active, true) = true
+    GROUP BY e.id, e.full_name, m.month_start, e.salary_fixed, e.order_percent
+  )
+  SELECT
+    row_number() OVER (ORDER BY b.month_start DESC, b.employee)::integer,
+    b.employee,
+    b.employee_name,
+    b.month_start,
+    b.month_label,
+    b.salary_fixed,
+    b.order_percent,
+    b.orders_sum,
+    b.paid_orders_sum,
+    b.unpaid_orders_sum,
+    ROUND(b.paid_orders_sum * b.order_percent / 100, 2),
+    ROUND(b.salary_fixed + b.paid_orders_sum * b.order_percent / 100, 2),
+    COALESCE((
+      SELECT SUM(be.amount)
+      FROM business_expenses be
+      WHERE be.employee = b.employee
+        AND be.expense_type = 'salary_payment'
+        AND be.expense_date >= b.month_start
+        AND be.expense_date < (b.month_start + interval '1 month')::date
+    ), 0),
+    COALESCE((
+      SELECT SUM(be.amount)
+      FROM business_expenses be
+      WHERE be.employee = b.employee
+        AND be.expense_type = 'employee_advance'
+        AND be.expense_date >= b.month_start
+        AND be.expense_date < (b.month_start + interval '1 month')::date
+    ), 0),
+    ROUND(
+      b.salary_fixed
+      + b.paid_orders_sum * b.order_percent / 100
+      - COALESCE((
+        SELECT SUM(be.amount)
+        FROM business_expenses be
+        WHERE be.employee = b.employee
+          AND be.expense_type = 'salary_payment'
+          AND be.expense_date >= b.month_start
+          AND be.expense_date < (b.month_start + interval '1 month')::date
+      ), 0)
+      - COALESCE((
+        SELECT SUM(be.amount)
+        FROM business_expenses be
+        WHERE be.employee = b.employee
+          AND be.expense_type = 'employee_advance'
+          AND be.expense_date >= b.month_start
+          AND be.expense_date < (b.month_start + interval '1 month')::date
+      ), 0),
+      2
+    )
+  FROM base b;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT refresh_employee_salary_tables();
+
+CREATE TABLE IF NOT EXISTS manager_finance_summary (
+  id integer PRIMARY KEY,
+  employee integer REFERENCES employees(id) ON DELETE CASCADE,
+  directus_user uuid,
+  employee_name character varying(255),
+  order_percent numeric(14,2) DEFAULT 0,
+  orders_count integer DEFAULT 0,
+  orders_sum numeric(14,2) DEFAULT 0,
+  paid_orders_sum numeric(14,2) DEFAULT 0,
+  unpaid_orders_sum numeric(14,2) DEFAULT 0,
+  commission_total numeric(14,2) DEFAULT 0,
+  commission_accrued numeric(14,2) DEFAULT 0,
+  commission_expected numeric(14,2) DEFAULT 0,
+  commission_paid numeric(14,2) DEFAULT 0,
+  commission_to_pay numeric(14,2) DEFAULT 0
+);
+
+CREATE OR REPLACE FUNCTION refresh_manager_finance_summary()
+RETURNS void AS $$
+BEGIN
+  DELETE FROM manager_finance_summary;
+
+  INSERT INTO manager_finance_summary (
+    id,
+    employee,
+    directus_user,
+    employee_name,
+    order_percent,
+    orders_count,
+    orders_sum,
+    paid_orders_sum,
+    unpaid_orders_sum,
+    commission_total,
+    commission_accrued,
+    commission_expected,
+    commission_paid,
+    commission_to_pay
+  )
+  SELECT
+    e.id,
+    e.id,
+    e.directus_user,
+    e.full_name,
+    COALESCE(e.order_percent, 0),
+    COUNT(o.id)::integer,
+    ROUND(COALESCE(SUM(o.order_sum), 0), 2),
+    ROUND(COALESCE(SUM(o.paid_amount), 0), 2),
+    ROUND(COALESCE(SUM(o.payment_due), 0), 2),
+    ROUND(COALESCE(SUM(o.order_sum), 0) * COALESCE(e.order_percent, 0) / 100, 2),
+    ROUND(COALESCE(SUM(o.paid_amount), 0) * COALESCE(e.order_percent, 0) / 100, 2),
+    ROUND(COALESCE(SUM(o.payment_due), 0) * COALESCE(e.order_percent, 0) / 100, 2),
+    LEAST(
+      ROUND(COALESCE(SUM(o.paid_amount), 0) * COALESCE(e.order_percent, 0) / 100, 2),
+      ROUND(
+        COALESCE((
+          SELECT SUM(be.amount)
+          FROM business_expenses be
+          WHERE be.employee = e.id
+            AND be.expense_type IN ('salary_payment', 'employee_advance')
+        ), 0),
+        2
+      )
+    ),
+    GREATEST(
+      ROUND(COALESCE(SUM(o.paid_amount), 0) * COALESCE(e.order_percent, 0) / 100, 2)
+      - LEAST(
+        ROUND(COALESCE(SUM(o.paid_amount), 0) * COALESCE(e.order_percent, 0) / 100, 2),
+        ROUND(
+          COALESCE((
+            SELECT SUM(be.amount)
+            FROM business_expenses be
+            WHERE be.employee = e.id
+              AND be.expense_type IN ('salary_payment', 'employee_advance')
+          ), 0),
+          2
+        )
+      ),
+      0
+    )
+  FROM employees e
+  LEFT JOIN orders o ON o.manager_employee = e.id
+  WHERE COALESCE(e.is_active, true) = true
+  GROUP BY e.id, e.directus_user, e.full_name, e.order_percent;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT refresh_manager_finance_summary();
+
 CREATE OR REPLACE FUNCTION refresh_finance_dashboard_metrics()
 RETURNS void AS $$
 DECLARE
   month_begin date := date_trunc('month', current_date)::date;
   year_begin date := date_trunc('year', current_date)::date;
+  business_expenses_month numeric(14,2) := 0;
+  business_expenses_year numeric(14,2) := 0;
 BEGIN
+  PERFORM refresh_employee_salary_tables();
+  PERFORM refresh_manager_finance_summary();
+
+  SELECT COALESCE(SUM(amount), 0)
+  INTO business_expenses_month
+  FROM business_expenses
+  WHERE expense_date >= month_begin
+    AND expense_date < (month_begin + interval '1 month')::date;
+
+  SELECT COALESCE(SUM(amount), 0)
+  INTO business_expenses_year
+  FROM business_expenses
+  WHERE expense_date >= year_begin
+    AND expense_date < (year_begin + interval '1 year')::date;
+
   DELETE FROM finance_dashboard_metrics;
 
   INSERT INTO finance_dashboard_metrics(metric_key, title, metric_group, value, sort)
@@ -266,29 +709,43 @@ BEGIN
       'profit_month',
       U&'\0427\0438\0441\0442\0430\044f \043f\0440\0438\0431\044b\043b\044c \0437\0430 \043c\0435\0441\044f\0446',
       'month',
-      COALESCE((SELECT SUM(profit_sum) FROM orders WHERE date >= month_begin AND date < (month_begin + interval '1 month')::date), 0),
+      COALESCE((SELECT SUM(profit_sum) FROM orders WHERE date >= month_begin AND date < (month_begin + interval '1 month')::date), 0) - business_expenses_month,
       50
     ),
     (
       'profit_year',
       U&'\0427\0438\0441\0442\0430\044f \043f\0440\0438\0431\044b\043b\044c \0437\0430 \0433\043e\0434',
       'year',
-      COALESCE((SELECT SUM(profit_sum) FROM orders WHERE date >= year_begin AND date < (year_begin + interval '1 year')::date), 0),
+      COALESCE((SELECT SUM(profit_sum) FROM orders WHERE date >= year_begin AND date < (year_begin + interval '1 year')::date), 0) - business_expenses_year,
       60
     ),
     (
       'expenses_month',
       U&'\0420\0430\0441\0445\043e\0434\044b \0437\0430 \043c\0435\0441\044f\0446',
       'month',
-      COALESCE((SELECT SUM(items_total_cost) FROM orders WHERE date >= month_begin AND date < (month_begin + interval '1 month')::date), 0),
+      COALESCE((SELECT SUM(items_total_cost) FROM orders WHERE date >= month_begin AND date < (month_begin + interval '1 month')::date), 0) + business_expenses_month,
       70
     ),
     (
       'expenses_year',
       U&'\0420\0430\0441\0445\043e\0434\044b \0437\0430 \0433\043e\0434',
       'year',
-      COALESCE((SELECT SUM(items_total_cost) FROM orders WHERE date >= year_begin AND date < (year_begin + interval '1 year')::date), 0),
+      COALESCE((SELECT SUM(items_total_cost) FROM orders WHERE date >= year_begin AND date < (year_begin + interval '1 year')::date), 0) + business_expenses_year,
       80
+    ),
+    (
+      'business_expenses_month',
+      U&'\041e\043f\0435\0440\0430\0446\0438\043e\043d\043d\044b\0435 \0440\0430\0441\0445\043e\0434\044b \0437\0430 \043c\0435\0441\044f\0446',
+      'month',
+      business_expenses_month,
+      85
+    ),
+    (
+      'salary_debt',
+      U&'\0414\043e\043b\0433 \043f\043e \0417\041f',
+      'balance',
+      COALESCE((SELECT SUM(GREATEST(salary_debt, 0)) FROM employee_salary_summary), 0),
+      86
     ),
     (
       'receivable',
@@ -359,8 +816,18 @@ BEGIN
         AND op.payment_date >= months.month_start
         AND op.payment_date < (months.month_start + interval '1 month')::date
     ), 0),
-    COALESCE(SUM(o.profit_sum), 0),
-    COALESCE(SUM(o.items_total_cost), 0),
+    COALESCE(SUM(o.profit_sum), 0) - COALESCE((
+      SELECT SUM(be.amount)
+      FROM business_expenses be
+      WHERE be.expense_date >= months.month_start
+        AND be.expense_date < (months.month_start + interval '1 month')::date
+    ), 0),
+    COALESCE(SUM(o.items_total_cost), 0) + COALESCE((
+      SELECT SUM(be.amount)
+      FROM business_expenses be
+      WHERE be.expense_date >= months.month_start
+        AND be.expense_date < (months.month_start + interval '1 month')::date
+    ), 0),
     COALESCE(SUM(GREATEST(o.payment_due, 0)), 0)
   FROM generate_series(
     (date_trunc('month', current_date) - interval '11 months')::date,
@@ -395,6 +862,33 @@ $$ LANGUAGE plpgsql;
 
 SELECT refresh_finance_dashboard_metrics();
 
+CREATE OR REPLACE FUNCTION refresh_salary_and_finance_trigger()
+RETURNS trigger AS $$
+BEGIN
+  PERFORM refresh_employee_salary_tables();
+  PERFORM refresh_finance_dashboard_metrics();
+  RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS business_expenses_refresh_finance ON business_expenses;
+CREATE TRIGGER business_expenses_refresh_finance
+AFTER INSERT OR UPDATE OR DELETE ON business_expenses
+FOR EACH ROW
+EXECUTE FUNCTION refresh_salary_and_finance_trigger();
+
+DROP TRIGGER IF EXISTS employees_refresh_salary ON employees;
+CREATE TRIGGER employees_refresh_salary
+AFTER INSERT OR UPDATE OF salary_fixed, order_percent, is_active, position, full_name OR DELETE ON employees
+FOR EACH ROW
+EXECUTE FUNCTION refresh_salary_and_finance_trigger();
+
+DROP TRIGGER IF EXISTS orders_refresh_salary ON orders;
+CREATE TRIGGER orders_refresh_salary
+AFTER INSERT OR UPDATE OF date, manager_employee, order_sum, paid_amount, payment_due, profit_sum, items_total_cost OR DELETE ON orders
+FOR EACH ROW
+EXECUTE FUNCTION refresh_salary_and_finance_trigger();
+
 CREATE TABLE IF NOT EXISTS product_application_methods (
   id serial PRIMARY KEY,
   name character varying(255) NOT NULL,
@@ -426,6 +920,8 @@ CREATE TABLE IF NOT EXISTS production_work (
   technical_task_text text,
   production_comment text,
   url character varying(255),
+  item_status character varying(255),
+  office_status character varying(255),
   production_status integer,
   date timestamp without time zone,
   deadline timestamp without time zone
@@ -442,6 +938,8 @@ CREATE TABLE IF NOT EXISTS screen_printing_work (
   technical_task_text text,
   production_comment text,
   url character varying(255),
+  item_status character varying(255),
+  office_status character varying(255),
   production_status integer,
   date timestamp without time zone,
   deadline timestamp without time zone
@@ -470,9 +968,13 @@ CREATE TABLE IF NOT EXISTS contractor_work (
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS production_comment text;
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS date timestamp without time zone;
+ALTER TABLE production_work ADD COLUMN IF NOT EXISTS item_status character varying(255);
+ALTER TABLE production_work ADD COLUMN IF NOT EXISTS office_status character varying(255);
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS production_comment text;
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS date timestamp without time zone;
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS item_status character varying(255);
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS office_status character varying(255);
 ALTER TABLE contractor_work ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE contractor_work ADD COLUMN IF NOT EXISTS production_comment text;
 
@@ -1169,11 +1671,11 @@ BEGIN
 
   INSERT INTO production_work (
     id, "order", customer, customer_company, manager_employee,
-    product_name, quantity, technical_task_text, production_comment, url, production_status, date, deadline
+    product_name, quantity, technical_task_text, production_comment, url, item_status, office_status, production_status, date, deadline
   )
   SELECT
     oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
-    oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, o.date, oi.deadline
+    oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.item_status, oi.office_status, oi.production_status, o.date, oi.deadline
   FROM orders_items oi
   JOIN orders o ON o.id = oi."order"
   LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
@@ -1183,11 +1685,11 @@ BEGIN
 
   INSERT INTO screen_printing_work (
     id, "order", customer, customer_company, manager_employee,
-    product_name, quantity, technical_task_text, production_comment, url, production_status, date, deadline
+    product_name, quantity, technical_task_text, production_comment, url, item_status, office_status, production_status, date, deadline
   )
   SELECT
     oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
-    oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, o.date, oi.deadline
+    oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.item_status, oi.office_status, oi.production_status, o.date, oi.deadline
   FROM orders_items oi
   JOIN orders o ON o.id = oi."order"
   LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
@@ -1762,11 +2264,11 @@ DELETE FROM screen_printing_work;
 DELETE FROM contractor_work;
 INSERT INTO production_work (
   id, "order", customer, customer_company, manager_employee,
-  product_name, quantity, technical_task_text, production_comment, url, production_status, date, deadline
+  product_name, quantity, technical_task_text, production_comment, url, item_status, office_status, production_status, date, deadline
 )
 SELECT
   oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
-  oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, o.date, oi.deadline
+  oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.item_status, oi.office_status, oi.production_status, o.date, oi.deadline
 FROM orders_items oi
 JOIN orders o ON o.id = oi."order"
 LEFT JOIN order_statuses os ON os.id = o.order_status
@@ -1787,11 +2289,11 @@ WHERE (
 
 INSERT INTO screen_printing_work (
   id, "order", customer, customer_company, manager_employee,
-  product_name, quantity, technical_task_text, production_comment, url, production_status, date, deadline
+  product_name, quantity, technical_task_text, production_comment, url, item_status, office_status, production_status, date, deadline
 )
 SELECT
   oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
-  oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.production_status, o.date, oi.deadline
+  oi.product_name, oi.quantity, oi.technical_task_text, oi.production_comment, oi.url, oi.item_status, oi.office_status, oi.production_status, o.date, oi.deadline
 FROM orders_items oi
 JOIN orders o ON o.id = oi."order"
 LEFT JOIN order_statuses os ON os.id = o.order_status
@@ -2095,6 +2597,8 @@ INSERT INTO directus_fields (
   ('production_work', 'technical_task_text', NULL, 'input-multiline', NULL, NULL, NULL, true, false, 9, 'full', '[{"language":"ru-RU","translation":"РўР—"}]'::json, false, true),
   ('production_work', 'production_comment', NULL, 'input-multiline', NULL, NULL, NULL, false, false, 10, 'full', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439'))::json, false, true),
   ('production_work', 'url', NULL, 'input', '{"iconLeft":"web_traffic"}'::json, NULL, NULL, true, false, 11, 'full', '[{"language":"ru-RU","translation":"РЎСЃС‹Р»РєР° РЅР° РјР°РєРµС‚"}]'::json, false, true),
+  ('production_work', 'item_status', NULL, 'select-dropdown', '{"choices":[{"text":"Новый","value":"new"},{"text":"Согласование","value":"approval"},{"text":"Доработка макета","value":"layout_revision"},{"text":"Отправлен в работу","value":"sent_to_work"},{"text":"В работе","value":"in_work"},{"text":"Готов","value":"ready"},{"text":"Доставлен","value":"delivered"},{"text":"Отменен","value":"cancelled"}]}'::json, NULL, NULL, true, false, 11, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0442\0430\0442\0443\0441 \043f\043e\0437\0438\0446\0438\0438'))::json, false, true),
+  ('production_work', 'office_status', NULL, 'select-dropdown', '{"choices":[{"text":"Не в офисе","value":"not_in_office"},{"text":"В офисе","value":"in_office"},{"text":"Выдано","value":"issued"}]}'::json, NULL, NULL, true, false, 11, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0442\0430\0442\0443\0441 \043e\0444\0438\0441\0430'))::json, false, true),
   ('production_work', 'production_status', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 12, 'half', '[{"language":"ru-RU","translation":"РЎС‚Р°С‚СѓСЃ РїСЂРѕРёР·РІРѕРґСЃС‚РІР°"}]'::json, false, true),
 
   ('screen_printing_work', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'full', NULL, false, true),
@@ -2109,6 +2613,8 @@ INSERT INTO directus_fields (
   ('screen_printing_work', 'technical_task_text', NULL, 'input-multiline', NULL, NULL, NULL, true, false, 9, 'full', '[{"language":"ru-RU","translation":"РўР—"}]'::json, false, true),
   ('screen_printing_work', 'production_comment', NULL, 'input-multiline', NULL, NULL, NULL, false, false, 10, 'full', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439'))::json, false, true),
   ('screen_printing_work', 'url', NULL, 'input', '{"iconLeft":"web_traffic"}'::json, NULL, NULL, true, false, 11, 'full', '[{"language":"ru-RU","translation":"РЎСЃС‹Р»РєР° РЅР° РјР°РєРµС‚"}]'::json, false, true),
+  ('screen_printing_work', 'item_status', NULL, 'select-dropdown', '{"choices":[{"text":"Новый","value":"new"},{"text":"Согласование","value":"approval"},{"text":"Доработка макета","value":"layout_revision"},{"text":"Отправлен в работу","value":"sent_to_work"},{"text":"В работе","value":"in_work"},{"text":"Готов","value":"ready"},{"text":"Доставлен","value":"delivered"},{"text":"Отменен","value":"cancelled"}]}'::json, NULL, NULL, true, false, 11, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0442\0430\0442\0443\0441 \043f\043e\0437\0438\0446\0438\0438'))::json, false, true),
+  ('screen_printing_work', 'office_status', NULL, 'select-dropdown', '{"choices":[{"text":"Не в офисе","value":"not_in_office"},{"text":"В офисе","value":"in_office"},{"text":"Выдано","value":"issued"}]}'::json, NULL, NULL, true, false, 11, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0442\0430\0442\0443\0441 \043e\0444\0438\0441\0430'))::json, false, true),
   ('screen_printing_work', 'production_status', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 12, 'half', '[{"language":"ru-RU","translation":"РЎС‚Р°С‚СѓСЃ РїСЂРѕРёР·РІРѕРґСЃС‚РІР°"}]'::json, false, true),
 
   ('contractor_work', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'full', NULL, false, true),
@@ -2536,27 +3042,27 @@ VALUES
   ('product_routing_rules', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
   ('product_routing_rules', 'update', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
   ('product_routing_rules', 'delete', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
-  ('office_issue', 'read', '{}'::json, NULL, NULL, 'id,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,add_payment,overpayment,payment_type,payment_comment,order_items', '00000000-0000-4000-8000-000000000203'),
+  ('office_issue', 'read', '{}'::json, NULL, NULL, 'id,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,manager_name,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,add_payment,overpayment,payment_type,payment_comment,order_items', '00000000-0000-4000-8000-000000000203'),
   ('office_issue', 'update', '{}'::json, NULL, NULL, 'id,office_summary,office_customer,office_payment,office_positions,office_status,add_payment,payment_type,payment_comment,order_items', '00000000-0000-4000-8000-000000000203'),
   ('office_issue_items', 'read', '{}'::json, NULL, NULL, 'id,office_issue,product_name,quantity,office_status', '00000000-0000-4000-8000-000000000203'),
   ('office_issue_items', 'update', '{}'::json, NULL, NULL, 'office_status', '00000000-0000-4000-8000-000000000203'),
-  ('office_issue_archive', 'read', '{}'::json, NULL, NULL, 'id,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,overpayment,order_items', '00000000-0000-4000-8000-000000000203'),
+  ('office_issue_archive', 'read', '{}'::json, NULL, NULL, 'id,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,manager_name,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,overpayment,order_items', '00000000-0000-4000-8000-000000000203'),
   ('office_issue_archive_items', 'read', '{}'::json, NULL, NULL, 'id,office_issue,product_name,quantity,office_status', '00000000-0000-4000-8000-000000000203'),
   ('office_items_in_office', 'read', '{}'::json, NULL, NULL, 'id,order_number,office_issue,customer_name,customer_company_name,manager_employee,product_name,quantity,office_status', '00000000-0000-4000-8000-000000000203'),
   ('office_items_in_office', 'update', '{}'::json, NULL, NULL, 'office_status', '00000000-0000-4000-8000-000000000203'),
   ('employee_positions', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000203'),
 
-  ('office_issue', 'read', '{}'::json, NULL, NULL, 'id,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,add_payment,overpayment,payment_type,payment_comment,order_items', '00000000-0000-4000-8000-000000000201'),
+  ('office_issue', 'read', '{}'::json, NULL, NULL, 'id,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,manager_name,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,add_payment,overpayment,payment_type,payment_comment,order_items', '00000000-0000-4000-8000-000000000201'),
   ('office_issue', 'update', '{}'::json, NULL, NULL, 'id,office_summary,office_customer,office_payment,office_positions,office_status,add_payment,payment_type,payment_comment,order_items', '00000000-0000-4000-8000-000000000201'),
   ('office_issue_items', 'read', '{}'::json, NULL, NULL, 'id,office_issue,product_name,quantity,office_status', '00000000-0000-4000-8000-000000000201'),
   ('office_issue_items', 'update', '{}'::json, NULL, NULL, 'office_status', '00000000-0000-4000-8000-000000000201'),
-  ('office_issue_archive', 'read', '{}'::json, NULL, NULL, 'id,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,overpayment,order_items', '00000000-0000-4000-8000-000000000201'),
+  ('office_issue_archive', 'read', '{}'::json, NULL, NULL, 'id,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,manager_name,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,overpayment,order_items', '00000000-0000-4000-8000-000000000201'),
   ('office_issue_archive_items', 'read', '{}'::json, NULL, NULL, 'id,office_issue,product_name,quantity,office_status', '00000000-0000-4000-8000-000000000201'),
   ('office_items_in_office', 'read', '{}'::json, NULL, NULL, 'id,order_number,office_issue,customer_name,customer_company_name,manager_employee,product_name,quantity,office_status', '00000000-0000-4000-8000-000000000201'),
   ('office_items_in_office', 'update', '{}'::json, NULL, NULL, 'office_status', '00000000-0000-4000-8000-000000000201'),
   ('office_issue_items', 'read', '{"office_issue":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}'::json, NULL, NULL, 'id,office_issue,product_name,quantity,office_status', '00000000-0000-4000-8000-000000000202'),
   ('office_issue_items', 'update', '{"office_issue":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}'::json, NULL, NULL, 'office_status', '00000000-0000-4000-8000-000000000202'),
-  ('office_issue_archive', 'read', '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json, NULL, NULL, 'id,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,overpayment,order_items', '00000000-0000-4000-8000-000000000202'),
+  ('office_issue_archive', 'read', '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json, NULL, NULL, 'id,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,manager_name,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,overpayment,order_items', '00000000-0000-4000-8000-000000000202'),
   ('office_issue_archive_items', 'read', '{"office_issue":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}'::json, NULL, NULL, 'id,office_issue,product_name,quantity,office_status', '00000000-0000-4000-8000-000000000202'),
   ('office_items_in_office', 'read', '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json, NULL, NULL, 'id,order_number,office_issue,customer_name,customer_company_name,manager_employee,product_name,quantity,office_status', '00000000-0000-4000-8000-000000000202'),
   ('office_items_in_office', 'update', '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json, NULL, NULL, 'office_status', '00000000-0000-4000-8000-000000000202'),
@@ -2577,14 +3083,14 @@ VALUES
   ('contractor_work', 'update', '{"_and":[{"contractor_has_own_view":{"_eq":true}},{"access_user":{"_eq":"$CURRENT_USER"}}]}'::json, NULL, NULL, 'production_status,production_comment', '00000000-0000-4000-8000-000000000207');
 
 UPDATE directus_permissions
-   SET fields = 'id,office_summary,office_customer,office_payment,office_positions,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,add_payment,overpayment,payment_type,payment_comment,order_items'
+   SET fields = 'id,office_summary,office_customer,office_payment,office_positions,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,manager_name,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,add_payment,overpayment,payment_type,payment_comment,order_items'
  WHERE collection = 'office_issue'
    AND action = 'read'
    AND fields IS NOT NULL
    AND fields <> '*';
 
 UPDATE directus_permissions
-   SET fields = 'id,office_summary,office_customer,office_payment,office_positions,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,overpayment,order_items'
+   SET fields = 'id,office_summary,office_customer,office_payment,office_positions,order_link,order_number,date,deadline,customer_name,customer_phone,customer_company_name,manager_employee,manager_name,order_status_name,office_status,order_sum,paid_amount,payment_due,office_payment_due,overpayment,order_items'
  WHERE collection = 'office_issue_archive'
    AND action = 'read'
    AND fields IS NOT NULL
@@ -2870,6 +3376,41 @@ WHERE NOT EXISTS (
     AND dp.policy = p.policy_id::uuid
 );
 
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+SELECT
+  'employees',
+  'read',
+  '{"directus_user":{"_eq":"$CURRENT_USER"}}'::json,
+  NULL,
+  NULL,
+  'id,full_name,order_percent',
+  '00000000-0000-4000-8000-000000000201'::uuid
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM directus_permissions dp
+  WHERE dp.collection = 'employees'
+    AND dp.action = 'read'
+    AND dp.policy = '00000000-0000-4000-8000-000000000201'::uuid
+    AND dp.fields = 'id,full_name,order_percent'
+);
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+SELECT
+  'employee_salary_summary',
+  'read',
+  '{"employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,
+  NULL,
+  NULL,
+  'id,employee,employee_name,position_name,order_percent,orders_sum,paid_orders_sum,unpaid_orders_sum,commission_accrued,salary_paid,advances_paid,salary_debt',
+  '00000000-0000-4000-8000-000000000201'::uuid
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM directus_permissions dp
+  WHERE dp.collection = 'employee_salary_summary'
+    AND dp.action = 'read'
+    AND dp.policy = '00000000-0000-4000-8000-000000000201'::uuid
+);
+
 DELETE FROM directus_permissions a
 USING directus_permissions b
 WHERE a.id > b.id
@@ -2881,6 +3422,37 @@ WHERE a.id > b.id
 
 UPDATE directus_settings
 SET default_language = 'ru-RU'
+WHERE id = 1;
+
+UPDATE directus_settings
+SET module_bar = (
+  SELECT jsonb_agg(item)
+  FROM (
+    SELECT item
+    FROM jsonb_array_elements(COALESCE(module_bar, '[]'::json)::jsonb) AS current_items(item)
+    WHERE item->>'id' NOT IN (
+      'symbolika-costing',
+      'symbolika-orders',
+      'symbolika-production',
+      'symbolika-finance',
+      'symbolika-clients',
+      'symbolika-management',
+      'symbolika-admin'
+    )
+    UNION ALL
+    SELECT *
+    FROM jsonb_array_elements(
+      '[
+        {"type":"module","id":"symbolika-orders","enabled":true},
+        {"type":"module","id":"symbolika-production","enabled":true},
+        {"type":"module","id":"symbolika-finance","enabled":true},
+        {"type":"module","id":"symbolika-clients","enabled":true},
+        {"type":"module","id":"symbolika-management","enabled":true},
+        {"type":"module","id":"symbolika-admin","enabled":true}
+      ]'::jsonb
+    )
+  ) module_items(item)
+)::json
 WHERE id = 1;
 
 UPDATE directus_users
@@ -3828,6 +4400,8 @@ CREATE TABLE IF NOT EXISTS orders_overview (
   order_number character varying(255),
   date timestamp without time zone,
   deadline timestamp without time zone,
+  customer integer,
+  customer_company integer,
   customer_display character varying(255),
   manager_name character varying(255),
   shipping_method character varying(255),
@@ -3867,6 +4441,59 @@ CREATE TABLE IF NOT EXISTS customer_reconciliation (
   our_debt_to_customer numeric(10,2),
   reconciliation_result character varying(255)
 );
+
+CREATE TABLE IF NOT EXISTS customer_reconciliation_items (
+  id integer PRIMARY KEY,
+  order_item integer,
+  order_link integer,
+  order_number character varying(255),
+  date timestamp without time zone,
+  deadline timestamp without time zone,
+  customer integer,
+  customer_name character varying(255),
+  customer_company integer,
+  customer_company_name character varying(255),
+  counterparty_name character varying(255),
+  manager_employee integer,
+  manager_name character varying(255),
+  order_status integer,
+  order_status_name character varying(255),
+  production_status_name character varying(255),
+  product_name character varying(255),
+  quantity numeric(10,2),
+  price_per_unit numeric(10,2),
+  item_sum numeric(10,2),
+  order_sum numeric(10,2),
+  paid_amount numeric(10,2),
+  payment_due numeric(10,2),
+  overpayment numeric(10,2),
+  reconciliation_result character varying(255)
+);
+
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS order_item integer;
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS order_number character varying(255);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS date timestamp without time zone;
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS deadline timestamp without time zone;
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS customer integer;
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS customer_name character varying(255);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS customer_company integer;
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS customer_company_name character varying(255);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS counterparty_name character varying(255);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS manager_employee integer;
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS manager_name character varying(255);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS order_status integer;
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS order_status_name character varying(255);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS production_status_name character varying(255);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS product_name character varying(255);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS quantity numeric(10,2);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS price_per_unit numeric(10,2);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS item_sum numeric(10,2);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS order_sum numeric(10,2);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS paid_amount numeric(10,2);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS payment_due numeric(10,2);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS overpayment numeric(10,2);
+ALTER TABLE customer_reconciliation_items ADD COLUMN IF NOT EXISTS reconciliation_result character varying(255);
 
 CREATE TABLE IF NOT EXISTS orders_due_today (LIKE orders_overview INCLUDING ALL);
 CREATE TABLE IF NOT EXISTS orders_due_this_week (LIKE orders_overview INCLUDING ALL);
@@ -3939,12 +4566,47 @@ CREATE TABLE IF NOT EXISTS my_orders_completed_payments (LIKE my_orders_in_work_
 CREATE TABLE IF NOT EXISTS my_orders_unpaid_payments (LIKE my_orders_in_work_payments INCLUDING ALL);
 
 ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS customer integer;
+ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS customer_company integer;
+ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS order_status integer;
+ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS order_status_name character varying(255);
+ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS office_status character varying(255);
 ALTER TABLE orders_due_today ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE orders_due_today ADD COLUMN IF NOT EXISTS customer integer;
+ALTER TABLE orders_due_today ADD COLUMN IF NOT EXISTS customer_company integer;
+ALTER TABLE orders_due_today ADD COLUMN IF NOT EXISTS order_status integer;
+ALTER TABLE orders_due_today ADD COLUMN IF NOT EXISTS order_status_name character varying(255);
+ALTER TABLE orders_due_today ADD COLUMN IF NOT EXISTS office_status character varying(255);
 ALTER TABLE orders_due_this_week ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE orders_due_this_week ADD COLUMN IF NOT EXISTS customer integer;
+ALTER TABLE orders_due_this_week ADD COLUMN IF NOT EXISTS customer_company integer;
+ALTER TABLE orders_due_this_week ADD COLUMN IF NOT EXISTS order_status integer;
+ALTER TABLE orders_due_this_week ADD COLUMN IF NOT EXISTS order_status_name character varying(255);
+ALTER TABLE orders_due_this_week ADD COLUMN IF NOT EXISTS office_status character varying(255);
 ALTER TABLE orders_due_next_week ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE orders_due_next_week ADD COLUMN IF NOT EXISTS customer integer;
+ALTER TABLE orders_due_next_week ADD COLUMN IF NOT EXISTS customer_company integer;
+ALTER TABLE orders_due_next_week ADD COLUMN IF NOT EXISTS order_status integer;
+ALTER TABLE orders_due_next_week ADD COLUMN IF NOT EXISTS order_status_name character varying(255);
+ALTER TABLE orders_due_next_week ADD COLUMN IF NOT EXISTS office_status character varying(255);
 ALTER TABLE orders_due_this_month ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE orders_due_this_month ADD COLUMN IF NOT EXISTS customer integer;
+ALTER TABLE orders_due_this_month ADD COLUMN IF NOT EXISTS customer_company integer;
+ALTER TABLE orders_due_this_month ADD COLUMN IF NOT EXISTS order_status integer;
+ALTER TABLE orders_due_this_month ADD COLUMN IF NOT EXISTS order_status_name character varying(255);
+ALTER TABLE orders_due_this_month ADD COLUMN IF NOT EXISTS office_status character varying(255);
 ALTER TABLE orders_due_urgent ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE orders_due_urgent ADD COLUMN IF NOT EXISTS customer integer;
+ALTER TABLE orders_due_urgent ADD COLUMN IF NOT EXISTS customer_company integer;
+ALTER TABLE orders_due_urgent ADD COLUMN IF NOT EXISTS order_status integer;
+ALTER TABLE orders_due_urgent ADD COLUMN IF NOT EXISTS order_status_name character varying(255);
+ALTER TABLE orders_due_urgent ADD COLUMN IF NOT EXISTS office_status character varying(255);
 ALTER TABLE orders_due_next_month ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE orders_due_next_month ADD COLUMN IF NOT EXISTS customer integer;
+ALTER TABLE orders_due_next_month ADD COLUMN IF NOT EXISTS customer_company integer;
+ALTER TABLE orders_due_next_month ADD COLUMN IF NOT EXISTS order_status integer;
+ALTER TABLE orders_due_next_month ADD COLUMN IF NOT EXISTS order_status_name character varying(255);
+ALTER TABLE orders_due_next_month ADD COLUMN IF NOT EXISTS office_status character varying(255);
 ALTER TABLE customer_reconciliation ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE customer_reconciliation ADD COLUMN IF NOT EXISTS customer_debt_to_us numeric(10,2);
 ALTER TABLE customer_reconciliation ADD COLUMN IF NOT EXISTS our_debt_to_customer numeric(10,2);
@@ -3952,6 +4614,12 @@ ALTER TABLE customer_reconciliation ADD COLUMN IF NOT EXISTS reconciliation_resu
 ALTER TABLE my_orders_in_work ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE my_orders_completed ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE my_orders_unpaid ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE my_orders_in_work ADD COLUMN IF NOT EXISTS customer integer;
+ALTER TABLE my_orders_completed ADD COLUMN IF NOT EXISTS customer integer;
+ALTER TABLE my_orders_unpaid ADD COLUMN IF NOT EXISTS customer integer;
+ALTER TABLE my_orders_in_work ADD COLUMN IF NOT EXISTS customer_company integer;
+ALTER TABLE my_orders_completed ADD COLUMN IF NOT EXISTS customer_company integer;
+ALTER TABLE my_orders_unpaid ADD COLUMN IF NOT EXISTS customer_company integer;
 
 CREATE OR REPLACE FUNCTION refresh_orders_due_tables()
 RETURNS void
@@ -3965,40 +4633,94 @@ BEGIN
   DELETE FROM orders_due_urgent;
   DELETE FROM orders_due_next_month;
 
-  INSERT INTO orders_due_urgent
-  SELECT *
-  FROM orders_overview
-  WHERE deadline < CURRENT_DATE + INTERVAL '1 day';
+  DROP TABLE IF EXISTS pg_temp.symbolika_order_due_dates;
+  CREATE TEMP TABLE symbolika_order_due_dates ON COMMIT DROP AS
+  SELECT oo.id AS order_id, d.deadline
+  FROM orders_overview oo
+  JOIN LATERAL (
+    SELECT oo.deadline
+    UNION ALL
+    SELECT oi.deadline
+    FROM orders_items oi
+    WHERE oi."order" = oo.id
+  ) d(deadline) ON d.deadline IS NOT NULL;
 
-  INSERT INTO orders_due_today
-  SELECT *
-  FROM orders_overview
-  WHERE deadline >= CURRENT_DATE
-    AND deadline < CURRENT_DATE + INTERVAL '1 day';
+  INSERT INTO orders_due_urgent (
+    id, order_number, date, deadline, customer_display, manager_name,
+    shipping_method, shipping_method_name, order_sum, paid_amount, payment_due, order_link
+  )
+  SELECT DISTINCT ON (oo.id)
+    oo.id, oo.order_number, oo.date, dd.deadline, oo.customer_display, oo.manager_name,
+    oo.shipping_method, oo.shipping_method_name, oo.order_sum, oo.paid_amount, oo.payment_due, oo.order_link
+  FROM orders_overview oo
+  JOIN symbolika_order_due_dates dd ON dd.order_id = oo.id
+  WHERE dd.deadline < CURRENT_DATE + INTERVAL '1 day'
+  ORDER BY oo.id, dd.deadline;
 
-  INSERT INTO orders_due_this_week
-  SELECT *
-  FROM orders_overview
-  WHERE deadline >= date_trunc('week', CURRENT_DATE)::date
-    AND deadline < date_trunc('week', CURRENT_DATE)::date + INTERVAL '7 days';
+  INSERT INTO orders_due_today (
+    id, order_number, date, deadline, customer_display, manager_name,
+    shipping_method, shipping_method_name, order_sum, paid_amount, payment_due, order_link
+  )
+  SELECT DISTINCT ON (oo.id)
+    oo.id, oo.order_number, oo.date, dd.deadline, oo.customer_display, oo.manager_name,
+    oo.shipping_method, oo.shipping_method_name, oo.order_sum, oo.paid_amount, oo.payment_due, oo.order_link
+  FROM orders_overview oo
+  JOIN symbolika_order_due_dates dd ON dd.order_id = oo.id
+  WHERE dd.deadline >= CURRENT_DATE
+    AND dd.deadline < CURRENT_DATE + INTERVAL '1 day'
+  ORDER BY oo.id, dd.deadline;
 
-  INSERT INTO orders_due_next_week
-  SELECT *
-  FROM orders_overview
-  WHERE deadline >= date_trunc('week', CURRENT_DATE)::date + INTERVAL '7 days'
-    AND deadline < date_trunc('week', CURRENT_DATE)::date + INTERVAL '14 days';
+  INSERT INTO orders_due_this_week (
+    id, order_number, date, deadline, customer_display, manager_name,
+    shipping_method, shipping_method_name, order_sum, paid_amount, payment_due, order_link
+  )
+  SELECT DISTINCT ON (oo.id)
+    oo.id, oo.order_number, oo.date, dd.deadline, oo.customer_display, oo.manager_name,
+    oo.shipping_method, oo.shipping_method_name, oo.order_sum, oo.paid_amount, oo.payment_due, oo.order_link
+  FROM orders_overview oo
+  JOIN symbolika_order_due_dates dd ON dd.order_id = oo.id
+  WHERE dd.deadline >= date_trunc('week', CURRENT_DATE)::date
+    AND dd.deadline < date_trunc('week', CURRENT_DATE)::date + INTERVAL '7 days'
+  ORDER BY oo.id, dd.deadline;
 
-  INSERT INTO orders_due_this_month
-  SELECT *
-  FROM orders_overview
-  WHERE deadline >= date_trunc('month', CURRENT_DATE)::date
-    AND deadline < date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month';
+  INSERT INTO orders_due_next_week (
+    id, order_number, date, deadline, customer_display, manager_name,
+    shipping_method, shipping_method_name, order_sum, paid_amount, payment_due, order_link
+  )
+  SELECT DISTINCT ON (oo.id)
+    oo.id, oo.order_number, oo.date, dd.deadline, oo.customer_display, oo.manager_name,
+    oo.shipping_method, oo.shipping_method_name, oo.order_sum, oo.paid_amount, oo.payment_due, oo.order_link
+  FROM orders_overview oo
+  JOIN symbolika_order_due_dates dd ON dd.order_id = oo.id
+  WHERE dd.deadline >= date_trunc('week', CURRENT_DATE)::date + INTERVAL '7 days'
+    AND dd.deadline < date_trunc('week', CURRENT_DATE)::date + INTERVAL '14 days'
+  ORDER BY oo.id, dd.deadline;
 
-  INSERT INTO orders_due_next_month
-  SELECT *
-  FROM orders_overview
-  WHERE deadline >= date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month'
-    AND deadline < date_trunc('month', CURRENT_DATE)::date + INTERVAL '2 months';
+  INSERT INTO orders_due_this_month (
+    id, order_number, date, deadline, customer_display, manager_name,
+    shipping_method, shipping_method_name, order_sum, paid_amount, payment_due, order_link
+  )
+  SELECT DISTINCT ON (oo.id)
+    oo.id, oo.order_number, oo.date, dd.deadline, oo.customer_display, oo.manager_name,
+    oo.shipping_method, oo.shipping_method_name, oo.order_sum, oo.paid_amount, oo.payment_due, oo.order_link
+  FROM orders_overview oo
+  JOIN symbolika_order_due_dates dd ON dd.order_id = oo.id
+  WHERE dd.deadline >= date_trunc('month', CURRENT_DATE)::date
+    AND dd.deadline < date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month'
+  ORDER BY oo.id, dd.deadline;
+
+  INSERT INTO orders_due_next_month (
+    id, order_number, date, deadline, customer_display, manager_name,
+    shipping_method, shipping_method_name, order_sum, paid_amount, payment_due, order_link
+  )
+  SELECT DISTINCT ON (oo.id)
+    oo.id, oo.order_number, oo.date, dd.deadline, oo.customer_display, oo.manager_name,
+    oo.shipping_method, oo.shipping_method_name, oo.order_sum, oo.paid_amount, oo.payment_due, oo.order_link
+  FROM orders_overview oo
+  JOIN symbolika_order_due_dates dd ON dd.order_id = oo.id
+  WHERE dd.deadline >= date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month'
+    AND dd.deadline < date_trunc('month', CURRENT_DATE)::date + INTERVAL '2 months'
+  ORDER BY oo.id, dd.deadline;
 END;
 $$;
 
@@ -4008,6 +4730,7 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
   DELETE FROM customer_reconciliation;
+  DELETE FROM customer_reconciliation_items;
 
   INSERT INTO customer_reconciliation (
     id, order_link, order_number, date, deadline,
@@ -4047,6 +4770,51 @@ BEGIN
   LEFT JOIN customer_companies cc ON cc.id = o.customer_company
   LEFT JOIN employees e ON e.id = o.manager_employee
   LEFT JOIN order_statuses os ON os.id = o.order_status;
+
+  INSERT INTO customer_reconciliation_items (
+    id, order_item, order_link, order_number, date, deadline,
+    customer, customer_name, customer_company, customer_company_name, counterparty_name,
+    manager_employee, manager_name, order_status, order_status_name, production_status_name,
+    product_name, quantity, price_per_unit, item_sum,
+    order_sum, paid_amount, payment_due, overpayment, reconciliation_result
+  )
+  SELECT
+    oi.id,
+    oi.id,
+    o.id,
+    o.order_number,
+    o.date,
+    COALESCE(oi.deadline, o.deadline),
+    o.customer,
+    c.name,
+    o.customer_company,
+    cc.name,
+    COALESCE(NULLIF(cc.name, ''), NULLIF(c.name, ''), U&'\0411\0435\0437 \0437\0430\043a\0430\0437\0447\0438\043a\0430'),
+    o.manager_employee,
+    e.full_name,
+    o.order_status,
+    os.name,
+    ps.name,
+    oi.product_name,
+    COALESCE(oi.quantity, 0),
+    COALESCE(oi.price_per_unit, 0),
+    COALESCE(oi.order_sum, COALESCE(oi.quantity, 0) * COALESCE(oi.price_per_unit, 0)),
+    COALESCE(o.order_sum, 0),
+    COALESCE(o.paid_amount, 0),
+    COALESCE(o.payment_due, 0),
+    GREATEST(COALESCE(o.paid_amount, 0) - COALESCE(o.order_sum, 0), 0)::numeric(10,2),
+    CASE
+      WHEN COALESCE(o.payment_due, 0) > 0 THEN U&'\041a\043b\0438\0435\043d\0442 \0434\043e\043b\0436\0435\043d'
+      WHEN COALESCE(o.payment_due, 0) < 0 THEN U&'\041c\044b \0434\043e\043b\0436\043d\044b'
+      ELSE U&'\0420\0430\0441\0447\0435\0442 \0437\0430\043a\0440\044b\0442'
+    END
+  FROM orders_items oi
+  JOIN orders o ON o.id = oi."order"
+  LEFT JOIN customers c ON c.id = o.customer
+  LEFT JOIN customer_companies cc ON cc.id = o.customer_company
+  LEFT JOIN employees e ON e.id = o.manager_employee
+  LEFT JOIN order_statuses os ON os.id = o.order_status
+  LEFT JOIN production_statuses ps ON ps.id = oi.production_status;
 END;
 $$;
 
@@ -4108,12 +4876,13 @@ BEGIN
 
   IF is_completed THEN
     INSERT INTO my_orders_completed (
-      id, order_number, date, deadline, customer_display, manager_employee, manager_name,
+      id, order_number, date, deadline, customer, customer_company, customer_display, manager_employee, manager_name,
       order_status, order_status_name, office_status, shipping_method, shipping_method_name,
       order_sum, paid_amount, payment_due
     )
     VALUES (
       order_row.id, order_row.order_number, order_row.date, order_row.deadline,
+      order_row.customer, order_row.customer_company,
       order_row.customer_display, order_row.manager_employee, order_row.manager_name,
       order_row.order_status, order_row.order_status_name, order_row.office_status,
       order_row.shipping_method, order_row.shipping_method_name,
@@ -4121,12 +4890,13 @@ BEGIN
     );
   ELSE
     INSERT INTO my_orders_in_work (
-      id, order_number, date, deadline, customer_display, manager_employee, manager_name,
+      id, order_number, date, deadline, customer, customer_company, customer_display, manager_employee, manager_name,
       order_status, order_status_name, office_status, shipping_method, shipping_method_name,
       order_sum, paid_amount, payment_due
     )
     VALUES (
       order_row.id, order_row.order_number, order_row.date, order_row.deadline,
+      order_row.customer, order_row.customer_company,
       order_row.customer_display, order_row.manager_employee, order_row.manager_name,
       order_row.order_status, order_row.order_status_name, order_row.office_status,
       order_row.shipping_method, order_row.shipping_method_name,
@@ -4136,12 +4906,13 @@ BEGIN
 
   IF is_unpaid THEN
     INSERT INTO my_orders_unpaid (
-      id, order_number, date, deadline, customer_display, manager_employee, manager_name,
+      id, order_number, date, deadline, customer, customer_company, customer_display, manager_employee, manager_name,
       order_status, order_status_name, office_status, shipping_method, shipping_method_name,
       order_sum, paid_amount, payment_due
     )
     VALUES (
       order_row.id, order_row.order_number, order_row.date, order_row.deadline,
+      order_row.customer, order_row.customer_company,
       order_row.customer_display, order_row.manager_employee, order_row.manager_name,
       order_row.order_status, order_row.order_status_name, order_row.office_status,
       order_row.shipping_method, order_row.shipping_method_name,
@@ -4353,7 +5124,8 @@ BEGIN
   DELETE FROM orders_overview WHERE id = order_id;
 
   INSERT INTO orders_overview (
-    id, order_number, date, deadline, customer_display, manager_name,
+    id, order_number, date, deadline, customer, customer_company, customer_display, manager_name,
+    order_status, order_status_name, office_status,
     shipping_method, shipping_method_name, order_sum, paid_amount, payment_due
   )
   SELECT
@@ -4361,8 +5133,13 @@ BEGIN
     o.order_number,
     o.date,
     o.deadline,
+    o.customer,
+    o.customer_company,
     COALESCE(NULLIF(cc.name, ''), NULLIF(c.name, ''), U&'\0411\0435\0437 \0437\0430\043a\0430\0437\0447\0438\043a\0430'),
     e.full_name,
+    o.order_status,
+    os.name,
+    o.office_status,
     o.shipping_method,
     CASE o.shipping_method
       WHEN 'office_pickup' THEN U&'\0412\044b\0434\0430\0447\0430 \0432 \043e\0444\0438\0441\0435'
@@ -4373,11 +5150,12 @@ BEGIN
     o.order_sum,
     o.paid_amount,
     o.payment_due
-  FROM orders o
-  LEFT JOIN customers c ON c.id = o.customer
-  LEFT JOIN customer_companies cc ON cc.id = o.customer_company
-  LEFT JOIN employees e ON e.id = o.manager_employee
-  WHERE o.id = order_id;
+FROM orders o
+LEFT JOIN customers c ON c.id = o.customer
+LEFT JOIN customer_companies cc ON cc.id = o.customer_company
+LEFT JOIN employees e ON e.id = o.manager_employee
+LEFT JOIN order_statuses os ON os.id = o.order_status
+WHERE o.id = order_id;
 
   UPDATE orders_overview
   SET order_link = id
@@ -4478,7 +5256,8 @@ EXECUTE FUNCTION refresh_orders_due_on_user_page_trigger();
 DELETE FROM orders_overview_items;
 DELETE FROM orders_overview;
 INSERT INTO orders_overview (
-  id, order_number, date, deadline, customer_display, manager_name,
+  id, order_number, date, deadline, customer, customer_company, customer_display, manager_name,
+  order_status, order_status_name, office_status,
   shipping_method, shipping_method_name, order_sum, paid_amount, payment_due
 )
 SELECT
@@ -4486,8 +5265,13 @@ SELECT
   o.order_number,
   o.date,
   o.deadline,
+  o.customer,
+  o.customer_company,
   COALESCE(NULLIF(cc.name, ''), NULLIF(c.name, ''), U&'\0411\0435\0437 \0437\0430\043a\0430\0437\0447\0438\043a\0430'),
   e.full_name,
+  o.order_status,
+  os.name,
+  o.office_status,
   o.shipping_method,
   CASE o.shipping_method
     WHEN 'office_pickup' THEN U&'\0412\044b\0434\0430\0447\0430 \0432 \043e\0444\0438\0441\0435'
@@ -4501,7 +5285,8 @@ SELECT
 FROM orders o
 LEFT JOIN customers c ON c.id = o.customer
 LEFT JOIN customer_companies cc ON cc.id = o.customer_company
-LEFT JOIN employees e ON e.id = o.manager_employee;
+LEFT JOIN employees e ON e.id = o.manager_employee
+LEFT JOIN order_statuses os ON os.id = o.order_status;
 
 UPDATE orders_overview
 SET order_link = id;
@@ -4550,6 +5335,7 @@ INSERT INTO directus_collections (
   ('orders_due_next_month', 'event_upcoming', NULL, '{{order_number}}', false, false, '[{"language":"ru-RU","translation":"\u0412 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0435\u043c \u043c\u0435\u0441\u044f\u0446\u0435"}]'::json, true, 'all', 6, 'orders_overview', 'open', false),
   ('orders_overview_items', 'format_list_bulleted', NULL, '{{product_name}}', true, false, '[{"language":"ru-RU","translation":"\u041f\u043e\u0437\u0438\u0446\u0438\u0438 \u0441\u0432\u043e\u0434\u043a\u0438 \u0437\u0430\u043a\u0430\u0437\u043e\u0432"}]'::json, true, 'all', 1, NULL, 'open', false),
   ('customer_reconciliation', 'request_quote', NULL, '{{order_number}}', false, false, json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0432\0435\0440\043a\0430 \043f\043e \043a\043b\0438\0435\043d\0442\0430\043c'))::json, true, 'all', 7, 'orders_overview', 'open', false),
+  ('customer_reconciliation_items', 'format_list_bulleted', NULL, '{{product_name}}', true, false, json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\0437\0438\0446\0438\0438 \0441\0432\0435\0440\043a\0438'))::json, true, 'all', 1, NULL, 'open', false),
   ('my_orders_in_work', 'work_history', NULL, '{{order_number}}', false, false, json_build_array(json_build_object('language','ru-RU','translation', U&'\0417\0430\043a\0430\0437\044b \0432 \0440\0430\0431\043e\0442\0435'))::json, true, 'all', 1, 'orders', 'open', false),
   ('my_orders_completed', 'task_alt', NULL, '{{order_number}}', false, false, json_build_array(json_build_object('language','ru-RU','translation', U&'\0417\0430\0432\0435\0440\0448\0435\043d\043d\044b\0435 \0437\0430\043a\0430\0437\044b'))::json, true, 'all', 2, 'orders', 'open', false),
   ('my_orders_unpaid', 'payments', NULL, '{{order_number}}', false, false, json_build_array(json_build_object('language','ru-RU','translation', U&'\041d\0435\043e\043f\043b\0430\0447\0435\043d\043d\044b\0435 \0437\0430\043a\0430\0437\044b'))::json, true, 'all', 3, 'orders', 'open', false),
@@ -4579,6 +5365,7 @@ WHERE collection IN (
   'orders_due_urgent',
   'orders_due_next_month',
   'customer_reconciliation',
+  'customer_reconciliation_items',
   'orders_overview_items',
   'my_orders_in_work',
   'my_orders_completed',
@@ -4687,6 +5474,55 @@ FROM (VALUES
   ('customer_debt_to_us', NULL, 'input', NULL::json, NULL, NULL::json, 19, 'half', U&'\041a\043b\0438\0435\043d\0442 \0434\043e\043b\0436\0435\043d', false),
   ('our_debt_to_customer', NULL, 'input', NULL::json, NULL, NULL::json, 20, 'half', U&'\041c\044b \0434\043e\043b\0436\043d\044b', false),
   ('reconciliation_result', NULL, 'input', NULL::json, NULL, NULL::json, 21, 'half', U&'\0418\0442\043e\0433 \0441\0432\0435\0440\043a\0438', false)
+) AS fields(field_name, special_value, interface_name, options_value, display_value, display_options_value, sort_order, width_value, label, hidden_value);
+
+INSERT INTO directus_fields (
+  collection, field, special, interface, options, display, display_options,
+  readonly, hidden, sort, width, translations, required, searchable
+)
+SELECT
+  'customer_reconciliation_items',
+  fields.field_name,
+  fields.special_value,
+  fields.interface_name,
+  fields.options_value,
+  fields.display_value,
+  fields.display_options_value,
+  true,
+  fields.hidden_value,
+  fields.sort_order,
+  fields.width_value,
+  CASE WHEN fields.label IS NULL
+    THEN NULL
+    ELSE json_build_array(json_build_object('language','ru-RU','translation', fields.label))::json
+  END,
+  false,
+  true
+FROM (VALUES
+  ('id', NULL, 'numeric', NULL::json, NULL, NULL::json, 1, 'full', NULL, true),
+  ('order_item', NULL, 'numeric', NULL::json, NULL, NULL::json, 2, 'half', U&'\041f\043e\0437\0438\0446\0438\044f ID', true),
+  ('order_link', NULL, 'symbolika-order-link', NULL::json, NULL, NULL::json, 3, 'half', U&'\041f\0435\0440\0435\0439\0442\0438 \0432 \0437\0430\043a\0430\0437', false),
+  ('order_number', NULL, 'input', NULL::json, NULL, NULL::json, 4, 'half', U&'\041d\043e\043c\0435\0440 \0437\0430\043a\0430\0437\0430', false),
+  ('counterparty_name', NULL, 'input', NULL::json, NULL, NULL::json, 5, 'half', U&'\0417\0430\043a\0430\0437\0447\0438\043a', false),
+  ('customer', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, 6, 'half', U&'\041a\043b\0438\0435\043d\0442', false),
+  ('customer_name', NULL, 'input', NULL::json, NULL, NULL::json, 7, 'half', U&'\0418\043c\044f \043a\043b\0438\0435\043d\0442\0430', true),
+  ('customer_company', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, 8, 'half', U&'\041a\043e\043c\043f\0430\043d\0438\044f', false),
+  ('customer_company_name', NULL, 'input', NULL::json, NULL, NULL::json, 9, 'half', U&'\041d\0430\0437\0432\0430\043d\0438\0435 \043a\043e\043c\043f\0430\043d\0438\0438', true),
+  ('manager_employee', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}"}'::json, 'related-values', '{"template":"{{full_name}}"}'::json, 10, 'half', U&'\041c\0435\043d\0435\0434\0436\0435\0440', false),
+  ('manager_name', NULL, 'input', NULL::json, NULL, NULL::json, 11, 'half', U&'\041c\0435\043d\0435\0434\0436\0435\0440', true),
+  ('date', NULL, 'datetime', NULL::json, NULL, NULL::json, 12, 'half', U&'\0414\0430\0442\0430', false),
+  ('deadline', NULL, 'datetime', NULL::json, NULL, NULL::json, 13, 'half', U&'\0421\0440\043e\043a', false),
+  ('order_status', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'labels', NULL::json, 14, 'half', U&'\0421\0442\0430\0442\0443\0441 \0437\0430\043a\0430\0437\0430', false),
+  ('order_status_name', NULL, 'input', NULL::json, NULL, NULL::json, 15, 'half', U&'\0421\0442\0430\0442\0443\0441', true),
+  ('product_name', NULL, 'input', NULL::json, NULL, NULL::json, 16, 'half', U&'\041f\043e\0437\0438\0446\0438\044f', false),
+  ('quantity', NULL, 'input', NULL::json, NULL, NULL::json, 17, 'half', U&'\041a\043e\043b\0438\0447\0435\0441\0442\0432\043e', false),
+  ('price_per_unit', NULL, 'input', NULL::json, NULL, NULL::json, 18, 'half', U&'\0426\0435\043d\0430', false),
+  ('item_sum', NULL, 'input', NULL::json, NULL, NULL::json, 19, 'half', U&'\0421\0443\043c\043c\0430 \043f\043e\0437\0438\0446\0438\0438', false),
+  ('order_sum', NULL, 'input', NULL::json, NULL, NULL::json, 20, 'half', U&'\0421\0443\043c\043c\0430 \0437\0430\043a\0430\0437\0430', false),
+  ('paid_amount', NULL, 'input', NULL::json, NULL, NULL::json, 21, 'half', U&'\041e\043f\043b\0430\0447\0435\043d\043e', false),
+  ('payment_due', NULL, 'input', NULL::json, NULL, NULL::json, 22, 'half', U&'\041e\0441\0442\0430\0442\043e\043a', false),
+  ('overpayment', NULL, 'input', NULL::json, NULL, NULL::json, 23, 'half', U&'\041f\0435\0440\0435\043f\043b\0430\0442\0430', false),
+  ('reconciliation_result', NULL, 'input', NULL::json, NULL, NULL::json, 24, 'half', U&'\0418\0442\043e\0433 \0441\0432\0435\0440\043a\0438', false)
 ) AS fields(field_name, special_value, interface_name, options_value, display_value, display_options_value, sort_order, width_value, label, hidden_value);
 
 WITH my_collections(collection_name) AS (VALUES
@@ -4849,6 +5685,7 @@ WHERE (many_collection = 'orders_overview_items' AND many_field = 'orders_overvi
    OR (many_collection IN ('my_orders_in_work_items', 'my_orders_completed_items', 'my_orders_unpaid_items') AND many_field = 'production_status')
    OR (many_collection IN ('my_orders_in_work_payments', 'my_orders_completed_payments', 'my_orders_unpaid_payments') AND many_field = 'bucket_order')
    OR (many_collection = 'customer_reconciliation' AND many_field IN ('customer', 'customer_company', 'manager_employee', 'order_status'))
+   OR (many_collection = 'customer_reconciliation_items' AND many_field IN ('customer', 'customer_company', 'manager_employee', 'order_status'))
    OR many_collection IN ('my_orders_in_work', 'my_orders_completed', 'my_orders_unpaid');
 
 INSERT INTO directus_relations (
@@ -4876,7 +5713,11 @@ INSERT INTO directus_relations (
   ('customer_reconciliation', 'customer', 'customers', NULL, 'nullify'),
   ('customer_reconciliation', 'customer_company', 'customer_companies', NULL, 'nullify'),
   ('customer_reconciliation', 'manager_employee', 'employees', NULL, 'nullify'),
-  ('customer_reconciliation', 'order_status', 'order_statuses', NULL, 'nullify');
+  ('customer_reconciliation', 'order_status', 'order_statuses', NULL, 'nullify'),
+  ('customer_reconciliation_items', 'customer', 'customers', NULL, 'nullify'),
+  ('customer_reconciliation_items', 'customer_company', 'customer_companies', NULL, 'nullify'),
+  ('customer_reconciliation_items', 'manager_employee', 'employees', NULL, 'nullify'),
+  ('customer_reconciliation_items', 'order_status', 'order_statuses', NULL, 'nullify');
 
 UPDATE directus_fields
 SET display = 'related-values',
@@ -5004,6 +5845,7 @@ WHERE collection IN (
   'orders_due_this_month',
   'orders_due_next_month',
   'customer_reconciliation',
+  'customer_reconciliation_items',
   'orders_overview_items',
   'my_orders_in_work',
   'my_orders_completed',
@@ -5028,6 +5870,7 @@ FROM (
     ('orders_due_this_month'),
     ('orders_due_next_month'),
     ('customer_reconciliation'),
+    ('customer_reconciliation_items'),
     ('orders_overview_items')
 ) AS collections(collection_name)
 CROSS JOIN (
@@ -5039,17 +5882,22 @@ CROSS JOIN (
 ) AS policies(policy_id);
 
 DELETE FROM directus_permissions
-WHERE collection = 'customer_reconciliation';
+WHERE collection IN ('customer_reconciliation', 'customer_reconciliation_items');
 
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
-SELECT 'customer_reconciliation', 'read', permissions_value::json, NULL, NULL, '*', policy_id::uuid
+SELECT collection_name, 'read', permissions_value::json, NULL, NULL, '*', policy_id::uuid
 FROM (
   VALUES
     ('00000000-0000-4000-8000-000000000201', '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'),
     ('00000000-0000-4000-8000-000000000202', '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'),
     ('00000000-0000-4000-8000-000000000203', '{}'),
     ('00000000-0000-4000-8000-000000000205', '{}')
-) AS policies(policy_id, permissions_value);
+) AS policies(policy_id, permissions_value)
+CROSS JOIN (
+  VALUES
+    ('customer_reconciliation'),
+    ('customer_reconciliation_items')
+) AS collections(collection_name);
 
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
 SELECT collection_name, 'read', permissions_value::json, NULL, NULL, '*', policy_id::uuid
@@ -5925,7 +6773,8 @@ WITH service_menu(collection_name, icon_value, label_value, sort_value) AS (VALU
   ('employee_positions', 'work', U&'\0414\043e\043b\0436\043d\043e\0441\0442\0438', 48),
   ('payment_types', 'payments', U&'\0422\0438\043f\044b \043e\043f\043b\0430\0442', 49),
   ('customer_company_links', 'hub', U&'\0421\0432\044f\0437\0438 \043a\043b\0438\0435\043d\0442\043e\0432 \0438 \043a\043e\043c\043f\0430\043d\0438\0439', 51),
-  ('contractor_payments', 'receipt_long', U&'\041e\043f\043b\0430\0442\044b \043a\043e\043d\0442\0440\0430\0433\0435\043d\0442\0430\043c', 52)
+  ('contractor_payments', 'receipt_long', U&'\041e\043f\043b\0430\0442\044b \043a\043e\043d\0442\0440\0430\0433\0435\043d\0442\0430\043c', 52),
+  ('business_expenses', 'receipt_long', U&'\0420\0430\0441\0445\043e\0434\044b', 55)
 )
 UPDATE directus_collections dc
 SET hidden = false,
@@ -5961,6 +6810,34 @@ INSERT INTO directus_collections (
     '{{month_label}} {{metric_name}}', true, false,
     json_build_array(json_build_object('language','ru-RU','translation', U&'\0424\0438\043d\0430\043d\0441\043e\0432\0430\044f \0434\0438\043d\0430\043c\0438\043a\0430'))::json,
     true, 'all', 92, 'open', false
+  ),
+  (
+    'business_expenses', 'receipt_long',
+    'Operational company expenses and employee salary payments.',
+    '{{expense_date}} {{amount}}', false, false,
+    json_build_array(json_build_object('language','ru-RU','translation', U&'\0420\0430\0441\0445\043e\0434\044b'))::json,
+    true, 'all', 55, 'open', false
+  ),
+  (
+    'employee_salary_summary', 'payments',
+    'Current month salary accrual and employee debt summary.',
+    '{{employee_name}}', true, false,
+    json_build_array(json_build_object('language','ru-RU','translation', U&'\0420\0430\0441\0447\0435\0442 \0417\041f'))::json,
+    true, 'all', 93, 'open', false
+  ),
+  (
+    'employee_salary_monthly', 'calendar_month',
+    'Monthly salary accrual history.',
+    '{{month_label}} {{employee_name}}', true, false,
+    json_build_array(json_build_object('language','ru-RU','translation', U&'\0417\041f \043f\043e \043c\0435\0441\044f\0446\0430\043c'))::json,
+    true, 'all', 94, 'open', false
+  ),
+  (
+    'manager_finance_summary', 'workspace_premium',
+    'Personal manager revenue and commission summary.',
+    '{{employee_name}}', true, false,
+    json_build_array(json_build_object('language','ru-RU','translation', U&'\041b\0438\0447\043d\044b\0435 \043f\043e\043a\0430\0437\0430\0442\0435\043b\0438 \043c\0435\043d\0435\0434\0436\0435\0440\0430'))::json,
+    true, 'all', 95, 'open', false
   )
 ON CONFLICT (collection) DO UPDATE SET
   icon = EXCLUDED.icon,
@@ -5973,7 +6850,7 @@ ON CONFLICT (collection) DO UPDATE SET
   collapse = EXCLUDED.collapse;
 
 DELETE FROM directus_fields
-WHERE collection IN ('finance_dashboard_metrics', 'finance_dashboard_monthly', 'finance_dashboard_series');
+WHERE collection IN ('finance_dashboard_metrics', 'finance_dashboard_monthly', 'finance_dashboard_series', 'business_expenses', 'employee_salary_summary', 'employee_salary_monthly', 'manager_finance_summary');
 
 INSERT INTO directus_fields (
   collection, field, special, interface, options, display, display_options,
@@ -6000,15 +6877,87 @@ INSERT INTO directus_fields (
   ('finance_dashboard_series', 'metric_name', NULL, 'input', NULL, NULL, NULL, true, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\043a\0430\0437\0430\0442\0435\043b\044c'))::json, true, true),
   ('finance_dashboard_series', 'value', NULL, 'input', NULL, NULL, NULL, true, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0443\043c\043c\0430'))::json, false, true),
   ('finance_dashboard_series', 'sort', NULL, 'input', NULL, NULL, NULL, true, true, 7, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0440\0442\0438\0440\043e\0432\043a\0430'))::json, false, true),
-  ('finance_dashboard_series', 'updated_at', NULL, 'datetime', NULL, NULL, NULL, true, false, 8, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\0431\043d\043e\0432\043b\0435\043d\043e'))::json, false, true);
+  ('finance_dashboard_series', 'updated_at', NULL, 'datetime', NULL, NULL, NULL, true, false, 8, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\0431\043d\043e\0432\043b\0435\043d\043e'))::json, false, true),
+  ('business_expenses', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'half', NULL, true, true),
+  ('business_expenses', 'expense_date', NULL, 'datetime', NULL, 'datetime', NULL, false, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0430\0442\0430'))::json, true, true),
+  ('business_expenses', 'expense_type', NULL, 'select-dropdown', '{"choices":[{"text":"Аренда","value":"rent"},{"text":"Выплата зарплаты","value":"salary_payment"},{"text":"Оплата за доставку","value":"delivery"},{"text":"Прочие расходы","value":"other"},{"text":"Аванс сотруднику","value":"employee_advance"}]}'::json, 'labels', NULL, false, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0438\043f \0440\0430\0441\0445\043e\0434\0430'))::json, true, true),
+  ('business_expenses', 'amount', NULL, 'input', NULL, NULL, NULL, false, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0443\043c\043c\0430'))::json, true, true),
+  ('business_expenses', 'employee', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}"}'::json, 'related-values', '{"template":"{{full_name}}"}'::json, false, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
+  ('business_expenses', 'payment_type', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0438\043f \043e\043f\043b\0430\0442\044b'))::json, false, true),
+  ('business_expenses', 'comment', NULL, 'input-multiline', NULL, NULL, NULL, false, false, 7, 'full', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439'))::json, false, true),
+  ('business_expenses', 'created_at', NULL, 'datetime', NULL, NULL, NULL, true, true, 8, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0437\0434\0430\043d\043e'))::json, false, true),
+  ('employee_salary_summary', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'half', NULL, true, true),
+  ('employee_salary_summary', 'employee', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}"}'::json, 'related-values', '{"template":"{{full_name}}"}'::json, true, true, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
+  ('employee_salary_summary', 'employee_name', NULL, 'input', NULL, NULL, NULL, true, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
+  ('employee_salary_summary', 'position_name', NULL, 'input', NULL, NULL, NULL, true, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\043e\043b\0436\043d\043e\0441\0442\044c'))::json, false, true),
+  ('employee_salary_summary', 'month_start', NULL, 'datetime', NULL, NULL, NULL, true, true, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041c\0435\0441\044f\0446'))::json, false, true),
+  ('employee_salary_summary', 'salary_fixed', NULL, 'input', NULL, NULL, NULL, true, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\043a\043b\0430\0434'))::json, false, true),
+  ('employee_salary_summary', 'order_percent', NULL, 'input', NULL, NULL, NULL, true, false, 7, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0440\043e\0446\0435\043d\0442'))::json, false, true),
+  ('employee_salary_summary', 'orders_sum', NULL, 'input', NULL, NULL, NULL, true, false, 8, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0443\043c\043c\0430 \0437\0430\043a\0430\0437\043e\0432'))::json, false, true),
+  ('employee_salary_summary', 'paid_orders_sum', NULL, 'input', NULL, NULL, NULL, true, false, 9, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\043f\043b\0430\0447\0435\043d\043e'))::json, false, true),
+  ('employee_salary_summary', 'unpaid_orders_sum', NULL, 'input', NULL, NULL, NULL, true, false, 10, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041d\0435 \043e\043f\043b\0430\0447\0435\043d\043e'))::json, false, true),
+  ('employee_salary_summary', 'commission_accrued', NULL, 'input', NULL, NULL, NULL, true, false, 11, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0440\043e\0446\0435\043d\0442\044b'))::json, false, true),
+  ('employee_salary_summary', 'salary_accrued', NULL, 'input', NULL, NULL, NULL, true, false, 12, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041d\0430\0447\0438\0441\043b\0435\043d\043e'))::json, false, true),
+  ('employee_salary_summary', 'salary_paid', NULL, 'input', NULL, NULL, NULL, true, false, 13, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0412\044b\043f\043b\0430\0447\0435\043d\043e \0417\041f'))::json, false, true),
+  ('employee_salary_summary', 'advances_paid', NULL, 'input', NULL, NULL, NULL, true, false, 14, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0410\0432\0430\043d\0441\044b'))::json, false, true),
+  ('employee_salary_summary', 'salary_debt', NULL, 'input', NULL, NULL, NULL, true, false, 15, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\043e\043b\0433 \043f\043e \0417\041f'))::json, false, true),
+  ('manager_finance_summary', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'half', NULL, true, true),
+  ('manager_finance_summary', 'employee', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}"}'::json, 'related-values', '{"template":"{{full_name}}"}'::json, true, true, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
+  ('manager_finance_summary', 'directus_user', NULL, 'input', NULL, NULL, NULL, true, true, 3, 'half', NULL, false, true),
+  ('manager_finance_summary', 'employee_name', NULL, 'input', NULL, NULL, NULL, true, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
+  ('manager_finance_summary', 'order_percent', NULL, 'input', NULL, NULL, NULL, true, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0440\043e\0446\0435\043d\0442'))::json, false, true),
+  ('manager_finance_summary', 'orders_count', NULL, 'input', NULL, NULL, NULL, true, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0417\0430\043a\0430\0437\043e\0432'))::json, false, true),
+  ('manager_finance_summary', 'orders_sum', NULL, 'input', NULL, NULL, NULL, true, false, 7, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0412\044b\0440\0443\0447\043a\0430'))::json, false, true),
+  ('manager_finance_summary', 'paid_orders_sum', NULL, 'input', NULL, NULL, NULL, true, false, 8, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\043f\043b\0430\0447\0435\043d\043e'))::json, false, true),
+  ('manager_finance_summary', 'unpaid_orders_sum', NULL, 'input', NULL, NULL, NULL, true, false, 9, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041d\0435 \043e\043f\043b\0430\0447\0435\043d\043e'))::json, false, true),
+  ('manager_finance_summary', 'commission_total', NULL, 'input', NULL, NULL, NULL, true, false, 10, 'half', json_build_array(json_build_object('language','ru-RU','translation', 'Процент от всех'))::json, false, true),
+  ('manager_finance_summary', 'commission_accrued', NULL, 'input', NULL, NULL, NULL, true, false, 11, 'half', json_build_array(json_build_object('language','ru-RU','translation', 'Начислено'))::json, false, true),
+  ('manager_finance_summary', 'commission_expected', NULL, 'input', NULL, NULL, NULL, true, false, 12, 'half', json_build_array(json_build_object('language','ru-RU','translation', 'Ожидается'))::json, false, true),
+  ('manager_finance_summary', 'commission_paid', NULL, 'input', NULL, NULL, NULL, true, false, 13, 'half', json_build_array(json_build_object('language','ru-RU','translation', 'Выплачено'))::json, false, true),
+  ('manager_finance_summary', 'commission_to_pay', NULL, 'input', NULL, NULL, NULL, true, false, 14, 'half', json_build_array(json_build_object('language','ru-RU','translation', 'К выплате'))::json, false, true),
+  ('employee_salary_monthly', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'half', NULL, true, true),
+  ('employee_salary_monthly', 'employee_name', NULL, 'input', NULL, NULL, NULL, true, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
+  ('employee_salary_monthly', 'month_label', NULL, 'input', NULL, NULL, NULL, true, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041c\0435\0441\044f\0446'))::json, false, true),
+  ('employee_salary_monthly', 'salary_accrued', NULL, 'input', NULL, NULL, NULL, true, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041d\0430\0447\0438\0441\043b\0435\043d\043e'))::json, false, true),
+  ('employee_salary_monthly', 'salary_paid', NULL, 'input', NULL, NULL, NULL, true, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0412\044b\043f\043b\0430\0447\0435\043d\043e'))::json, false, true),
+  ('employee_salary_monthly', 'salary_debt', NULL, 'input', NULL, NULL, NULL, true, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\043e\043b\0433'))::json, false, true);
+
+DELETE FROM directus_relations
+WHERE many_collection = 'business_expenses';
+
+INSERT INTO directus_relations (
+  many_collection, many_field, one_collection, one_field, one_collection_field,
+  one_allowed_collections, junction_field, sort_field, one_deselect_action
+) VALUES
+  ('business_expenses', 'employee', 'employees', NULL, NULL, NULL, NULL, NULL, 'nullify'),
+  ('business_expenses', 'payment_type', 'payment_types', NULL, NULL, NULL, NULL, NULL, 'nullify');
 
 DELETE FROM directus_permissions
-WHERE collection IN ('finance_dashboard_metrics', 'finance_dashboard_monthly', 'finance_dashboard_series')
+WHERE collection IN ('finance_dashboard_metrics', 'finance_dashboard_monthly', 'finance_dashboard_series', 'business_expenses', 'employee_salary_summary', 'employee_salary_monthly', 'manager_finance_summary')
   AND policy = '00000000-0000-4000-8000-000000000205';
 
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
 SELECT collection_name, 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'
-FROM (VALUES ('finance_dashboard_metrics'), ('finance_dashboard_monthly'), ('finance_dashboard_series')) AS finance(collection_name);
+FROM (VALUES ('finance_dashboard_metrics'), ('finance_dashboard_monthly'), ('finance_dashboard_series'), ('employee_salary_summary'), ('employee_salary_monthly'), ('manager_finance_summary')) AS finance(collection_name);
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+SELECT 'business_expenses', action_value, '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'
+FROM (VALUES ('create'), ('read'), ('update'), ('delete')) AS actions(action_value);
+
+DELETE FROM directus_permissions
+WHERE collection = 'manager_finance_summary'
+  AND policy = '00000000-0000-4000-8000-000000000201';
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+VALUES (
+  'manager_finance_summary',
+  'read',
+  '{"directus_user":{"_eq":"$CURRENT_USER"}}'::json,
+  NULL,
+  NULL,
+  'id,employee,employee_name,order_percent,orders_count,orders_sum,paid_orders_sum,unpaid_orders_sum,commission_total,commission_accrued,commission_expected,commission_paid,commission_to_pay',
+  '00000000-0000-4000-8000-000000000201'
+);
 
 INSERT INTO directus_dashboards (id, name, icon, note, color)
 VALUES (
@@ -6157,6 +7106,516 @@ WHERE shipping_method = 'office_pickup';
 SELECT refresh_finance_dashboard_metrics();
 
 SELECT refresh_customer_reconciliation();
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = 'contractor_costing'
+      AND c.relkind = 'v'
+  ) THEN
+    EXECUTE 'DROP VIEW contractor_costing CASCADE';
+  END IF;
+END;
+$$;
+
+CREATE TABLE IF NOT EXISTS contractor_costing (
+  id integer PRIMARY KEY,
+  "order" integer,
+  order_link integer,
+  order_number varchar(255),
+  date timestamp without time zone,
+  order_deadline timestamp without time zone,
+  customer integer,
+  customer_company integer,
+  manager_employee integer,
+  product_name varchar(255),
+  quantity numeric(10,2),
+  price_per_unit numeric(10,2),
+  order_sum numeric(10,2),
+  product_category integer,
+  product_subcategory integer,
+  application_method integer,
+  contractor_1 integer,
+  contractor_2 integer,
+  contractor_1_cost numeric(10,2) DEFAULT 0,
+  contractor_2_cost numeric(10,2) DEFAULT 0,
+  unit_cost numeric(10,2) DEFAULT 0,
+  total_cost numeric(10,2) DEFAULT 0,
+  profit_sum numeric(10,2) DEFAULT 0,
+  margin_percent numeric(10,2) DEFAULT 0,
+  item_status varchar(255),
+  production_status integer,
+  deadline timestamp without time zone
+);
+
+CREATE OR REPLACE FUNCTION sync_contractor_costing_item(item_id integer)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO contractor_costing (
+    id, "order", order_link, order_number, date, order_deadline, customer, customer_company,
+    manager_employee, product_name, quantity, price_per_unit, order_sum, product_category,
+    product_subcategory, application_method, contractor_1, contractor_2, contractor_1_cost,
+    contractor_2_cost, unit_cost, total_cost, profit_sum, margin_percent, item_status,
+    production_status, deadline
+  )
+  SELECT
+    oi.id,
+    oi."order",
+    oi.order_link,
+    o.order_number,
+    o.date,
+    o.deadline,
+    o.customer,
+    o.customer_company,
+    o.manager_employee,
+    oi.product_name,
+    oi.quantity,
+    oi.price_per_unit,
+    oi.order_sum,
+    oi.product_category,
+    oi.product_subcategory,
+    oi.application_method,
+    oi.contractor_1,
+    oi.contractor_2,
+    oi.contractor_1_cost,
+    oi.contractor_2_cost,
+    oi.unit_cost,
+    oi.total_cost,
+    oi.profit_sum,
+    oi.margin_percent,
+    oi.item_status,
+    oi.production_status,
+    oi.deadline
+  FROM orders_items oi
+  LEFT JOIN orders o ON o.id = oi."order"
+  WHERE oi.id = item_id
+  ON CONFLICT (id) DO UPDATE SET
+    "order" = EXCLUDED."order",
+    order_link = EXCLUDED.order_link,
+    order_number = EXCLUDED.order_number,
+    date = EXCLUDED.date,
+    order_deadline = EXCLUDED.order_deadline,
+    customer = EXCLUDED.customer,
+    customer_company = EXCLUDED.customer_company,
+    manager_employee = EXCLUDED.manager_employee,
+    product_name = EXCLUDED.product_name,
+    quantity = EXCLUDED.quantity,
+    price_per_unit = EXCLUDED.price_per_unit,
+    order_sum = EXCLUDED.order_sum,
+    product_category = EXCLUDED.product_category,
+    product_subcategory = EXCLUDED.product_subcategory,
+    application_method = EXCLUDED.application_method,
+    contractor_1 = EXCLUDED.contractor_1,
+    contractor_2 = EXCLUDED.contractor_2,
+    contractor_1_cost = EXCLUDED.contractor_1_cost,
+    contractor_2_cost = EXCLUDED.contractor_2_cost,
+    unit_cost = EXCLUDED.unit_cost,
+    total_cost = EXCLUDED.total_cost,
+    profit_sum = EXCLUDED.profit_sum,
+    margin_percent = EXCLUDED.margin_percent,
+    item_status = EXCLUDED.item_status,
+    production_status = EXCLUDED.production_status,
+    deadline = EXCLUDED.deadline;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION sync_contractor_costing_item_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    DELETE FROM contractor_costing WHERE id = OLD.id;
+    RETURN OLD;
+  END IF;
+
+  PERFORM sync_contractor_costing_item(NEW.id);
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION sync_contractor_costing_order_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  item_row record;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    DELETE FROM contractor_costing WHERE "order" = OLD.id;
+    RETURN OLD;
+  END IF;
+
+  FOR item_row IN SELECT id FROM orders_items WHERE "order" = NEW.id LOOP
+    PERFORM sync_contractor_costing_item(item_row.id);
+  END LOOP;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION push_contractor_costing_update()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF pg_trigger_depth() > 1 THEN
+    RETURN NEW;
+  END IF;
+
+  UPDATE orders_items
+  SET
+    contractor_1 = NEW.contractor_1,
+    contractor_2 = NEW.contractor_2,
+    contractor_1_cost = COALESCE(NEW.contractor_1_cost, 0),
+    contractor_2_cost = COALESCE(NEW.contractor_2_cost, 0)
+  WHERE id = NEW.id;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS contractor_costing_sync_item ON orders_items;
+CREATE TRIGGER contractor_costing_sync_item
+AFTER INSERT OR UPDATE OR DELETE ON orders_items
+FOR EACH ROW
+EXECUTE FUNCTION sync_contractor_costing_item_trigger();
+
+DROP TRIGGER IF EXISTS contractor_costing_sync_order ON orders;
+CREATE TRIGGER contractor_costing_sync_order
+AFTER UPDATE OR DELETE ON orders
+FOR EACH ROW
+EXECUTE FUNCTION sync_contractor_costing_order_trigger();
+
+DROP TRIGGER IF EXISTS contractor_costing_push_update ON contractor_costing;
+CREATE TRIGGER contractor_costing_push_update
+AFTER UPDATE OF contractor_1, contractor_2, contractor_1_cost, contractor_2_cost ON contractor_costing
+FOR EACH ROW
+EXECUTE FUNCTION push_contractor_costing_update();
+
+SELECT sync_contractor_costing_item(id)
+FROM orders_items;
+
+INSERT INTO directus_collections (
+  collection, icon, note, display_template, hidden, singleton, translations,
+  archive_app_filter, accountability, sort, collapse, versioning
+) VALUES (
+  'contractor_costing',
+  'price_check',
+  'Quick workspace for admins and managers to assign contractors and item costs.',
+  '{{order_number}} — {{product_name}}',
+  false,
+  false,
+  json_build_array(json_build_object('language','ru-RU','translation', U&'\0417\0430\043f\043e\043b\043d\0435\043d\0438\0435 \0441\0435\0431\0435\0441\0442\043e\0438\043c\043e\0441\0442\0438'))::json,
+  true,
+  'all',
+  27,
+  'open',
+  false
+)
+ON CONFLICT (collection) DO UPDATE SET
+  icon = EXCLUDED.icon,
+  note = EXCLUDED.note,
+  display_template = EXCLUDED.display_template,
+  hidden = EXCLUDED.hidden,
+  singleton = EXCLUDED.singleton,
+  translations = EXCLUDED.translations,
+  archive_app_filter = EXCLUDED.archive_app_filter,
+  accountability = EXCLUDED.accountability,
+  sort = EXCLUDED.sort,
+  collapse = EXCLUDED.collapse,
+  versioning = EXCLUDED.versioning;
+
+DELETE FROM directus_relations
+WHERE many_collection = 'contractor_costing';
+
+INSERT INTO directus_relations (
+  many_collection, many_field, one_collection, one_field, one_collection_field,
+  one_allowed_collections, junction_field, sort_field, one_deselect_action
+) VALUES
+  ('contractor_costing', 'order', 'orders', NULL, NULL, NULL, NULL, NULL, 'nullify'),
+  ('contractor_costing', 'order_link', 'orders', NULL, NULL, NULL, NULL, NULL, 'nullify'),
+  ('contractor_costing', 'customer', 'customers', NULL, NULL, NULL, NULL, NULL, 'nullify'),
+  ('contractor_costing', 'customer_company', 'customer_companies', NULL, NULL, NULL, NULL, NULL, 'nullify'),
+  ('contractor_costing', 'manager_employee', 'employees', NULL, NULL, NULL, NULL, NULL, 'nullify'),
+  ('contractor_costing', 'product_category', 'product_categories', NULL, NULL, NULL, NULL, NULL, 'nullify'),
+  ('contractor_costing', 'product_subcategory', 'product_subcategories', NULL, NULL, NULL, NULL, NULL, 'nullify'),
+  ('contractor_costing', 'application_method', 'product_application_methods', NULL, NULL, NULL, NULL, NULL, 'nullify'),
+  ('contractor_costing', 'contractor_1', 'contractors', NULL, NULL, NULL, NULL, NULL, 'nullify'),
+  ('contractor_costing', 'contractor_2', 'contractors', NULL, NULL, NULL, NULL, NULL, 'nullify'),
+  ('contractor_costing', 'production_status', 'production_statuses', NULL, NULL, NULL, NULL, NULL, 'nullify');
+
+DELETE FROM directus_fields
+WHERE collection = 'contractor_costing';
+
+INSERT INTO directus_fields (
+  collection, field, special, interface, options, display, display_options,
+  readonly, hidden, sort, width, translations, note, conditions,
+  required, "group", validation, validation_message, searchable
+) VALUES
+  ('contractor_costing', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'full', NULL, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'order_link', NULL, 'symbolika-order-link', NULL, NULL, NULL, true, false, 1, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0435\0440\0435\0439\0442\0438 \0432 \0437\0430\043a\0430\0437'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'order_number', NULL, 'input', NULL, NULL, NULL, true, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041d\043e\043c\0435\0440 \0437\0430\043a\0430\0437\0430'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'order', 'm2o', 'select-dropdown-m2o', NULL, NULL, NULL, true, true, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0417\0430\043a\0430\0437'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'date', NULL, 'datetime', NULL, NULL, NULL, true, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0430\0442\0430'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'order_deadline', NULL, 'datetime', NULL, NULL, NULL, true, true, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0440\043e\043a \0437\0430\043a\0430\0437\0430'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'customer', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, true, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043b\0438\0435\043d\0442'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'customer_company', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, true, false, 7, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043e\043c\043f\0430\043d\0438\044f'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'manager_employee', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}"}'::json, 'related-values', '{"template":"{{full_name}}"}'::json, true, false, 8, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041c\0435\043d\0435\0434\0436\0435\0440'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'product_name', NULL, 'input', NULL, NULL, NULL, true, false, 9, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\0437\0438\0446\0438\044f'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'quantity', NULL, 'input', NULL, NULL, NULL, true, false, 10, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043e\043b\0438\0447\0435\0441\0442\0432\043e'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'price_per_unit', NULL, 'input', NULL, NULL, NULL, true, false, 11, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0426\0435\043d\0430'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'order_sum', NULL, 'input', NULL, NULL, NULL, true, false, 12, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0443\043c\043c\0430 \043f\043e\0437\0438\0446\0438\0438'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'deadline', NULL, 'datetime', NULL, NULL, NULL, true, true, 13, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0440\043e\043a \043f\043e\0437\0438\0446\0438\0438'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'product_category', 'm2o', 'select-dropdown-m2o', NULL, NULL, NULL, true, true, 14, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\0430\0442\0435\0433\043e\0440\0438\044f'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'product_subcategory', 'm2o', 'select-dropdown-m2o', NULL, NULL, NULL, true, true, 15, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\0434\043a\0430\0442\0435\0433\043e\0440\0438\044f'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'application_method', 'm2o', 'select-dropdown-m2o', NULL, NULL, NULL, true, true, 16, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0412\0438\0434 \043d\0430\043d\0435\0441\0435\043d\0438\044f'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'contractor_1', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 17, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\0434\0440\044f\0434\0447\0438\043a 1'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'contractor_1_cost', NULL, 'input', NULL, NULL, NULL, false, false, 18, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0435\0431\0435\0441\0442\043e\0438\043c\043e\0441\0442\044c 1'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'contractor_2', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 19, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\0434\0440\044f\0434\0447\0438\043a 2'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'contractor_2_cost', NULL, 'input', NULL, NULL, NULL, false, false, 20, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0435\0431\0435\0441\0442\043e\0438\043c\043e\0441\0442\044c 2'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'unit_cost', NULL, 'input', NULL, NULL, NULL, true, false, 21, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0435\0431\0435\0441\0442\043e\0438\043c\043e\0441\0442\044c \0437\0430 \0435\0434.'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'total_cost', NULL, 'input', NULL, NULL, NULL, true, false, 22, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0435\0431\0435\0441\0442\043e\0438\043c\043e\0441\0442\044c \0432\0441\0435\0433\043e'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'profit_sum', NULL, 'input', NULL, NULL, NULL, true, false, 23, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0440\0438\0431\044b\043b\044c'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'margin_percent', NULL, 'input', NULL, NULL, NULL, true, false, 24, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041c\0430\0440\0436\0430, %'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'item_status', NULL, 'select-dropdown', NULL, NULL, NULL, true, true, 25, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0442\0430\0442\0443\0441 \043f\043e\0437\0438\0446\0438\0438'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'production_status', 'm2o', 'select-dropdown-m2o', NULL, NULL, NULL, true, true, 26, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0442\0430\0442\0443\0441 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\0430'))::json, NULL, NULL, false, NULL, NULL, NULL, true);
+
+UPDATE directus_fields
+SET sort = CASE field
+    WHEN 'contractor_1' THEN 1
+    WHEN 'contractor_1_cost' THEN 2
+    WHEN 'contractor_2' THEN 3
+    WHEN 'contractor_2_cost' THEN 4
+    WHEN 'order_link' THEN 5
+    WHEN 'order_number' THEN 6
+    WHEN 'product_name' THEN 7
+    WHEN 'quantity' THEN 8
+    WHEN 'price_per_unit' THEN 9
+    WHEN 'order_sum' THEN 10
+    WHEN 'customer' THEN 11
+    WHEN 'customer_company' THEN 12
+    WHEN 'manager_employee' THEN 13
+    WHEN 'date' THEN 14
+    WHEN 'unit_cost' THEN 15
+    WHEN 'total_cost' THEN 16
+    WHEN 'profit_sum' THEN 17
+    WHEN 'margin_percent' THEN 18
+    ELSE sort
+  END,
+  width = CASE
+    WHEN field IN ('contractor_1', 'contractor_1_cost', 'contractor_2', 'contractor_2_cost') THEN 'half'
+    WHEN field = 'order_link' THEN 'half'
+    ELSE width
+  END
+WHERE collection = 'contractor_costing';
+
+DELETE FROM directus_permissions
+WHERE collection = 'contractor_costing';
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+SELECT 'contractor_costing', action_value, '{}'::json, NULL::json, NULL::json, fields_value, policy_id
+FROM (
+  VALUES
+    ('00000000-0000-4000-8000-000000000205'::uuid, 'read', 'id,order_link,order_number,date,customer,customer_company,manager_employee,product_name,quantity,price_per_unit,order_sum,contractor_1,contractor_1_cost,contractor_2,contractor_2_cost'),
+    ('00000000-0000-4000-8000-000000000205'::uuid, 'update', 'contractor_1,contractor_2,contractor_1_cost,contractor_2_cost')
+) AS managing_permissions(policy_id, action_value, fields_value)
+UNION ALL
+SELECT 'contractor_costing', action_value, '{}'::json, NULL::json, NULL::json, '*', p.id
+FROM directus_policies p
+CROSS JOIN (VALUES ('read'), ('update')) AS admin_actions(action_value)
+WHERE p.admin_access = true;
+
+DELETE FROM directus_presets
+WHERE collection = 'contractor_costing'
+  AND bookmark IS NULL;
+
+INSERT INTO directus_presets (bookmark, "user", role, collection, search, layout, layout_query, layout_options, refresh_interval, filter, icon, color)
+SELECT NULL::varchar, NULL::uuid, admin_roles.role, 'contractor_costing', NULL::varchar, 'tabular',
+       '{"tabular":{"fields":["order_number","date","customer","manager_employee","product_name","quantity","order_sum","contractor_1","contractor_1_cost","contractor_2","contractor_2_cost","unit_cost","total_cost","profit_sum","margin_percent"],"page":1}}'::json,
+       '{"tabular":{"spacing":"compact","widths":{"order_number":130,"date":120,"customer":170,"manager_employee":170,"product_name":240,"quantity":100,"order_sum":130,"contractor_1":200,"contractor_1_cost":150,"contractor_2":200,"contractor_2_cost":150,"unit_cost":130,"total_cost":130,"profit_sum":120,"margin_percent":110}}}'::json,
+       NULL::integer, NULL::json, 'price_check', '#F97316'
+FROM (
+  SELECT id AS role FROM directus_roles WHERE name = 'Administrator'
+  UNION
+  SELECT role FROM directus_users WHERE email = 'dimon96af@yandex.ru'
+) admin_roles
+WHERE admin_roles.role IS NOT NULL
+UNION ALL
+SELECT NULL::varchar, NULL::uuid, directus_roles.id, 'contractor_costing', NULL::varchar, 'tabular',
+       '{"tabular":{"fields":["order_number","date","customer","manager_employee","product_name","quantity","order_sum","contractor_1","contractor_1_cost","contractor_2","contractor_2_cost"],"page":1}}'::json,
+       '{"tabular":{"spacing":"compact","widths":{"order_number":130,"date":120,"customer":170,"manager_employee":170,"product_name":260,"quantity":100,"order_sum":130,"contractor_1":220,"contractor_1_cost":150,"contractor_2":220,"contractor_2_cost":150}}}'::json,
+       NULL::integer, NULL::json, 'price_check', '#F97316'
+FROM directus_roles
+WHERE name = U&'\0423\043f\0440\0430\0432\043b\044f\044e\0449\0438\0439';
+
+ALTER TABLE customers
+ADD COLUMN IF NOT EXISTS vk_page_url varchar(255);
+
+DELETE FROM directus_fields
+WHERE collection = 'customers'
+  AND field = 'vk_page_url';
+
+INSERT INTO directus_fields (
+  collection, field, special, interface, options, display, display_options,
+  readonly, hidden, sort, width, translations, note, conditions,
+  required, "group", validation, validation_message, searchable
+) VALUES (
+  'customers',
+  'vk_page_url',
+  NULL,
+  'input',
+  '{"iconLeft":"link"}'::json,
+  NULL,
+  NULL,
+  false,
+  false,
+  4,
+  'half',
+  json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0441\044b\043b\043a\0430 \043d\0430 \0441\0442\0440\0430\043d\0438\0446\0443 \0412\041a'))::json,
+  U&'\0411\0443\0434\0435\0442 \0438\0441\043f\043e\043b\044c\0437\043e\0432\0430\0442\044c\0441\044f \0434\043b\044f \0431\0443\0434\0443\0449\0438\0445 \0443\0432\0435\0434\043e\043c\043b\0435\043d\0438\0439 \0412\041a.',
+  NULL,
+  false,
+  NULL,
+  NULL,
+  NULL,
+  true
+);
+
+UPDATE directus_permissions
+SET fields = fields || ',vk_page_url'
+WHERE collection = 'customers'
+  AND action IN ('create', 'update')
+  AND fields IS NOT NULL
+  AND fields <> '*'
+  AND position('vk_page_url' in fields) = 0;
+
+INSERT INTO directus_collections (
+  collection, icon, hidden, singleton, sort, collapse, translations
+) VALUES
+  ('symbolika_clients_group', 'contacts', false, false, 3, 'open',
+   json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043b\0438\0435\043d\0442\044b \0438 \043a\043e\043c\043f\0430\043d\0438\0438'))::json),
+  ('symbolika_office_group', 'storefront', false, false, 4, 'open',
+   json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\0444\0438\0441'))::json)
+ON CONFLICT (collection) DO UPDATE SET
+  icon = EXCLUDED.icon,
+  hidden = EXCLUDED.hidden,
+  singleton = EXCLUDED.singleton,
+  sort = EXCLUDED.sort,
+  collapse = EXCLUDED.collapse,
+  translations = EXCLUDED.translations;
+
+UPDATE directus_collections
+SET hidden = true
+WHERE collection IN (
+  'order_payments',
+  'payment_allocations',
+  'customer_company_links',
+  'orders_overview_items',
+  'office_issue_items',
+  'office_issue_archive_items',
+  'my_orders_in_work_items',
+  'my_orders_completed_items',
+  'my_orders_unpaid_items',
+  'my_orders_in_work_payments',
+  'my_orders_completed_payments',
+  'my_orders_unpaid_payments',
+  'service_directory',
+  'employee_positions',
+  'employees',
+  'contractors',
+  'tech',
+  'order_item_specs',
+  'payment_types',
+  'order_statuses',
+  'production_statuses',
+  'warehouse_items',
+  'warehouse_categories',
+  'tax_settings',
+  'product_categories',
+  'product_subcategories',
+  'product_application_methods',
+  'product_routing_rules',
+  'contractor_payments',
+  'contractor_work',
+  'finance_dashboard_metrics',
+  'finance_dashboard_monthly',
+  'finance_dashboard_series'
+);
+
+WITH menu(collection_name, icon_value, label_value, sort_value, group_value, collapse_value) AS (VALUES
+  ('orders_overview', 'assignment', U&'\0412\0441\0435 \0437\0430\043a\0430\0437\044b \0028\0441\043e \0441\0440\043e\043a\0430\043c\0438\0029', 1, NULL::varchar, 'open'),
+  ('orders_due_urgent', 'priority_high', U&'\0413\043e\0440\044f\0449\0438\0435 \0437\0430\043a\0430\0437\044b', 1, 'orders_overview', 'open'),
+  ('orders_due_today', 'today', U&'\0421\0435\0433\043e\0434\043d\044f', 2, 'orders_overview', 'open'),
+  ('orders_due_this_week', 'calendar_view_week', U&'\041d\0430 \044d\0442\043e\0439 \043d\0435\0434\0435\043b\0435', 3, 'orders_overview', 'open'),
+  ('orders_due_next_week', 'next_week', U&'\041d\0430 \0441\043b\0435\0434\0443\044e\0449\0435\0439 \043d\0435\0434\0435\043b\0435', 4, 'orders_overview', 'open'),
+  ('orders_due_this_month', 'calendar_month', U&'\0412 \044d\0442\043e\043c \043c\0435\0441\044f\0446\0435', 5, 'orders_overview', 'open'),
+  ('orders_due_next_month', 'event_upcoming', U&'\0412 \0441\043b\0435\0434\0443\044e\0449\0435\043c \043c\0435\0441\044f\0446\0435', 6, 'orders_overview', 'open'),
+  ('orders', 'work', U&'\041c\043e\0438 \0437\0430\043a\0430\0437\044b', 2, NULL::varchar, 'open'),
+  ('my_orders_in_work', 'work_history', U&'\0417\0430\043a\0430\0437\044b \0432 \0440\0430\0431\043e\0442\0435', 1, 'orders', 'open'),
+  ('orders_items', 'list_alt', U&'\041f\043e\0437\0438\0446\0438\0438 \0437\0430\043a\0430\0437\0430', 2, 'orders', 'open'),
+  ('my_orders_completed', 'task_alt', U&'\0417\0430\0432\0435\0440\0448\0435\043d\043d\044b\0435 \0437\0430\043a\0430\0437\044b', 3, 'orders', 'open'),
+  ('my_orders_unpaid', 'payments', U&'\041d\0435\043e\043f\043b\0430\0447\0435\043d\043d\044b\0435 \0437\0430\043a\0430\0437\044b', 4, 'orders', 'open'),
+  ('customers', 'person', U&'\041a\043b\0438\0435\043d\0442\044b', 1, 'symbolika_clients_group', 'open'),
+  ('customer_companies', 'business', U&'\041a\043e\043c\043f\0430\043d\0438\0438', 2, 'symbolika_clients_group', 'open'),
+  ('customer_reconciliation', 'request_quote', U&'\0421\0432\0435\0440\043a\0430 \043f\043e \043a\043b\0438\0435\043d\0442\0430\043c', 3, 'symbolika_clients_group', 'open'),
+  ('office_issue', 'storefront', U&'\0412\044b\0434\0430\0447\0430 \0432 \043e\0444\0438\0441\0435', 1, 'symbolika_office_group', 'open'),
+  ('office_items_in_office', 'inventory', U&'\0417\0430\043a\0430\0437\044b \0432 \043e\0444\0438\0441\0435', 2, 'symbolika_office_group', 'open'),
+  ('office_issue_archive', 'archive', U&'\0410\0440\0445\0438\0432 \0432\044b\0434\0430\0447\0438 \0432 \043e\0444\0438\0441\0435', 3, 'symbolika_office_group', 'open'),
+  ('production_work', 'engineering', U&'\041f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\043e', 5, NULL::varchar, 'open'),
+  ('screen_printing_work', 'format_paint', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f', 6, NULL::varchar, 'open'),
+  ('contractor_costing', 'price_check', U&'\0417\0430\043f\043e\043b\043d\0435\043d\0438\0435 \0441\0435\0431\0435\0441\0442\043e\0438\043c\043e\0441\0442\0438', 7, NULL::varchar, 'open')
+)
+UPDATE directus_collections dc
+SET hidden = false,
+    icon = menu.icon_value,
+    sort = menu.sort_value,
+    "group" = menu.group_value,
+    collapse = menu.collapse_value,
+    translations = json_build_array(json_build_object('language','ru-RU','translation', menu.label_value))::json
+FROM menu
+WHERE dc.collection = menu.collection_name;
+
+-- Рабочие представления оставляем в базе и правах, но убираем из бокового меню:
+-- основной интерфейс для них теперь модуль "Рабочий центр".
+UPDATE directus_collections
+SET hidden = true
+WHERE collection IN (
+  'orders_overview',
+  'orders_due_urgent',
+  'orders_due_today',
+  'orders_due_this_week',
+  'orders_due_next_week',
+  'orders_due_this_month',
+  'orders_due_next_month',
+  'my_orders_in_work',
+  'my_orders_completed',
+  'my_orders_unpaid',
+  'customer_reconciliation',
+  'office_issue',
+  'office_items_in_office',
+  'office_issue_archive',
+  'production_work',
+  'screen_printing_work',
+  'contractor_costing'
+);
+
+UPDATE directus_presets
+SET layout_query = jsonb_set(
+      layout_query::jsonb,
+      '{tabular,fields}',
+      '["name","phone","email","vk_page_url","company","manager"]'::jsonb,
+      true
+    )::json
+WHERE collection = 'customers'
+  AND layout = 'tabular'
+  AND layout_query::jsonb ? 'tabular';
 
 COMMIT;
 
