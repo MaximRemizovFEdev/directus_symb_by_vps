@@ -3,8 +3,12 @@
 // docker exec -it symbolika-directus node /directus/setup/import-symbolika.mjs
 
 const DIRECTUS_URL = process.env.DIRECTUS_URL || 'http://127.0.0.1:8055';
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@symb.local';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'ChangeThisAdminPass2026';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+
+if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
+  throw new Error('Для импорта обязательны ADMIN_EMAIL и ADMIN_PASSWORD в серверном .env.');
+}
 
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 

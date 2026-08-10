@@ -55,24 +55,6 @@
     ['Sat', '\u0421\u0431'],
   ]);
   const processedNodes = new WeakSet();
-  const autosave = {
-    timer: null,
-    lastSaveAt: 0,
-    lastSuccessfulSaveAt: 0,
-    statusNode: null,
-    activeField: null,
-    activeInput: null,
-    saveDelay: 1100,
-    minInterval: 1200,
-    savedGraceMs: 45000,
-  };
-  const autosaveText = {
-    saving: '\u0421\u043e\u0445\u0440\u0430\u043d\u044f\u044e...',
-    saved: '\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e',
-    fieldError: '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0438\u0442\u044c \u043f\u043e\u043b\u0435',
-    saveError: '\u041e\u0448\u0438\u0431\u043a\u0430 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u044f',
-  };
-  const formAutosaveEnabled = false;
   const serviceNavigationCollections = new Set([
     'service_directory',
     'contractors',
@@ -88,6 +70,9 @@
     'customer_company_links',
     'contractor_payments',
     'business_expenses',
+    'inventory_items',
+    'inventory_movements',
+    'procurement_requests',
   ]);
   const serviceNavigationRoles = new Set([
     'Administrator',
@@ -96,6 +81,12 @@
   const standardContentRoles = new Set([
     'Administrator',
   ]);
+  const hiddenSystemModulePaths = [
+    '/admin/insights',
+    '/admin/docs',
+    '/admin/documentation',
+    '/admin/help',
+  ];
   const symbolikaDefaultModulePath = '/admin/symbolika-orders';
   const serviceNavigationState = {
     roleName: null,
@@ -113,6 +104,30 @@
     editCell: null,
   };
   const tableInlineEditingEnabled = false;
+  const symbolikaAppearanceThemes = new Set(['graphite', 'espresso', 'pearl', 'frost']);
+
+  function applySymbolikaTheme(value) {
+    const theme = symbolikaAppearanceThemes.has(value) ? value : 'graphite';
+    const isLight = theme === 'pearl' || theme === 'frost';
+    document.documentElement.dataset.symbolikaTheme = theme;
+    document.documentElement.style.colorScheme = isLight ? 'light' : 'dark';
+    if (document.body) document.body.dataset.symbolikaTheme = theme;
+    return theme;
+  }
+
+  function applyStoredSymbolikaTheme() {
+    let theme = 'graphite';
+    try {
+      theme = localStorage.getItem('symbolika-theme') || theme;
+    } catch {}
+    return applySymbolikaTheme(theme);
+  }
+
+  function symbolikaDefaultPathForRole(roleName) {
+    if (roleName === '\u041a\u043e\u043d\u0442\u0440\u0430\u0433\u0435\u043d\u0442') return '/admin/symbolika-contractor';
+    if (roleName === '\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e' || roleName === '\u0428\u0435\u043b\u043a\u043e\u0433\u0440\u0430\u0444\u0438\u044f') return '/admin/symbolika-production';
+    return symbolikaDefaultModulePath;
+  }
 
   function applyDocumentLocale() {
     document.documentElement.lang = 'ru-RU';
@@ -168,6 +183,62 @@
     }
   }
 
+  function isHiddenSystemModuleLink(link) {
+    const href = link?.getAttribute?.('href') || '';
+    const label = [
+      link?.getAttribute?.('aria-label'),
+      link?.getAttribute?.('title'),
+      link?.textContent,
+      link?.innerText,
+    ].filter(Boolean).join(' ').toLowerCase();
+    const isHiddenByLabel = [
+      'insights',
+      'analytics',
+      '\u0430\u043d\u0430\u043b\u0438\u0442\u0438\u043a\u0430',
+      '\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446\u0438\u044f',
+      'аналитика',
+      'документация',
+      'documentation',
+      'docs',
+    ].some((part) => label.includes(part));
+    if (!href) return isHiddenByLabel;
+    try {
+      const url = new URL(href, window.location.origin);
+      return hiddenSystemModulePaths.some((path) => url.pathname === path || url.pathname.startsWith(`${path}/`)) || isHiddenByLabel;
+    } catch (error) {
+      return hiddenSystemModulePaths.some((path) => href === path || href.includes(path)) || isHiddenByLabel;
+    }
+  }
+
+  function applyHiddenSystemModules() {
+    for (const link of document.querySelectorAll('a[href], button[aria-label], [role="link"], [role="button"], .module-bar a, .module-bar button, nav a, nav button')) {
+      if (!isHiddenSystemModuleLink(link)) continue;
+      const item = getNavigationItem(link);
+      item.dataset.symbolikaSystemNavigation = 'hidden';
+      item.style.display = 'none';
+    }
+  }
+
+  function applyNotificationCenterShortcut() {
+    if (isAdminLoginPath()) return;
+    for (const button of document.querySelectorAll('.module-bar button')) {
+      if (!button.querySelector('[data-icon="notifications"]')) continue;
+      button.dataset.symbolikaNotificationCenter = 'true';
+      button.setAttribute('aria-label', '\u0426\u0435\u043d\u0442\u0440 \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u0439');
+      button.setAttribute('title', '\u0426\u0435\u043d\u0442\u0440 \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u0439');
+    }
+  }
+
+  function onNotificationCenterShortcutClick(event) {
+    const button = event.target?.closest?.('.module-bar button[data-symbolika-notification-center="true"]');
+    if (!button) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (window.location.pathname !== '/admin/symbolika-notifications') {
+      window.location.assign('/admin/symbolika-notifications');
+    }
+  }
+
   async function applyStandardContentVisibility() {
     if (isAdminLoginPath()) return;
     const roleName = serviceNavigationState.roleName || await loadCurrentRoleName();
@@ -184,7 +255,7 @@
 
     if (!canUseStandardContent && isStandardContentPath() && !contentNavigationState.redirecting) {
       contentNavigationState.redirecting = true;
-      window.location.assign(symbolikaDefaultModulePath);
+      window.location.assign(symbolikaDefaultPathForRole(roleName));
       window.setTimeout(() => {
         contentNavigationState.redirecting = false;
       }, 1200);
@@ -757,6 +828,7 @@
   }
 
   function scan() {
+    applyStoredSymbolikaTheme();
     applyDocumentLocale();
     updateCountLabels(document.body);
     normalizeCalendarWeekdays(document.body);
@@ -766,50 +838,6 @@
   function isContentItemPage() {
     const match = window.location.pathname.match(/^\/admin\/content\/([^/]+)\/([^/?#]+)/);
     return Boolean(match && match[2] && match[2] !== '+');
-  }
-
-  function isAutosaveTarget(target) {
-    if (!target || !isContentItemPage()) return false;
-    if (!(target instanceof HTMLElement)) return false;
-    if (target.closest('.symbolika-autosave-select')) return false;
-    if (target.closest('[role="dialog"]')) return false;
-    if (target.closest('.v-table, .interface-list-o2m, .v-list, .search-input')) return false;
-    if (target.matches('[readonly], [disabled], [type="file"], [type="search"]')) return false;
-
-    const tag = target.tagName.toLowerCase();
-    if (['input', 'textarea', 'select'].includes(tag)) return true;
-    if (target.closest('.v-select, .v-checkbox, .v-date-picker, .v-input, .v-textarea')) return true;
-    return false;
-  }
-
-  function ensureAutosaveStatus() {
-    if (autosave.statusNode && document.body.contains(autosave.statusNode)) return autosave.statusNode;
-
-    const node = document.createElement('div');
-    node.className = 'symbolika-autosave-status';
-    node.setAttribute('aria-live', 'polite');
-    document.body.appendChild(node);
-    autosave.statusNode = node;
-    return node;
-  }
-
-  function setAutosaveStatus(state, text) {
-    if (!formAutosaveEnabled) return;
-    const node = ensureAutosaveStatus();
-    node.dataset.state = state;
-    node.textContent = text;
-    node.classList.add('is-visible');
-
-    if (state === 'saved') {
-      window.setTimeout(() => {
-        if (node.dataset.state === 'saved') node.classList.remove('is-visible');
-      }, 1500);
-    }
-  }
-
-  function scheduleAutosave(delay) {
-    window.clearTimeout(autosave.timer);
-    autosave.timer = window.setTimeout(dispatchDirectusFieldSave, delay);
   }
 
   function getRouteItem() {
@@ -823,117 +851,6 @@
     return fieldElement.querySelector('[collection][field][primary-key], .v-select[collection], .v-input[collection]');
   }
 
-  function getActiveField() {
-    if (autosave.activeField && document.body.contains(autosave.activeField)) return autosave.activeField;
-    if (document.activeElement instanceof HTMLElement) {
-      return document.activeElement.closest('[data-field], [collection][field][primary-key]');
-    }
-    return null;
-  }
-
-  function readOfficeStatusValue(fieldElement) {
-    const text = fieldElement.querySelector('input')?.value || fieldElement.textContent || '';
-    if (text.includes('\u041d\u0435 \u0432 \u043e\u0444\u0438\u0441\u0435')) return 'not_in_office';
-    if (text.includes('\u0412\u044b\u0434\u0430\u043d')) return 'issued';
-    if (text.includes('\u0412 \u043e\u0444\u0438\u0441\u0435')) return 'in_office';
-    return undefined;
-  }
-
-  function readActiveFieldValue(fieldElement) {
-    const field = fieldElement.dataset.field;
-    const input = autosave.activeInput && fieldElement.contains(autosave.activeInput)
-      ? autosave.activeInput
-      : fieldElement.querySelector('textarea, input:not([type="hidden"]), select');
-
-    if (field === 'office_status') return readOfficeStatusValue(fieldElement);
-    if (!input) return undefined;
-    if (input.matches('[type="checkbox"]')) return input.checked;
-    if (input.matches('[readonly], [disabled], [type="file"], [type="search"]')) return undefined;
-    return input.value;
-  }
-
-  async function dispatchDirectusFieldSave() {
-    const now = Date.now();
-    if (now - autosave.lastSaveAt < autosave.minInterval) {
-      scheduleAutosave(autosave.minInterval);
-      return;
-    }
-
-    autosave.lastSaveAt = now;
-
-    const fieldElement = getActiveField();
-    const control = getFieldControl(fieldElement) || fieldElement;
-    const routeItem = getRouteItem();
-    const collection = fieldElement?.dataset.collection || control?.getAttribute?.('collection') || routeItem.collection;
-    const field = fieldElement?.dataset.field || control?.getAttribute?.('field');
-    const primaryKey = fieldElement?.dataset.primaryKey || control?.getAttribute?.('primary-key') || routeItem.primaryKey;
-    const value = fieldElement ? readActiveFieldValue(fieldElement) : undefined;
-
-    if (!collection || !field || !primaryKey || primaryKey === '+' || value === undefined) {
-      return;
-    }
-
-    setAutosaveStatus('saving', autosaveText.saving);
-
-    try {
-      const response = await fetch(`/items/${collection}/${primaryKey}`, {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [field]: value }),
-      });
-
-      if (!response.ok) throw new Error(`Autosave failed: ${response.status}`);
-      autosave.lastSuccessfulSaveAt = Date.now();
-      setAutosaveStatus('saved', autosaveText.saved);
-    } catch (error) {
-      console.warn('[Symbolika autosave]', error);
-      if (String(error?.message || '').includes('Autosave failed: 403')) return;
-      if (String(error?.message || '').includes('Autosave failed: 400')) return;
-      setAutosaveStatus('error', autosaveText.saveError);
-    }
-  }
-
-  function onAutosaveInput(event) {
-    if (!isAutosaveTarget(event.target)) return;
-    autosave.activeField = event.target.closest('[data-collection][data-field][data-primary-key]');
-    autosave.activeInput = event.target;
-
-    const tag = event.target.tagName?.toLowerCase();
-    const type = event.target.getAttribute?.('type');
-    const immediate = event.type === 'change' || tag === 'select' || ['checkbox', 'radio', 'date', 'datetime-local'].includes(type);
-
-    scheduleAutosave(immediate ? 250 : autosave.saveDelay);
-  }
-
-  function onAutosavePointerDown(event) {
-    if (!isContentItemPage()) return;
-    const field = event.target instanceof HTMLElement ? event.target.closest('[data-field]') : null;
-    if (!field || field.closest('.v-table, .interface-list-o2m, .v-list')) return;
-    autosave.activeField = field;
-    autosave.activeInput = event.target instanceof HTMLElement ? event.target : null;
-  }
-
-  function onAutosaveClick(event) {
-    if (!isContentItemPage() || !autosave.activeField) return;
-    if (!(event.target instanceof HTMLElement)) return;
-    if (event.target.closest('.symbolika-autosave-select')) return;
-
-    const clickedDirectusControl = event.target.closest(
-      '.v-select, .v-checkbox, .v-input, .v-list-item, [role="option"], [role="checkbox"]'
-    );
-
-    if (!clickedDirectusControl) return;
-    if (
-      autosave.activeField.contains(clickedDirectusControl)
-      && clickedDirectusControl.closest('.v-select, .v-input')
-      && !clickedDirectusControl.closest('.v-checkbox, [role="checkbox"]')
-    ) {
-      return;
-    }
-    scheduleAutosave(550);
-  }
-
   function isStaticReadonlyFieldTarget(target) {
     return target instanceof HTMLElement
       && Boolean(target.closest('[data-collection="orders_items"][data-field="production_status"]'));
@@ -944,16 +861,6 @@
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
-  }
-
-  function resolveAutosavedDirtyModal(root) {
-    if (!root || Date.now() - autosave.lastSuccessfulSaveAt > autosave.savedGraceMs) return;
-    const text = root.textContent || '';
-    if (!text.includes('\u041d\u0435\u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d\u043d\u044b\u0435 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f')) return;
-
-    const buttons = Array.from(root.querySelectorAll('button'));
-    const discard = buttons.find((button) => button.textContent?.includes('\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f'));
-    if (discard) window.setTimeout(() => discard.click(), 50);
   }
 
   function getListCollection() {
@@ -1105,7 +1012,6 @@
     cell.classList.add('is-saving');
     setInlineOverride(collection, primaryKey, field, value);
     repeatInlineOverride();
-    setAutosaveStatus('saving', autosaveText.saving);
 
     try {
       const response = await fetch(`/items/${writeCollection}/${primaryKey}`, {
@@ -1130,7 +1036,6 @@
       cell.classList.remove('is-saving');
       cell.classList.add('is-saved');
       removeFilteredInlineRowIfNeeded(cell, collection, field, confirmedValue);
-      setAutosaveStatus('saved', autosaveText.saved);
       repeatInlineOverride();
       window.setTimeout(() => cell.classList.remove('is-saved'), 900);
     } catch (error) {
@@ -1139,7 +1044,6 @@
       cell.innerHTML = originalHtml;
       cell.classList.remove('is-saving');
       cell.classList.add('is-error');
-      setAutosaveStatus('error', autosaveText.saveError);
       window.setTimeout(() => cell.classList.remove('is-error'), 1400);
     }
   }
@@ -1265,7 +1169,7 @@
   }
 
   function setPushButtonState(state, text) {
-    if (state === 'enabled') {
+    if (state === 'enabled' || state === 'denied') {
       if (pushUi.button) {
         pushUi.button.remove();
         pushUi.button = null;
@@ -1307,6 +1211,9 @@
     if (!notification?.collection || notification.item == null) return '/admin/symbolika-orders';
     if (notification.collection === 'production_work' || notification.collection === 'screen_printing_work') {
       return '/admin/symbolika-production';
+    }
+    if (notification.collection === 'contractor_work') {
+      return '/admin/symbolika-contractor';
     }
     if (notification.collection === 'customers' || notification.collection === 'customer_companies') {
       return '/admin/symbolika-clients';
@@ -1393,10 +1300,9 @@
   }
 
   function startNotificationPolling() {
-    if (pushUi.pollTimer || Notification.permission !== 'granted') return;
-
-    pollDirectusNotifications();
-    pushUi.pollTimer = window.setInterval(pollDirectusNotifications, 12000);
+    // Browser push is already delivered by the service worker. Polling Directus
+    // notifications and calling new Notification() here duplicates the same toast.
+    return;
   }
 
   async function enablePushNotifications() {
@@ -1477,19 +1383,18 @@
     pushUi.button = button;
 
     if (Notification.permission === 'denied') {
-      setPushButtonState('denied', '\u0423\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f \u0437\u0430\u043f\u0440\u0435\u0449\u0435\u043d\u044b');
-    } else {
-      setPushButtonState('default', '\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f');
+      setPushButtonState('denied', '');
+      return;
     }
+
+    setPushButtonState('default', '\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f');
   }
 
   const observer = new MutationObserver((mutations) => {
     window.requestAnimationFrame(() => {
-      resolveAutosavedDirtyModal(document.body);
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
           walk(node);
-          if (node.nodeType === Node.ELEMENT_NODE) resolveAutosavedDirtyModal(node);
         }
         if (mutation.type === 'characterData') updateTextNode(mutation.target);
       }
@@ -1497,6 +1402,8 @@
       applyVisibleInlineOverrides();
       applyServiceNavigationVisibility();
       applyStandardContentVisibility();
+      applyHiddenSystemModules();
+      applyNotificationCenterShortcut();
     });
   });
 
@@ -1506,6 +1413,12 @@
     scan();
   }
 
+  applyStoredSymbolikaTheme();
+  window.addEventListener('symbolika-theme-change', (event) => applySymbolikaTheme(event?.detail?.theme));
+  window.addEventListener('storage', (event) => {
+    if (event.key === 'symbolika-theme') applySymbolikaTheme(event.newValue);
+  });
+
   installTableFetchCapture();
   enhanceInlineTables();
   applyVisibleInlineOverrides();
@@ -1513,6 +1426,8 @@
   installStandardContentRouteGuard();
   applyServiceNavigationVisibility();
   applyStandardContentVisibility();
+  applyHiddenSystemModules();
+  applyNotificationCenterShortcut();
 
   let attempts = 0;
   const interval = window.setInterval(() => {
@@ -1521,20 +1436,15 @@
     createPushButton();
     applyServiceNavigationVisibility();
     applyStandardContentVisibility();
+    applyNotificationCenterShortcut();
     attempts += 1;
     if (attempts >= 20) window.clearInterval(interval);
   }, 500);
 
   document.addEventListener('click', onInlineTableClick, true);
+  document.addEventListener('click', onNotificationCenterShortcutClick, true);
   document.addEventListener('pointerdown', onStaticReadonlyFieldEvent, true);
   document.addEventListener('click', onStaticReadonlyFieldEvent, true);
-  if (formAutosaveEnabled) {
-    document.addEventListener('pointerdown', onAutosavePointerDown, true);
-    document.addEventListener('click', onAutosaveClick, true);
-    document.addEventListener('input', onAutosaveInput, true);
-    document.addEventListener('change', onAutosaveInput, true);
-    document.addEventListener('blur', onAutosaveInput, true);
-  }
 
   observer.observe(document.documentElement, {
     childList: true,

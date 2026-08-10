@@ -1,4 +1,5 @@
 import webPush from 'web-push';
+import nodemailer from 'nodemailer';
 
 export default ({ filter, action }, { database, logger, env }) => {
   const num = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
@@ -14,14 +15,93 @@ export default ({ filter, action }, { database, logger, env }) => {
   const NOT_IN_OFFICE = 'not_in_office';
   const IN_OFFICE = 'in_office';
   const ISSUED = 'issued';
+  const DEFAULT_NOTIFICATION_TOPICS = {
+    order_status: true,
+    item_status: true,
+    new_tasks: true,
+    task_updates: true,
+    production: true,
+    procurement: true,
+    mail: false,
+    finance: true,
+  };
 
   const prevOrders = new Map();
   const prevItems = new Map();
+  const prevTasks = new Map();
   const prevPayments = new Map();
   const prevContractorPayments = new Map();
   let pushConfigured = false;
   let pushTableReady = false;
   let workNotificationTableReady = false;
+  let customerMailTransport = null;
+
+  async function recordAutomationRun(handlerKey, title, status, context = {}, error = null) {
+    try {
+      const now = database.fn.now();
+      const row = {
+        handler_key: handlerKey,
+        title,
+        status,
+        last_attempt_at: now,
+        last_context: JSON.stringify(context || {}),
+        updated_at: now,
+      };
+      if (status === 'ok') {
+        row.last_success_at = now;
+        row.last_error = null;
+      }
+      if (status === 'error') {
+        row.last_error_at = now;
+        row.last_error = String(error?.message || error || 'Неизвестная ошибка').slice(0, 1000);
+      }
+      await database('symbolika_automation_runs')
+        .insert(row)
+        .onConflict('handler_key')
+        .merge(row);
+    } catch (healthError) {
+      logger.warn(`[Symbolika automation health] ${healthError.message}`);
+    }
+  }
+
+  const formatCustomerMoney = (value) => `${new Intl.NumberFormat('ru-RU', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(num(value))} ₽`;
+
+  const formatCustomerQuantity = (value) => new Intl.NumberFormat('ru-RU', {
+    maximumFractionDigits: 2,
+  }).format(num(value));
+
+  async function storeEventBeforeDelta(collection, itemId, previousRow, userId = null) {
+    if (!collection || !itemId || !previousRow) return;
+
+    try {
+      const query = database('symbolika_event_feed')
+        .where({ source_collection: collection, source_id: Number(itemId), action: 'update' })
+        .whereNull('before_delta');
+      if (userId) query.andWhere({ actor_user: userId });
+
+      const event = await query.orderBy('event_id', 'desc').first('event_id', 'delta');
+      if (!event?.event_id) return;
+
+      const delta = typeof event.delta === 'string' ? JSON.parse(event.delta || '{}') : (event.delta || {});
+      const beforeDelta = {};
+      Object.keys(delta).forEach((field) => {
+        beforeDelta[field] = Object.prototype.hasOwnProperty.call(previousRow, field)
+          ? previousRow[field]
+          : null;
+      });
+
+      if (Object.keys(beforeDelta).length) {
+        await database('symbolika_event_feed')
+          .where({ event_id: event.event_id })
+          .update({ before_delta: beforeDelta });
+      }
+    } catch (error) {
+      logger.warn(`Could not store rollback snapshot for ${collection}:${itemId}: ${error.message}`);
+    }
+  }
 
   async function generateOrderNumber() {
     const last = await database('orders')
@@ -47,6 +127,22 @@ export default ({ filter, action }, { database, logger, env }) => {
       .first();
   }
 
+  async function getEmployeeActorByUser(userId) {
+    if (!userId) return null;
+
+    return await database('employees as e')
+      .join('directus_users as u', 'u.id', 'e.directus_user')
+      .leftJoin('directus_roles as r', 'r.id', 'u.role')
+      .where('e.directus_user', userId)
+      .whereNot('e.is_active', false)
+      .select('e.id', 'r.name as role_name')
+      .first();
+  }
+
+  async function getCommissionManagerByUser(userId) {
+    return getEmployeeActorByUser(userId);
+  }
+
   async function getDeliveredStatusId() {
     const status = await database('order_statuses')
       .whereILike('name', '\u0414\u043e\u0441\u0442\u0430\u0432\u043b\u0435\u043d')
@@ -61,6 +157,25 @@ export default ({ filter, action }, { database, logger, env }) => {
       .first();
 
     return status?.id || null;
+  }
+
+  async function getReadyProductionStatusId() {
+    const status = await database('production_statuses')
+      .whereILike('name', '\u0413\u043e\u0442\u043e\u0432')
+      .first();
+
+    return status?.id || null;
+  }
+
+  async function normalizedContractorCost(contractorId, value) {
+    if (!contractorId) return num(value);
+
+    const contractor = await database('contractors')
+      .where({ id: contractorId })
+      .select('is_internal_production')
+      .first();
+
+    return contractor?.is_internal_production ? 0 : num(value);
   }
 
   async function getRoleUserIds(roleName) {
@@ -185,9 +300,14 @@ export default ({ filter, action }, { database, logger, env }) => {
 
   function getNotificationUrl(collection, item) {
     if (!collection || item == null) return '/admin/symbolika-orders';
-    if (collection === 'production_work') return '/admin/symbolika-production';
-    if (collection === 'screen_printing_work') return '/admin/symbolika-production';
-    if (collection === 'office_issue' || collection === 'office_items_in_office') return '/admin/symbolika-orders';
+    if (collection === 'orders') return `/admin/symbolika-orders?order=${encodeURIComponent(item)}`;
+    if (collection === 'orders_items') return `/admin/symbolika-orders?item=${encodeURIComponent(item)}`;
+    if (collection === 'symbolika_tasks') return `/admin/symbolika-tasks?task=${encodeURIComponent(item)}`;
+    if (collection === 'symbolika_mail_threads') return `/admin/symbolika-mail-module?thread=${encodeURIComponent(item)}`;
+    if (collection === 'procurement_requests') return `/admin/symbolika-procurement?request=${encodeURIComponent(item)}`;
+    if (collection === 'production_work') return `/admin/symbolika-production?item=${encodeURIComponent(item)}`;
+    if (collection === 'screen_printing_work') return `/admin/symbolika-production?item=${encodeURIComponent(item)}`;
+    if (collection === 'office_issue' || collection === 'office_items_in_office') return `/admin/symbolika-orders?order=${encodeURIComponent(item)}`;
     if (collection === 'customers' || collection === 'customer_companies') return '/admin/symbolika-clients';
     return '/admin/symbolika-orders';
   }
@@ -241,15 +361,247 @@ export default ({ filter, action }, { database, logger, env }) => {
     }
   }
 
+  function customerMailSender() {
+    if (customerMailTransport) return customerMailTransport;
+    const host = env?.SYMBOLIKA_SMTP_HOST || env?.EMAIL_SMTP_HOST;
+    const port = Number(env?.SYMBOLIKA_SMTP_PORT || env?.EMAIL_SMTP_PORT || 465);
+    const user = env?.SYMBOLIKA_SMTP_USER || env?.EMAIL_SMTP_USER;
+    const pass = env?.SYMBOLIKA_SMTP_PASSWORD || env?.EMAIL_SMTP_PASSWORD;
+    if (!host || !user || !pass) return null;
+    customerMailTransport = nodemailer.createTransport({
+      host,
+      port,
+      secure: String(env?.SYMBOLIKA_SMTP_SECURE || '').toLowerCase() === 'true' || port === 465,
+      auth: { user, pass },
+    });
+    return customerMailTransport;
+  }
+
+  async function sendCustomerEmail(recipient, subject, message) {
+    const transport = customerMailSender();
+    const from = env?.SYMBOLIKA_EMAIL_FROM || env?.EMAIL_FROM || env?.SYMBOLIKA_SMTP_USER || env?.EMAIL_SMTP_USER;
+    if (!transport || !from) throw new Error('Не настроена отправка email.');
+    const result = await transport.sendMail({ from, to: recipient, subject, text: message });
+    return result?.messageId || null;
+  }
+
+  async function sendCustomerTelegram(recipient, message) {
+    const token = env?.SYMBOLIKA_TELEGRAM_BOT_TOKEN;
+    if (!token) throw new Error('Не настроен Telegram-бот.');
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: recipient, text: message, disable_web_page_preview: true }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload?.ok) throw new Error(payload?.description || `Telegram HTTP ${response.status}`);
+    return payload?.result?.message_id ? String(payload.result.message_id) : null;
+  }
+
+  async function sendCustomerVk(recipient, message) {
+    const token = env?.SYMBOLIKA_VK_TOKEN;
+    if (!token) throw new Error('Не настроена отправка ВКонтакте.');
+    const body = new URLSearchParams({
+      access_token: token,
+      v: env?.SYMBOLIKA_VK_API_VERSION || '5.199',
+      peer_id: String(recipient),
+      random_id: String(Date.now() * 1000 + Math.floor(Math.random() * 1000)),
+      message,
+    });
+    const response = await fetch('https://api.vk.com/method/messages.send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || payload?.error) throw new Error(payload?.error?.error_msg || `VK HTTP ${response.status}`);
+    return payload?.response != null ? String(payload.response) : null;
+  }
+
+  async function sendCustomerSms(recipient, message) {
+    const apiId = env?.SYMBOLIKA_SMS_RU_API_ID;
+    if (!apiId) throw new Error('Не настроена отправка SMS.');
+    const body = new URLSearchParams({
+      api_id: apiId,
+      to: String(recipient).replace(/\D/g, ''),
+      msg: message,
+      json: '1',
+    });
+    const sender = env?.SYMBOLIKA_SMS_RU_FROM;
+    if (sender) body.set('from', sender);
+    const response = await fetch('https://sms.ru/sms/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    const payload = await response.json().catch(() => null);
+    const smsResult = payload?.sms?.[String(recipient).replace(/\D/g, '')];
+    if (!response.ok || payload?.status !== 'OK' || smsResult?.status !== 'OK') {
+      throw new Error(smsResult?.status_text || payload?.status_text || `SMS HTTP ${response.status}`);
+    }
+    return smsResult?.sms_id || null;
+  }
+
+  function customerNotificationRecipient(contact) {
+    const channel = contact?.notification_channel || 'none';
+    if (channel === 'email') return contact?.email || null;
+    if (channel === 'sms') return contact?.phone || null;
+    if (channel === 'telegram') return contact?.telegram_chat_id || null;
+    if (channel === 'vk') return contact?.vk_peer_id || null;
+    return null;
+  }
+
+  async function dispatchCustomerNotification(channel, recipient, subject, message) {
+    if (channel === 'email') return await sendCustomerEmail(recipient, subject, message);
+    if (channel === 'telegram') return await sendCustomerTelegram(recipient, message);
+    if (channel === 'vk') return await sendCustomerVk(recipient, message);
+    if (channel === 'sms') return await sendCustomerSms(recipient, message);
+    throw new Error('Основной канал уведомлений не выбран.');
+  }
+
+  async function customerReadyNotificationContext(orderId) {
+    if (!orderId) return null;
+    const order = await database('orders as o')
+      .leftJoin('order_statuses as os', 'os.id', 'o.order_status')
+      .leftJoin('customers as customer', 'customer.id', 'o.customer')
+      .leftJoin('customer_companies as company', 'company.id', 'o.customer_company')
+      .where('o.id', orderId)
+      .select(
+        'o.*', 'os.name as order_status_name',
+        'customer.id as customer_contact_id', 'customer.name as customer_contact_name',
+        'customer.phone as customer_phone', 'customer.email as customer_email',
+        'customer.notification_channel as customer_notification_channel',
+        'customer.telegram_chat_id as customer_telegram_chat_id', 'customer.vk_peer_id as customer_vk_peer_id',
+        'company.id as company_contact_id', 'company.name as company_contact_name',
+        'company.phone as company_phone', 'company.email as company_email',
+        'company.notification_channel as company_notification_channel',
+        'company.telegram_chat_id as company_telegram_chat_id', 'company.vk_peer_id as company_vk_peer_id',
+      )
+      .first();
+    if (!order) return null;
+    if (order.shipping_method !== OFFICE_PICKUP || order.office_status !== IN_OFFICE) return null;
+    if (String(order.order_status_name || '').trim() !== 'Готов') return null;
+
+    const items = await database('orders_items')
+      .where({ order: orderId })
+      .orderBy('id')
+      .select('id', 'product_name', 'quantity', 'price_per_unit', 'order_sum', 'office_status');
+    if (!items.length || items.some((item) => item.office_status !== IN_OFFICE)) return null;
+
+    const customerContact = order.customer_contact_id ? {
+      id: order.customer_contact_id,
+      name: order.customer_contact_name,
+      phone: order.customer_phone,
+      email: order.customer_email,
+      notification_channel: order.customer_notification_channel,
+      telegram_chat_id: order.customer_telegram_chat_id,
+      vk_peer_id: order.customer_vk_peer_id,
+    } : null;
+    const companyContact = order.company_contact_id ? {
+      id: order.company_contact_id,
+      name: order.company_contact_name,
+      phone: order.company_phone,
+      email: order.company_email,
+      notification_channel: order.company_notification_channel,
+      telegram_chat_id: order.company_telegram_chat_id,
+      vk_peer_id: order.company_vk_peer_id,
+    } : null;
+    const contact = customerContact?.notification_channel && customerContact.notification_channel !== 'none'
+      ? customerContact
+      : companyContact;
+    if (!contact || !contact.notification_channel || contact.notification_channel === 'none') return null;
+
+    return { order, items, contact };
+  }
+
+  async function buildCustomerReadyMessage(context) {
+    const { order, items } = context;
+    const settings = await database('symbolika_customer_notification_settings').where({ id: 1 }).first().catch(() => null);
+    const lines = [
+      `Заказ ${order.order_number || `#${order.id}`} готов и находится в офисе.`,
+      '',
+      'Позиции:',
+      ...items.map((item) => `• ${item.product_name || `Позиция #${item.id}`} — ${formatCustomerQuantity(item.quantity)} шт. × ${formatCustomerMoney(item.price_per_unit)} = ${formatCustomerMoney(item.order_sum)}`),
+      '',
+      `Сумма заказа: ${formatCustomerMoney(order.order_sum)}`,
+      `Оплачено: ${formatCustomerMoney(order.paid_amount)}`,
+      `Остаток к оплате: ${formatCustomerMoney(order.payment_due)}`,
+    ];
+    if (settings?.office_address) lines.push('', `Адрес офиса: ${settings.office_address}`);
+    if (settings?.office_hours) lines.push(`Время работы: ${settings.office_hours}`);
+    if (settings?.website_url) lines.push(`Сайт: ${settings.website_url}`);
+    if (settings?.vk_group_url) lines.push(`ВКонтакте: ${settings.vk_group_url}`);
+    return lines.join('\n');
+  }
+
+  async function notifyCustomerOrderReady(orderId) {
+    const context = await customerReadyNotificationContext(orderId);
+    if (!context) return false;
+    const existing = await database('symbolika_customer_notifications')
+      .where({ order: orderId, event_key: 'ready_in_office' })
+      .first();
+    if (existing?.status === 'sent') return false;
+    if (existing?.status === 'sending' && Date.now() - new Date(existing.updated_at).getTime() < 5 * 60 * 1000) return false;
+
+    await recordAutomationRun('customer_notifications', 'Уведомления клиентам', 'running', { order_id: orderId });
+
+    const channel = context.contact.notification_channel;
+    const recipient = customerNotificationRecipient(context.contact);
+    const subject = `Заказ ${context.order.order_number || `#${orderId}`} готов`;
+    const message = await buildCustomerReadyMessage(context);
+    const base = {
+      customer: context.order.customer || null,
+      customer_company: context.order.customer_company || null,
+      channel,
+      recipient,
+      subject,
+      message,
+      status: 'sending',
+      attempts: Number(existing?.attempts || 0) + 1,
+      last_error: null,
+      updated_at: database.fn.now(),
+    };
+    if (existing) await database('symbolika_customer_notifications').where({ id: existing.id }).update(base);
+    else await database('symbolika_customer_notifications').insert({ order: orderId, event_key: 'ready_in_office', ...base });
+
+    try {
+      if (!recipient) throw new Error('Для выбранного канала не указан получатель.');
+      const providerMessageId = await dispatchCustomerNotification(channel, recipient, subject, message);
+      await database('symbolika_customer_notifications')
+        .where({ order: orderId, event_key: 'ready_in_office' })
+        .update({
+          status: 'sent',
+          provider_message_id: providerMessageId,
+          sent_at: database.fn.now(),
+          updated_at: database.fn.now(),
+        });
+      await recordAutomationRun('customer_notifications', 'Уведомления клиентам', 'ok', {
+        order_id: orderId,
+        channel,
+      });
+      return true;
+    } catch (error) {
+      await database('symbolika_customer_notifications')
+        .where({ order: orderId, event_key: 'ready_in_office' })
+        .update({ status: 'failed', last_error: String(error?.message || error).slice(0, 1000), updated_at: database.fn.now() });
+      logger.warn({ orderId, channel, error: error?.message || error }, '[Symbolika customer notification] send failed');
+      await recordAutomationRun('customer_notifications', 'Уведомления клиентам', 'error', {
+        order_id: orderId,
+        channel,
+      }, error);
+      return false;
+    }
+  }
+
   async function sendBrowserPush(recipient, subject, message, collection = null, item = null) {
-    if (!recipient || !configurePush()) return;
-    if (!await ensurePushTable()) return;
+    if (!recipient || !configurePush()) return { status: 'skipped', sent: 0, failed: 0, error: 'Push не настроен на сервере.' };
+    if (!await ensurePushTable()) return { status: 'failed', sent: 0, failed: 1, error: 'Таблица push-подписок недоступна.' };
 
     const subscriptions = await database('symbolika_push_subscriptions')
       .where({ user: recipient })
       .select('id', 'subscription');
 
-    if (!subscriptions.length) return;
+    if (!subscriptions.length) return { status: 'skipped', sent: 0, failed: 0, error: 'На устройствах пользователя push не подключён.' };
 
     const payload = JSON.stringify({
       title: subject,
@@ -258,17 +610,26 @@ export default ({ filter, action }, { database, logger, env }) => {
       tag: collection && item != null ? `${collection}:${item}` : undefined,
     });
 
+    let sent = 0;
+    let failed = 0;
+    let lastError = '';
     for (const row of subscriptions) {
       try {
         await webPush.sendNotification(row.subscription, payload);
+        sent += 1;
         await database('symbolika_push_subscriptions')
           .where({ id: row.id })
           .update({ last_error: null, updated_at: database.fn.now() });
       } catch (error) {
         if (error?.statusCode === 404 || error?.statusCode === 410) {
           await database('symbolika_push_subscriptions').where({ id: row.id }).delete();
+          failed += 1;
+          lastError = 'Push-подписка устройства устарела.';
           continue;
         }
+
+        failed += 1;
+        lastError = String(error?.message || error).slice(0, 500);
 
         await database('symbolika_push_subscriptions')
           .where({ id: row.id })
@@ -279,34 +640,244 @@ export default ({ filter, action }, { database, logger, env }) => {
         logger.warn(error);
       }
     }
+    return {
+      status: sent > 0 ? 'sent' : 'failed',
+      sent,
+      failed,
+      error: sent > 0 ? null : lastError || 'Не удалось доставить push.',
+    };
   }
 
-  async function notifyUser(recipient, subject, message, collection = null, item = null) {
-    if (!recipient || !subject) return;
+  async function saveEmployeeDelivery(notification, user, channel, recipient, result = {}) {
+    const status = result.status || 'failed';
+    const values = {
+      user,
+      channel,
+      recipient: recipient || null,
+      status,
+      attempts: 1,
+      provider_message_id: result.provider_message_id || null,
+      last_error: result.error ? String(result.error).slice(0, 1000) : null,
+      sent_at: status === 'sent' ? database.fn.now() : null,
+      updated_at: database.fn.now(),
+    };
+    await database('symbolika_employee_notification_deliveries')
+      .insert({ notification, ...values, created_at: database.fn.now() })
+      .onConflict(['notification', 'channel'])
+      .merge({
+        ...values,
+        attempts: database.raw('symbolika_employee_notification_deliveries.attempts + 1'),
+      });
+  }
 
-    await database('directus_notifications').insert({
+  async function deliverEmployeeNotification(notification, recipient, subject, message, collection, item) {
+    let settings;
+    try {
+      settings = await database('symbolika_employee_notification_settings as s')
+        .rightJoin('directus_users as u', 'u.id', 's.user')
+        .where('u.id', recipient)
+        .select(
+          'u.email as user_email',
+          's.push_enabled', 's.email_enabled', 's.vk_enabled', 's.telegram_enabled',
+          's.email_address', 's.vk_peer_id', 's.telegram_chat_id',
+        )
+        .first();
+    } catch (error) {
+      logger.warn({ recipient, error: error?.message || error }, '[Symbolika employee notification] settings unavailable');
+      return;
+    }
+    if (!settings) return;
+
+    if (settings.push_enabled !== false) {
+      try {
+        const result = await sendBrowserPush(recipient, subject, message, collection, item);
+        await saveEmployeeDelivery(notification, recipient, 'push', null, result);
+      } catch (error) {
+        await saveEmployeeDelivery(notification, recipient, 'push', null, { status: 'failed', error: error?.message || error });
+      }
+    }
+
+    const channels = [
+      { id: 'email', enabled: settings.email_enabled, target: settings.email_address || settings.user_email },
+      { id: 'vk', enabled: settings.vk_enabled, target: settings.vk_peer_id },
+      { id: 'telegram', enabled: settings.telegram_enabled, target: settings.telegram_chat_id },
+    ];
+    const link = getPublicUrl(getNotificationUrl(collection, item));
+    const externalMessage = [message, link].filter(Boolean).join('\n\n');
+    for (const channel of channels) {
+      if (!channel.enabled) continue;
+      if (!channel.target) {
+        await saveEmployeeDelivery(notification, recipient, channel.id, null, { status: 'failed', error: 'Не указан получатель.' });
+        continue;
+      }
+      try {
+        const providerMessageId = await dispatchCustomerNotification(channel.id, channel.target, subject, externalMessage);
+        await saveEmployeeDelivery(notification, recipient, channel.id, channel.target, { status: 'sent', provider_message_id: providerMessageId });
+      } catch (error) {
+        logger.warn({ recipient, channel: channel.id, error: error?.message || error }, '[Symbolika employee notification] send failed');
+        await saveEmployeeDelivery(notification, recipient, channel.id, channel.target, { status: 'failed', error: error?.message || error });
+      }
+    }
+  }
+
+  async function employeeTopicEnabled(recipient, topic) {
+    if (!recipient || !topic || topic === 'system') return true;
+    try {
+      const row = await database('symbolika_employee_notification_settings').where('user', recipient).select('topics').first();
+      const topics = { ...DEFAULT_NOTIFICATION_TOPICS, ...(row?.topics || {}) };
+      return topics[topic] !== false;
+    } catch (error) {
+      logger.warn({ recipient, topic, error: error?.message || error }, '[Symbolika employee notification] topic settings unavailable');
+      return true;
+    }
+  }
+
+  async function notifyUser(recipient, subject, message, collection = null, item = null, topic = 'system') {
+    if (!recipient || !subject) return;
+    if (!await employeeTopicEnabled(recipient, topic)) return;
+
+    const inserted = await database('directus_notifications').insert({
       status: 'inbox',
       recipient,
       subject,
       message,
       collection,
       item: item == null ? null : String(item),
-    });
-
-    await sendBrowserPush(recipient, subject, message, collection, item);
-  }
-
-  async function notifyUsers(recipients, subject, message, collection = null, item = null) {
-    const uniqueRecipients = Array.from(new Set((recipients || []).filter(Boolean)));
-
-    for (const recipient of uniqueRecipients) {
-      await notifyUser(recipient, subject, message, collection, item);
+    }).returning('id');
+    const notificationId = inserted?.[0]?.id ?? inserted?.[0];
+    if (notificationId != null) {
+      try {
+        await deliverEmployeeNotification(notificationId, recipient, subject, message, collection, item);
+      } catch (error) {
+        logger.warn({ recipient, notificationId, error: error?.message || error }, '[Symbolika employee notification] delivery pipeline failed');
+      }
     }
   }
 
-  async function notifyManager(employeeId, subject, message, collection = null, item = null) {
+  async function notifyUsers(recipients, subject, message, collection = null, item = null, topic = 'system') {
+    const uniqueRecipients = Array.from(new Set((recipients || []).filter(Boolean)));
+
+    for (const recipient of uniqueRecipients) {
+      await notifyUser(recipient, subject, message, collection, item, topic);
+    }
+  }
+
+  async function notifyManager(employeeId, subject, message, collection = null, item = null, topic = 'system') {
     const userId = await getEmployeeUserId(employeeId);
-    await notifyUser(userId, subject, message, collection, item);
+    await notifyUser(userId, subject, message, collection, item, topic);
+  }
+
+  async function notifyTaskParticipants(task, prevTask = null) {
+    if (!task?.id) return;
+    const title = task.title || `Задача #${task.id}`;
+    const assigneeChanged = !prevTask || Number(task.assigned_to || 0) !== Number(prevTask.assigned_to || 0);
+    if (task.assigned_to && assigneeChanged) {
+      await notifyManager(
+        task.assigned_to,
+        `Новая задача: ${title}`,
+        [task.description, task.due_date ? `Срок: ${toDateOnly(task.due_date)}` : ''].filter(Boolean).join('\n'),
+        'symbolika_tasks',
+        task.id,
+        'new_tasks',
+      );
+    }
+    if (prevTask && task.status !== prevTask.status && task.created_by_employee) {
+      await notifyManager(
+        task.created_by_employee,
+        `Изменился статус задачи: ${title}`,
+        `Статус: ${prevTask.status || '-'} → ${task.status || '-'}.`,
+        'symbolika_tasks',
+        task.id,
+        'task_updates',
+      );
+    }
+  }
+
+  async function getDesignerEmployeeId() {
+    const row = await database('employees as e')
+      .join('directus_users as u', 'u.id', 'e.directus_user')
+      .join('directus_roles as r', 'r.id', 'u.role')
+      .where('r.name', 'Дизайнер')
+      .whereNotNull('e.directus_user')
+      .orderBy('e.id')
+      .select('e.id')
+      .first();
+    return row?.id || null;
+  }
+
+  async function syncDesignerTask(item, prevItem = null) {
+    if (!item?.id) return;
+    const existing = await database('symbolika_tasks')
+      .where({ task_type: 'design', related_order_item: item.id })
+      .whereNot({ status: 'cancelled' })
+      .orderBy('id', 'desc')
+      .first();
+
+    if (!item.needs_designer_help) {
+      if (existing && prevItem?.needs_designer_help) {
+        await database('symbolika_tasks').where({ id: existing.id }).update({
+          status: 'cancelled',
+          date_updated: database.fn.now(),
+        });
+      }
+      return;
+    }
+
+    const order = await database('orders').where({ id: item.order }).first();
+    if (existing) {
+      await database('symbolika_tasks').where({ id: existing.id }).update({
+        related_order: item.order || null,
+        related_customer: order?.customer || null,
+        related_company: order?.customer_company || null,
+        due_date: item.deadline || order?.deadline || null,
+        description: item.designer_comment || null,
+        source_url: item.designer_source_url || item.url || null,
+        date_updated: database.fn.now(),
+      });
+      return;
+    }
+
+    const [createdTask] = await database('symbolika_tasks').insert({
+      title: `Подготовить макет: ${item.product_name || `позиция #${item.id}`}`,
+      description: item.designer_comment || null,
+      task_type: 'design',
+      status: 'new',
+      priority: 'normal',
+      due_date: item.deadline || order?.deadline || null,
+      assigned_to: await getDesignerEmployeeId(),
+      created_by_employee: order?.manager_employee || null,
+      related_order: item.order || null,
+      related_order_item: item.id,
+      related_customer: order?.customer || null,
+      related_company: order?.customer_company || null,
+      source_url: item.designer_source_url || item.url || null,
+      result_url: null,
+    }).returning('*');
+    await notifyTaskParticipants(createdTask);
+  }
+
+  async function completeDesignerTask(task, prevTask = null) {
+    if (!task || task.task_type !== 'design' || task.status !== 'done' || prevTask?.status === 'done') return;
+    const item = task.related_order_item
+      ? await database('orders_items').where({ id: task.related_order_item }).first()
+      : null;
+    if (!item) return;
+
+    if (task.result_url) {
+      await database('orders_items').where({ id: item.id }).update({ url: task.result_url });
+    }
+
+    const order = await database('orders').where({ id: item.order }).first();
+    if (!order?.manager_employee) return;
+    const orderLabel = order.order_number || `#${order.id}`;
+    await notifyManager(
+      order.manager_employee,
+      'Макет готов',
+      `Дизайнер завершил макет для заказа ${orderLabel}, позиция «${item.product_name || item.id}». Заказ можно запускать в работу.`,
+      'orders_items',
+      item.id,
+      'item_status'
+    );
   }
 
   async function notifyOrderStatusChanged(order, prevOrder) {
@@ -325,7 +896,8 @@ export default ({ filter, action }, { database, logger, env }) => {
       `\u0418\u0437\u043c\u0435\u043d\u0438\u043b\u0441\u044f \u0441\u0442\u0430\u0442\u0443\u0441 \u0437\u0430\u043a\u0430\u0437\u0430 ${orderLabel}`,
       `\u0421\u0442\u0430\u0442\u0443\u0441: ${prevStatus} \u2192 ${nextStatus}.`,
       'orders',
-      order.id
+      order.id,
+      'order_status'
     );
   }
 
@@ -433,7 +1005,8 @@ export default ({ filter, action }, { database, logger, env }) => {
       subject,
       message,
       target.collection,
-      item.id
+      item.id,
+      'production'
     );
 
     await sendVkMessage(
@@ -464,6 +1037,7 @@ export default ({ filter, action }, { database, logger, env }) => {
       .select('*');
 
     for (const item of items) {
+      await syncDesignerTask(item);
       await notifyNewProductionAssignments(item);
     }
   }
@@ -504,7 +1078,8 @@ export default ({ filter, action }, { database, logger, env }) => {
       `\u041d\u0443\u0436\u043d\u0430 \u0434\u043e\u0440\u0430\u0431\u043e\u0442\u043a\u0430 \u043c\u0430\u043a\u0435\u0442\u0430`,
       `${orderLabel}: ${productName}. \u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e \u043f\u043e\u043c\u0435\u0442\u0438\u043b\u043e \u0441\u0442\u0430\u0442\u0443\u0441 "\u0414\u043e\u0440\u0430\u0431\u043e\u0442\u043a\u0430 \u043c\u0430\u043a\u0435\u0442\u0430".`,
       'orders_items',
-      item.id
+      item.id,
+      'item_status'
     );
   }
 
@@ -512,9 +1087,9 @@ export default ({ filter, action }, { database, logger, env }) => {
     if (!orderId) return 0;
 
     const order = await database('orders').where({ id: orderId }).first();
-    if (!order?.manager_employee) return 0;
+    if (!order?.commission_manager_employee) return 0;
 
-    const emp = await database('employees').where({ id: order.manager_employee }).first();
+    const emp = await database('employees').where({ id: order.commission_manager_employee }).first();
     return num(emp?.order_percent);
   }
 
@@ -610,7 +1185,23 @@ export default ({ filter, action }, { database, logger, env }) => {
         .reduce((s, x) => s + num(x.amount), 0)
     );
 
-    const balance = round(payments_total_in - refunds_total_out - orders_total_sum);
+    const operations = await database('customer_operations')
+      .where({ customer: customerId, status: 'confirmed' })
+      .whereNull('customer_company');
+
+    const operation_charges = round(
+      operations
+        .filter((x) => x.direction === 'customer_owes_us')
+        .reduce((s, x) => s + num(x.amount), 0)
+    );
+
+    const operation_credits = round(
+      operations
+        .filter((x) => x.direction === 'we_owe_customer')
+        .reduce((s, x) => s + num(x.amount), 0)
+    );
+
+    const balance = round(payments_total_in - refunds_total_out - orders_total_sum - operation_charges + operation_credits);
 
     await database('customers').where({ id: customerId }).update({
       orders_total_sum,
@@ -645,7 +1236,22 @@ export default ({ filter, action }, { database, logger, env }) => {
         .reduce((s, x) => s + num(x.amount), 0)
     );
 
-    const balance = round(payments_total_in - refunds_total_out - orders_total_sum);
+    const operations = await database('customer_operations')
+      .where({ customer_company: companyId, status: 'confirmed' });
+
+    const operation_charges = round(
+      operations
+        .filter((x) => x.direction === 'customer_owes_us')
+        .reduce((s, x) => s + num(x.amount), 0)
+    );
+
+    const operation_credits = round(
+      operations
+        .filter((x) => x.direction === 'we_owe_customer')
+        .reduce((s, x) => s + num(x.amount), 0)
+    );
+
+    const balance = round(payments_total_in - refunds_total_out - orders_total_sum - operation_charges + operation_credits);
 
     await database('customer_companies').where({ id: companyId }).update({
       orders_total_sum,
@@ -771,11 +1377,18 @@ export default ({ filter, action }, { database, logger, env }) => {
   async function setAllItemsOfficeStatus(orderId, officeStatus) {
     if (!orderId || !officeStatus) return;
 
+    const readyProductionStatus = ['in_office', 'issued'].includes(officeStatus)
+      ? await getReadyProductionStatusId()
+      : null;
+
     await database('orders_items')
       .where({ order: orderId })
       .update({
         office_status: officeStatus,
         shipping_method: officeStatus === NOT_IN_OFFICE ? null : OFFICE_PICKUP,
+        ...(readyProductionStatus ? { production_status: readyProductionStatus } : {}),
+        ...(officeStatus === ISSUED ? { item_status: 'delivered' } : {}),
+        ...(officeStatus === IN_OFFICE ? { item_status: 'ready' } : {}),
       });
   }
 
@@ -824,13 +1437,10 @@ export default ({ filter, action }, { database, logger, env }) => {
       : null;
 
     const manager_employee = order?.manager_employee || null;
+    const commission_manager_employee = order?.commission_manager_employee || null;
 
-    let manager_percent = item.manager_percent;
+    let manager_percent = await getManagerPercent(item.order);
     let tax_percent = item.tax_percent;
-
-    if (isEmpty(manager_percent) || num(manager_percent) === 0) {
-      manager_percent = await getManagerPercent(item.order);
-    }
 
     if (isEmpty(tax_percent) || num(tax_percent) === 0) {
       tax_percent = await getTaxPercent(item.order);
@@ -850,8 +1460,8 @@ export default ({ filter, action }, { database, logger, env }) => {
     const quantity = num(item.quantity);
     const price = num(item.price_per_unit);
 
-    const contractor_1_cost = num(item.contractor_1_cost);
-    const contractor_2_cost = num(item.contractor_2_cost);
+    const contractor_1_cost = await normalizedContractorCost(item.contractor_1, item.contractor_1_cost);
+    const contractor_2_cost = await normalizedContractorCost(item.contractor_2, item.contractor_2_cost);
 
     const unit_cost = round(contractor_1_cost + contractor_2_cost);
     const total_cost = round(unit_cost * quantity);
@@ -865,10 +1475,13 @@ export default ({ filter, action }, { database, logger, env }) => {
 
     await database('orders_items').where({ id }).update({
       manager_employee,
+      commission_manager_employee,
       manager_percent,
       tax_percent,
       shipping_method,
       office_status,
+      contractor_1_cost,
+      contractor_2_cost,
       unit_cost,
       order_sum,
       total_cost,
@@ -955,8 +1568,9 @@ export default ({ filter, action }, { database, logger, env }) => {
     const userId = context?.accountability?.user || meta?.accountability?.user;
 
     if (userId) {
-      const emp = await getEmployeeByUser(userId);
-      if (emp?.id) next.manager = emp.id;
+      const actor = await getEmployeeActorByUser(userId);
+      const canAssignAnotherManager = ['Administrator', '\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u044e\u0449\u0438\u0439'].includes(actor?.role_name);
+      if (actor?.id && (!canAssignAnotherManager || !next.manager)) next.manager = actor.id;
     }
 
     return next;
@@ -973,9 +1587,12 @@ export default ({ filter, action }, { database, logger, env }) => {
       next.order_number = await generateOrderNumber();
     }
 
-    if (!next.manager_employee && userId) {
-      const emp = await getEmployeeByUser(userId);
-      if (emp?.id) next.manager_employee = emp.id;
+    if (userId) {
+      const actor = await getEmployeeActorByUser(userId);
+      const canAssignAnotherManager = ['Administrator', '\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u044e\u0449\u0438\u0439'].includes(actor?.role_name);
+      if (actor?.id && (!canAssignAnotherManager || !next.manager_employee)) {
+        next.manager_employee = actor.id;
+      }
     }
 
     if (!next.office_status) {
@@ -986,10 +1603,31 @@ export default ({ filter, action }, { database, logger, env }) => {
   });
 
   // BEFORE CREATE ORDER ITEM
-  filter('items.create', async (payload, meta) => {
+  filter('items.create', async (payload, meta, context) => {
+    if (meta.collection === 'customer_operations') {
+      const next = { ...payload };
+      if (!next.manager_employee) {
+        const employee = await getEmployeeByUser(meta?.accountability?.user);
+        if (employee?.id) next.manager_employee = employee.id;
+      }
+      return next;
+    }
+
     if (meta.collection !== 'orders_items') return payload;
 
     const next = { ...payload };
+    const userId = context?.accountability?.user || meta?.accountability?.user;
+
+    if (next.order && userId) {
+      const actor = await getEmployeeActorByUser(userId);
+      const canCreateForAnotherManager = ['Administrator', '\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u044e\u0449\u0438\u0439'].includes(actor?.role_name);
+      if (actor?.id && !canCreateForAnotherManager) {
+        const targetOrder = await database('orders').where({ id: next.order }).select('manager_employee').first();
+        if (!targetOrder || Number(targetOrder.manager_employee) !== Number(actor.id)) {
+          throw new Error('\u041f\u043e\u0437\u0438\u0446\u0438\u044e \u043c\u043e\u0436\u043d\u043e \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0442\u043e\u043b\u044c\u043a\u043e \u0432 \u0441\u0432\u043e\u0439 \u0437\u0430\u043a\u0430\u0437.');
+        }
+      }
+    }
 
     if (isEmpty(next.deadline) && next.order) {
       const order = await database('orders')
@@ -1036,6 +1674,13 @@ export default ({ filter, action }, { database, logger, env }) => {
       }
     }
 
+    if (meta.collection === 'symbolika_tasks') {
+      for (const id of keys) {
+        const row = await database('symbolika_tasks').where({ id }).first();
+        if (row) prevTasks.set(String(id), row);
+      }
+    }
+
     return payload;
   });
 
@@ -1068,26 +1713,40 @@ export default ({ filter, action }, { database, logger, env }) => {
         await database('orders').where({ id: key }).update(update);
       }
 
-      const updatedOrder = await database('orders').where({ id: key }).first();
+      let updatedOrder = await database('orders').where({ id: key }).first();
+      const commissionManager = await getCommissionManagerByUser(userId);
+
+      if (
+        !updatedOrder.commission_manager_employee
+        && commissionManager?.id
+        && Number(updatedOrder.manager_employee) === Number(commissionManager.id)
+      ) {
+        await database('orders').where({ id: key }).update({
+          commission_manager_employee: commissionManager.id,
+        });
+        updatedOrder = await database('orders').where({ id: key }).first();
+      }
 
       await assignManagerToCustomerAndCompany(updatedOrder);
       await ensureCustomerCompanyLink(updatedOrder);
       await syncItemsShippingFromOrder(key);
       await syncPaymentsFromOrder(key);
       await recalcOrder(key);
+      await notifyCustomerOrderReady(key);
     } catch (error) {
       logger.error(error);
     }
   });
 
   // UPDATE ORDER
-  action('items.update', async ({ collection, keys, payload }) => {
+  action('items.update', async ({ collection, keys, payload }, context) => {
     try {
       if (collection !== 'orders') return;
 
       for (const orderId of keys) {
         const prevOrder = prevOrders.get(String(orderId)) || null;
         prevOrders.delete(String(orderId));
+        await storeEventBeforeDelta(collection, orderId, prevOrder, context?.accountability?.user);
 
         const order = await database('orders').where({ id: orderId }).first();
 
@@ -1153,6 +1812,7 @@ export default ({ filter, action }, { database, logger, env }) => {
       await notifyOrderStatusChanged(updatedOrder, prevOrder);
       await notifyWorkAssignmentsForOrder(orderId);
       await recalcOrderParties(updatedOrder, prevOrder);
+      await notifyCustomerOrderReady(orderId);
       }
     } catch (error) {
       logger.error(error);
@@ -1166,28 +1826,112 @@ export default ({ filter, action }, { database, logger, env }) => {
 
       const orderId = await recalcItem(key);
       const item = await database('orders_items').where({ id: key }).first();
+      await syncDesignerTask(item);
       await notifyNewProductionAssignments(item);
       await notifyLayoutRevisionIfNeeded(item);
       await recalcOrder(orderId);
+      await notifyCustomerOrderReady(orderId);
     } catch (error) {
       logger.error(error);
     }
   });
 
   // ORDER ITEMS UPDATE
-  action('items.update', async ({ collection, keys }) => {
+  action('items.update', async ({ collection, keys }, context) => {
     try {
       if (!['orders_items', 'contractor_costing'].includes(collection)) return;
 
       for (const key of keys) {
         const prevItem = prevItems.get(String(key)) || null;
         prevItems.delete(String(key));
+        if (collection === 'orders_items') {
+          await storeEventBeforeDelta(collection, key, prevItem, context?.accountability?.user);
+        }
 
         const orderId = await recalcItem(key, prevItem);
         const item = await database('orders_items').where({ id: key }).first();
+        await syncDesignerTask(item, prevItem);
         await notifyNewProductionAssignments(item, prevItem);
         await notifyLayoutRevisionIfNeeded(item, prevItem);
         await recalcOrder(orderId);
+        await notifyCustomerOrderReady(orderId);
+      }
+    } catch (error) {
+      logger.error(error);
+    }
+  });
+
+  // OFFICE WORKING TABLES UPDATE
+  // These collections synchronize the underlying order through PostgreSQL triggers,
+  // so their updates do not always emit a separate Directus `orders` action.
+  action('items.update', async ({ collection, keys }) => {
+    try {
+      if (!['office_issue', 'office_issue_items', 'office_items_in_office'].includes(collection)) return;
+
+      const orderIds = new Set();
+      for (const key of keys) {
+        if (collection === 'office_issue') {
+          orderIds.add(Number(key));
+          continue;
+        }
+
+        const row = await database(collection).where({ id: key }).first();
+        const orderId = row?.order || row?.office_issue;
+        if (orderId) orderIds.add(Number(orderId));
+      }
+
+      for (const orderId of orderIds) {
+        await notifyCustomerOrderReady(orderId);
+      }
+    } catch (error) {
+      logger.error(error);
+    }
+  });
+
+  // If the preferred channel is configured after the order has already reached
+  // the office, retry the one permitted customer notification immediately.
+  action('items.update', async ({ collection, keys, payload }) => {
+    try {
+      if (!['customers', 'customer_companies'].includes(collection)) return;
+      const notificationFields = ['notification_channel', 'email', 'phone', 'telegram_chat_id', 'vk_peer_id'];
+      if (!notificationFields.some((field) => Object.prototype.hasOwnProperty.call(payload || {}, field))) return;
+
+      for (const key of keys) {
+        const query = database('orders')
+          .where(collection === 'customers' ? { customer: key } : { customer_company: key })
+          .select('id');
+        const orders = await query;
+        for (const order of orders) {
+          await notifyCustomerOrderReady(order.id);
+        }
+      }
+    } catch (error) {
+      logger.error(error);
+    }
+  });
+
+  // TASK NOTIFICATIONS
+  action('items.create', async ({ collection, key }) => {
+    try {
+      if (collection !== 'symbolika_tasks') return;
+      const task = await database('symbolika_tasks').where({ id: key }).first();
+      await notifyTaskParticipants(task);
+    } catch (error) {
+      logger.error(error);
+    }
+  });
+
+  // DESIGN TASKS UPDATE
+  action('items.update', async ({ collection, keys }, context) => {
+    try {
+      if (collection !== 'symbolika_tasks') return;
+      for (const key of keys) {
+        const prevTask = prevTasks.get(String(key)) || null;
+        prevTasks.delete(String(key));
+        await storeEventBeforeDelta(collection, key, prevTask, context?.accountability?.user);
+        const task = await database('symbolika_tasks').where({ id: key }).first();
+        await notifyTaskParticipants(task, prevTask);
+        await completeDesignerTask(task, prevTask);
       }
     } catch (error) {
       logger.error(error);
@@ -1262,6 +2006,16 @@ export default ({ filter, action }, { database, logger, env }) => {
   // ORDER PAYMENTS UPDATE
   action('items.update', async ({ collection, keys }) => {
     try {
+      if (collection === 'symbolika_customer_notifications') {
+        for (const key of keys) {
+          const notification = await database('symbolika_customer_notifications').where({ id: key }).first();
+          if (notification?.status === 'retry_requested' && notification.order) {
+            await notifyCustomerOrderReady(notification.order);
+          }
+        }
+        return;
+      }
+
       if (collection !== 'order_payments') return;
 
       for (const key of keys) {

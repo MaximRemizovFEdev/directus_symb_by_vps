@@ -26,6 +26,11 @@ cd symbolika_directus_clean_install
 
 ## 3. Запустить новый чистый Directus
 
+Сначала создайте защищенный `.env` по инструкциям:
+
+- [Первоначальная настройка](FIRST_SERVER_SETUP.md)
+- [Токены и секреты](TOKENS_AND_SECRETS.md)
+
 ```bash
 docker compose up -d
 ```
@@ -51,17 +56,7 @@ docker ps
 http://IP_СЕРВЕРА:8057
 ```
 
-Логин:
-
-```text
-admin@symb.local
-```
-
-Пароль:
-
-```text
-ChangeThisAdminPass2026
-```
+Используйте `ADMIN_EMAIL` и `ADMIN_PASSWORD`, заданные в серверном `.env`. В пакете нет пароля по умолчанию.
 
 ---
 
