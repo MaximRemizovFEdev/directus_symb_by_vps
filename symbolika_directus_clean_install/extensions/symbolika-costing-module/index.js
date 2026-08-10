@@ -471,7 +471,7 @@ const moduleSections = {
   },
   orders: {
     title: 'Заказы',
-    tabs: ['dashboard', 'events', 'problems', 'search', 'all_orders', 'deadlines', 'my_orders', 'estimates', 'orders_archive', 'items_archive', 'office'],
+    tabs: ['dashboard', 'events', 'problems', 'search', 'all_orders', 'deadlines', 'my_orders', 'estimates', 'clients', 'companies', 'finance', 'client_operations', 'gift_certificates', 'office'],
     roles: ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
   },
   tasks: {
@@ -481,7 +481,7 @@ const moduleSections = {
   },
   production: {
     title: 'Производство',
-    tabs: ['events', 'production', 'screen', 'production_archive', 'labels', 'admin_inventory'],
+    tabs: ['events', 'production', 'screen', 'labels', 'admin_inventory'],
     roles: ['Administrator', 'Управляющий', 'Производство', 'Шелкография'],
   },
   contractor: {
@@ -1071,6 +1071,8 @@ export const CostingModule = {
         production_archive: { key: 'deadline', direction: 'desc' },
       },
       orderDisplayMode: 'orders',
+      orderArchiveMode: 'active',
+      workArchiveMode: 'active',
       workspaceViewModes: {},
       mobileViewport: false,
       mobileNavigationOpen: false,
@@ -1293,11 +1295,11 @@ export const CostingModule = {
       const withWorkTabs = (ids) => tabs.filter((tab) => workTabs.includes(tab.id) || ids.includes(tab.id));
       let roleTabs = [];
       if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) roleTabs = tabs;
-      else if (this.currentRoleName === 'Производство') roleTabs = withWorkTabs(['my_orders', 'production', 'production_archive', 'labels', 'admin_inventory', 'admin_procurement']);
-      else if (this.currentRoleName === 'Шелкография') roleTabs = withWorkTabs(['my_orders', 'screen', 'production_archive', 'labels', 'admin_inventory', 'admin_procurement']);
+      else if (this.currentRoleName === 'Производство') roleTabs = withWorkTabs(['my_orders', 'production', 'labels', 'admin_inventory', 'admin_procurement']);
+      else if (this.currentRoleName === 'Шелкография') roleTabs = withWorkTabs(['my_orders', 'screen', 'labels', 'admin_inventory', 'admin_procurement']);
       else if (this.currentRoleName === 'Контрагент') roleTabs = tabs.filter((tab) => tab.id === 'contractor_work');
-      else if (this.currentRoleName === 'Менеджер') roleTabs = withWorkTabs(['my_orders', 'estimates', 'orders_archive', 'office', 'finance', 'client_operations', 'gift_certificates', 'clients', 'companies', 'admin_procurement']);
-      else if (this.currentRoleName === 'Офис-менеджер') roleTabs = withWorkTabs(['my_orders', 'orders_archive', 'office', 'admin_procurement']);
+      else if (this.currentRoleName === 'Менеджер') roleTabs = withWorkTabs(['my_orders', 'estimates', 'office', 'finance', 'client_operations', 'gift_certificates', 'clients', 'companies', 'admin_procurement']);
+      else if (this.currentRoleName === 'Офис-менеджер') roleTabs = withWorkTabs(['my_orders', 'office', 'admin_procurement']);
       else if (this.currentRoleName === 'Дизайнер') roleTabs = tabs.filter((tab) => ['my_orders', 'tasks', 'tasks_archive', 'events', 'admin_procurement'].includes(tab.id));
       else roleTabs = [];
 
@@ -1665,15 +1667,14 @@ export const CostingModule = {
       const groups = [
         { title: 'Личный кабинет', tabs: ['profile'] },
         { title: 'Работа', tabs: ['dashboard', 'queue', 'tasks', 'tasks_archive', 'events', 'problems', 'search'] },
-        { title: 'Заказы', tabs: ['all_orders', 'deadlines', 'my_orders', 'estimates', 'orders_archive', 'items_archive'] },
+        { title: 'Заказы', tabs: ['all_orders', 'deadlines', 'my_orders', 'estimates'] },
+        { title: 'Клиенты и расчёты', tabs: ['clients', 'companies', 'finance', 'client_operations', 'gift_certificates'] },
         { title: 'Работа контрагента', tabs: ['contractor_work'] },
-        { title: 'Производство', tabs: ['production', 'screen', 'production_archive', 'labels'] },
+        { title: 'Производство', tabs: ['production', 'screen', 'labels'] },
         { title: 'Склад', tabs: ['admin_inventory'] },
         { title: 'Закупки', tabs: ['admin_procurement'] },
         { title: 'Управление', tabs: ['costing', 'automation_control'] },
         { title: 'Офис', tabs: ['office'] },
-        { title: 'Клиенты', tabs: ['clients', 'companies'] },
-        { title: 'Финансы', tabs: ['finance', 'client_operations', 'gift_certificates'] },
         { title: 'Админка', tabs: ['admin_employees', 'admin_users', 'admin_positions', 'contractors', 'admin_categories', 'admin_subcategories', 'admin_methods', 'admin_routing', 'admin_order_statuses', 'admin_production_statuses'] },
         { title: 'Финансы админки', tabs: ['admin_finance_dashboard', 'payroll', 'expenses', 'contractor_settlements', 'monthly_results'] },
       ];
@@ -2014,11 +2015,11 @@ export const CostingModule = {
     },
 
     visibleProductionRows() {
-      return this.sortRows(this.filterRows(this.productionRows, false), 'production');
+      return this.sortRows(this.filterRowsByArchiveMode(this.productionRows), 'production');
     },
 
     visibleScreenRows() {
-      return this.sortRows(this.filterRows(this.screenRows, false), 'screen');
+      return this.sortRows(this.filterRowsByArchiveMode(this.screenRows), 'screen');
     },
 
     visibleContractorWorkRows() {
@@ -2704,7 +2705,8 @@ export const CostingModule = {
     },
 
     visibleMyOrderRows() {
-      return this.sortRows(this.applySearchAndFilter(this.myOrderRows, (row) => [
+      const source = this.allOrderRows.length ? this.allOrderRows : this.myOrderRows;
+      return this.sortRows(this.applySearchAndFilter(source, (row) => [
         row.order_number,
         row.customer_display,
         this.resolveCustomer(row)?.name,
@@ -2712,7 +2714,7 @@ export const CostingModule = {
         row.manager_name,
         row.order_status_name,
         row.shipping_method_name,
-      ], (row) => this.matchesOrderFilters(row) && !this.isOrderArchived(row)), 'my_orders');
+      ], (row) => this.matchesOrderFilters(row) && this.matchesOrderArchiveMode(row)), 'my_orders');
     },
 
     visibleAllOrderRows() {
@@ -2723,15 +2725,23 @@ export const CostingModule = {
         this.resolveCompany(row)?.name,
         row.manager_name,
         row.shipping_method_name,
-      ], (row) => this.matchesOrderFilters(row) && !this.isOrderArchived(row)), 'all_orders');
+      ], (row) => this.matchesOrderFilters(row) && this.matchesOrderArchiveMode(row)), 'all_orders');
     },
 
     visibleOrderPositionRows() {
-      let rows = [];
-      if (this.activeTab === 'my_orders') rows = this.orderItemsForRows(this.visibleMyOrderRows);
-      if (this.activeTab === 'all_orders') rows = this.orderItemsForRows(this.visibleAllOrderRows);
-      if (this.activeTab === 'orders_archive') rows = this.orderItemsForRows(this.visibleArchivedOrderRows);
-      return this.sortRows(rows, 'order_items');
+      const source = this.activeTab === 'my_orders'
+        ? (this.allOrderRows.length ? this.allOrderRows : this.myOrderRows)
+        : this.allOrderRows;
+      const orderRows = source.filter((row) => this.matchesOrderFilters(row));
+      const rows = this.orderItemsForRows(orderRows);
+      return this.sortRows(this.applySearchAndFilter(rows, (row) => [
+        this.orderNumber(row),
+        row.product_name,
+        this.detailCustomerName(row),
+        this.detailCompanyName(row),
+        this.detailManagerName(row),
+        this.itemStatusName(row.item_status),
+      ], (row) => this.matchesItemArchiveMode(row)), 'order_items');
     },
 
     visibleOfficeIssueRows() {
@@ -2826,7 +2836,7 @@ export const CostingModule = {
         tasks_archive: ['tasks'],
         all_orders: ['all_orders'],
         orders_archive: ['all_orders'],
-        my_orders: ['my_orders'],
+        my_orders: ['my_orders', 'all_orders'],
         estimates: ['estimates', 'estimate_items'],
         costing: ['costing'],
         purchasing: ['costing'],
@@ -3221,6 +3231,23 @@ export const CostingModule = {
     restoreActiveTab() {
       try {
         const storedTab = localStorage.getItem(this.activeTabStorageKey());
+        if (this.moduleSection === 'orders' && ['orders_archive', 'items_archive'].includes(storedTab)) {
+          const target = this.availableTabs.some((tab) => tab.id === 'all_orders') ? 'all_orders' : 'my_orders';
+          this.activeTab = target;
+          this.orderArchiveMode = 'archive';
+          this.orderDisplayMode = storedTab === 'items_archive' ? 'items' : 'orders';
+          localStorage.setItem(this.activeTabStorageKey(), target);
+          return true;
+        }
+        if (this.moduleSection === 'production' && storedTab === 'production_archive') {
+          const target = this.availableTabs.some((tab) => tab.id === 'production') ? 'production' : 'screen';
+          if (this.availableTabs.some((tab) => tab.id === target)) {
+            this.activeTab = target;
+            this.workArchiveMode = 'archive';
+            localStorage.setItem(this.activeTabStorageKey(), target);
+            return true;
+          }
+        }
         if (
           this.moduleSection === 'management'
           && storedTab === 'purchasing'
@@ -3843,6 +3870,43 @@ export const CostingModule = {
         ], (row) => this.matchesWorkFilter(row) && (archive ? this.isWorkArchived(row) : !this.isWorkArchived(row)));
     },
 
+    matchesOrderArchiveMode(row) {
+      // An explicit status filter must be able to find terminal statuses from
+      // either scope. The segmented control is the convenient default view.
+      if (this.orderStatusFilters.length) return true;
+      if (this.orderArchiveMode === 'archive') return this.isOrderArchived(row);
+      if (this.orderArchiveMode === 'all') return true;
+      return !this.isOrderArchived(row);
+    },
+
+    matchesItemArchiveMode(row) {
+      if (this.orderStatusFilters.length) return true;
+      if (this.orderArchiveMode === 'archive') return this.isItemArchived(row);
+      if (this.orderArchiveMode === 'all') return true;
+      return !this.isItemArchived(row);
+    },
+
+    matchesWorkArchiveMode(row) {
+      if (this.workProductionStatusFilter) return true;
+      if (this.workArchiveMode === 'archive') return this.isWorkArchived(row);
+      if (this.workArchiveMode === 'all') return true;
+      return !this.isWorkArchived(row);
+    },
+
+    filterRowsByArchiveMode(rows) {
+      return this.applySearchAndFilter(rows, (row) => [
+        row.order_number,
+        row.product_name,
+        row.technical_task_text,
+        row.production_comment,
+        row.customer_name,
+        row.customer_company_name,
+        this.relatedName(row.customer),
+        this.relatedName(row.customer_company),
+        this.relatedName(row.manager_employee, 'full_name'),
+      ], (row) => this.matchesWorkFilter(row) && this.matchesWorkArchiveMode(row));
+    },
+
     applySearchAndFilter(rows, values = null, predicate = null) {
       const query = this.search.trim().toLowerCase();
       return rows.filter((row) => {
@@ -4323,7 +4387,7 @@ export const CostingModule = {
       const allowed = new Set(this.availableTabs.map((tab) => tab.id));
       const tasks = [];
 
-      if (allowed.has('all_orders') || allowed.has('orders_archive')) tasks.push(this.loadAllOrderRows());
+      if (allowed.has('all_orders') || allowed.has('my_orders')) tasks.push(this.loadAllOrderRows());
       if (allowed.has('notification_center')) tasks.push(this.loadNotificationCenter());
       if (allowed.has('profile')) tasks.push(this.loadProfileData());
       if (allowed.has('deadlines')) tasks.push(this.loadDeadlineRows());
@@ -12020,6 +12084,20 @@ export const CostingModule = {
           gap: 7px;
           align-items: center;
           margin-block: -2px 12px;
+        }
+
+        .symbolika-costing-toggle-label {
+          color: var(--theme--foreground-subdued);
+          font-size: 11px;
+          font-weight: 800;
+          white-space: nowrap;
+        }
+
+        .symbolika-costing-toggle-divider {
+          inline-size: 1px;
+          block-size: 24px;
+          margin-inline: 2px;
+          background: var(--theme--border-color-subdued);
         }
 
         .symbolika-costing-filter-summary {
@@ -21221,6 +21299,18 @@ export const CostingModule = {
         </div>
 
         <div v-if="hasOrderDisplayMode" class="symbolika-costing-view-toggle">
+          <span class="symbolika-costing-toggle-label">Показывать</span>
+          <button
+            v-for="mode in [{ id: 'active', title: 'Активные' }, { id: 'archive', title: 'Архив' }, { id: 'all', title: 'Все' }]"
+            :key="'order-archive-mode-' + mode.id"
+            type="button"
+            class="symbolika-costing-filter-chip"
+            :class="{ 'is-active': orderArchiveMode === mode.id }"
+            @click="orderArchiveMode = mode.id"
+          >
+            {{ mode.title }}
+          </button>
+          <span class="symbolika-costing-toggle-divider" aria-hidden="true"></span>
           <button
             type="button"
             class="symbolika-costing-filter-chip"
@@ -21243,6 +21333,20 @@ export const CostingModule = {
 
         <div v-if="hasWorkDeadlineFilters" class="symbolika-costing-filter-bar">
           <div class="symbolika-costing-filter-groups">
+            <template v-if="['production', 'screen'].includes(activeTab)">
+              <span class="symbolika-costing-toggle-label">Показывать</span>
+              <button
+                v-for="mode in [{ id: 'active', title: 'Активные' }, { id: 'archive', title: 'Архив' }, { id: 'all', title: 'Все' }]"
+                :key="'work-archive-mode-' + mode.id"
+                type="button"
+                class="symbolika-costing-filter-chip"
+                :class="{ 'is-active': workArchiveMode === mode.id }"
+                @click="workArchiveMode = mode.id"
+              >
+                {{ mode.title }}
+              </button>
+              <span class="symbolika-costing-toggle-divider" aria-hidden="true"></span>
+            </template>
             <button
               type="button"
               class="symbolika-costing-filter-toggle"

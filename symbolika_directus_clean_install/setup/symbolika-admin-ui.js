@@ -1216,7 +1216,7 @@
       return '/admin/symbolika-contractor';
     }
     if (notification.collection === 'customers' || notification.collection === 'customer_companies') {
-      return '/admin/symbolika-clients';
+      return '/admin/symbolika-orders';
     }
     return '/admin/symbolika-orders';
   }

@@ -308,7 +308,7 @@ export default ({ filter, action }, { database, logger, env }) => {
     if (collection === 'production_work') return `/admin/symbolika-production?item=${encodeURIComponent(item)}`;
     if (collection === 'screen_printing_work') return `/admin/symbolika-production?item=${encodeURIComponent(item)}`;
     if (collection === 'office_issue' || collection === 'office_items_in_office') return `/admin/symbolika-orders?order=${encodeURIComponent(item)}`;
-    if (collection === 'customers' || collection === 'customer_companies') return '/admin/symbolika-clients';
+    if (collection === 'customers' || collection === 'customer_companies') return '/admin/symbolika-orders';
     return '/admin/symbolika-orders';
   }
 

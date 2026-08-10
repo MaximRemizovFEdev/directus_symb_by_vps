@@ -54,7 +54,7 @@ function notificationLink(collection, item) {
   if (collection === 'symbolika_mail_threads') return `/admin/symbolika-mail-module${query('thread')}`;
   if (collection === 'procurement_requests') return `/admin/symbolika-procurement${query('request')}`;
   if (collection === 'production_work' || collection === 'screen_printing_work') return `/admin/symbolika-production${query('item')}`;
-  if (collection === 'customers' || collection === 'customer_companies') return '/admin/symbolika-clients';
+  if (collection === 'customers' || collection === 'customer_companies') return '/admin/symbolika-orders';
   return '/admin/symbolika-orders';
 }
 

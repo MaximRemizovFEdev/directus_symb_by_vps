@@ -32,9 +32,9 @@ async function waitForServer(timeoutMs = 90_000) {
 }
 
 const roleCases = [
-  { key: 'admin', role: 'Administrator', modules: ['symbolika-orders', 'symbolika-management', 'symbolika-procurement', 'symbolika-admin', 'symbolika-clients', 'symbolika-production', 'symbolika-finance', 'symbolika-mail-module', 'symbolika-profile-module'] },
-  { key: 'managerial', role: 'Управляющий', modules: ['symbolika-orders', 'symbolika-management', 'symbolika-procurement', 'symbolika-clients', 'symbolika-finance'] },
-  { key: 'manager', role: 'Менеджер', modules: ['symbolika-orders', 'symbolika-procurement', 'symbolika-clients', 'symbolika-finance'] },
+  { key: 'admin', role: 'Administrator', modules: ['symbolika-orders', 'symbolika-management', 'symbolika-procurement', 'symbolika-admin', 'symbolika-production', 'symbolika-mail-module', 'symbolika-profile-module'] },
+  { key: 'managerial', role: 'Управляющий', modules: ['symbolika-orders', 'symbolika-management', 'symbolika-procurement'] },
+  { key: 'manager', role: 'Менеджер', modules: ['symbolika-orders', 'symbolika-procurement'] },
   { key: 'office', role: 'Офис-менеджер', modules: ['symbolika-orders', 'symbolika-procurement'] },
   { key: 'production', role: 'Производство', modules: ['symbolika-production', 'symbolika-procurement'] },
   { key: 'screen', role: 'Шелкография', modules: ['symbolika-production', 'symbolika-procurement'] },
@@ -251,14 +251,41 @@ function assertScreen(result) {
             report.failures.push(`primary module is not visible: ${modulePath}`);
           }
         }
+        for (const removedModulePath of ['symbolika-clients', 'symbolika-finance']) {
+          if (report.specialChecks.primaryModules.some((link) => link.visible && link.href.includes(removedModulePath))) {
+            report.failures.push(`obsolete primary module is still visible: ${removedModulePath}`);
+          }
+        }
         await page.goto(`${baseUrl}/admin/symbolika-orders`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
         await page.waitForTimeout(1_200);
+        const orderNavigationText = await page.locator('.symbolika-costing-side-nav').innerText().catch(() => '');
+        await page.locator('.symbolika-costing-side-item').filter({ hasText: 'Все заказы' }).first().click();
+        await page.waitForTimeout(350);
+        const orderArchiveToggle = await page.getByRole('button', { name: 'Архив', exact: true }).count();
+        report.specialChecks.unifiedOrderArchive = { orderNavigationText, orderArchiveToggle };
+        for (const requiredLabel of ['Клиенты', 'Компании', 'Сверки']) {
+          if (!orderNavigationText.includes(requiredLabel)) report.failures.push(`orders navigation is missing: ${requiredLabel}`);
+        }
+        for (const removedLabel of ['Архив заказов', 'Архив позиций']) {
+          if (orderNavigationText.includes(removedLabel)) report.failures.push(`obsolete orders navigation is visible: ${removedLabel}`);
+        }
+        if (!orderArchiveToggle) report.failures.push('orders archive toggle is not visible');
         report.specialChecks.positionDeepLink = await inspectPositionDeepLink(page);
         if (!report.specialChecks.positionDeepLink.skipped) {
           await page.locator('.symbolika-costing-detail-close').first().click().catch(() => {});
           await page.waitForTimeout(250);
         }
         report.specialChecks.stickyToolbar = await inspectStickyToolbar(page);
+        await page.goto(`${baseUrl}/admin/symbolika-production`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+        await page.waitForSelector('.symbolika-costing-page', { timeout: 30_000 });
+        await page.waitForTimeout(900);
+        const productionNavigationText = await page.locator('.symbolika-costing-side-nav').innerText().catch(() => '');
+        await page.locator('.symbolika-costing-side-item').filter({ hasText: 'Производство' }).last().click();
+        await page.waitForTimeout(350);
+        const productionArchiveToggle = await page.getByRole('button', { name: 'Архив', exact: true }).count();
+        report.specialChecks.unifiedProductionArchive = { productionNavigationText, productionArchiveToggle };
+        if (productionNavigationText.includes('Архив производства')) report.failures.push('obsolete production archive navigation is visible');
+        if (!productionArchiveToggle) report.failures.push('production archive toggle is not visible');
       }
       await context.close();
       await api(adminToken, `/users/${credentials.id}`, { method: 'DELETE' });

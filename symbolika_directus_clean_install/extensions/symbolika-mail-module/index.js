@@ -492,8 +492,8 @@ const MailWorkspace = {
       if (!id) return;
       const targets = {
         order: `/admin/symbolika-orders?order=${id}`,
-        customer: `/admin/symbolika-clients?customer=${id}`,
-        company: `/admin/symbolika-clients?company=${id}`,
+        customer: `/admin/symbolika-orders?customer=${id}`,
+        company: `/admin/symbolika-orders?company=${id}`,
         task: `/admin/symbolika-tasks?task=${id}`,
       };
       if (targets[type]) window.location.assign(targets[type]);

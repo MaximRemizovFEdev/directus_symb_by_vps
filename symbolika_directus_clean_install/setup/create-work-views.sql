@@ -4752,8 +4752,6 @@ SET module_bar = (
         {"type":"module","id":"symbolika-tasks","enabled":true},
         {"type":"module","id":"symbolika-production","enabled":true},
         {"type":"module","id":"symbolika-procurement","enabled":true},
-        {"type":"module","id":"symbolika-finance","enabled":true},
-        {"type":"module","id":"symbolika-clients","enabled":true},
         {"type":"module","id":"symbolika-management","enabled":true},
         {"type":"module","id":"symbolika-admin","enabled":true},
         {"type":"module","id":"symbolika-mail-module","enabled":true},
