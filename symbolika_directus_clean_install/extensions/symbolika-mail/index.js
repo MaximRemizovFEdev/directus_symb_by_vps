@@ -343,11 +343,14 @@ export default {
         if (!actor) return;
         const folders = await folderRows(actor);
         const requestedFolder = Number(req.query?.folder || 0);
+        const scope = cleanText(req.query?.scope, 30);
+        const starredScope = scope === 'starred';
         const selected = folders.find((row) => Number(row.id) === requestedFolder) || folders[0] || null;
         const limit = Math.min(Math.max(Number(req.query?.limit || 50), 1), 100);
         const search = cleanText(req.query?.search, 200);
         let query = threadQuery(actor).where('t.is_archived', false);
-        if (selected) query = query.where('t.folder_id', selected.id);
+        if (starredScope) query = query.where('t.is_starred', true);
+        else if (selected) query = query.where('t.folder_id', selected.id);
         if (search) {
           query = query.where((builder) => builder
             .whereILike('t.subject', `%${search}%`)
@@ -361,6 +364,12 @@ export default {
             }));
         }
         const threads = await query.orderBy('t.last_message_at', 'desc').limit(limit);
+        let starredCountQuery = database('symbolika_mail_threads as t')
+          .join('symbolika_mail_folders as f', 'f.id', 't.folder_id')
+          .where('t.is_archived', false)
+          .where('t.is_starred', true);
+        starredCountQuery = applyFolderAccess(starredCountQuery, actor);
+        const starredCountRow = await starredCountQuery.count('t.id as count').first();
         return res.json({
           data: {
             actor: {
@@ -375,7 +384,9 @@ export default {
             mode: mailMode(),
             configured: Boolean(env?.SYMBOLIKA_IMAP_HOST && env?.SYMBOLIKA_IMAP_USER && env?.SYMBOLIKA_IMAP_PASSWORD),
             folders,
-            selected_folder: selected?.id || null,
+            selected_folder: starredScope ? null : (selected?.id || null),
+            scope: starredScope ? 'starred' : 'folder',
+            starred_count: Number(starredCountRow?.count || 0),
             threads: threads.map((row) => ({
               ...row,
               preview: plainMailPreview(row.preview, 240),

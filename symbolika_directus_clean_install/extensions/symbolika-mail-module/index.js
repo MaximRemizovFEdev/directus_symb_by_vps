@@ -13,6 +13,8 @@ const MailWorkspace = {
       actor: null,
       folders: [],
       selectedFolderId: null,
+      mailboxScope: 'folder',
+      totalStarred: 0,
       threads: [],
       selectedThread: null,
       messages: [],
@@ -55,6 +57,7 @@ const MailWorkspace = {
 
   computed: {
     selectedFolder() {
+      if (this.mailboxScope === 'starred') return null;
       return this.folders.find((row) => Number(row.id) === Number(this.selectedFolderId)) || null;
     },
     currentSenderAlias() {
@@ -128,14 +131,17 @@ const MailWorkspace = {
       this.error = '';
       try {
         const params = new URLSearchParams();
-        if (this.selectedFolderId) params.set('folder', this.selectedFolderId);
+        if (this.mailboxScope === 'starred') params.set('scope', 'starred');
+        else if (this.selectedFolderId) params.set('folder', this.selectedFolderId);
         if (this.search.trim()) params.set('search', this.search.trim());
         const data = await this.request(`/symbolika-mail/bootstrap?${params.toString()}`);
         this.actor = data.actor;
         this.mode = data.mode;
         this.configured = data.configured;
         this.folders = data.folders || [];
-        this.selectedFolderId = data.selected_folder;
+        this.mailboxScope = data.scope === 'starred' ? 'starred' : 'folder';
+        if (this.mailboxScope === 'folder') this.selectedFolderId = data.selected_folder;
+        this.totalStarred = Number(data.starred_count || 0);
         this.threads = data.threads || [];
         if (this.selectedThread) {
           const freshThread = this.threads.find((row) => Number(row.id) === Number(this.selectedThread.id));
@@ -331,7 +337,16 @@ const MailWorkspace = {
     },
 
     async selectFolder(folder) {
+      this.mailboxScope = 'folder';
       this.selectedFolderId = folder.id;
+      this.selectedThread = null;
+      this.messages = [];
+      this.threadScope = 'all';
+      await this.loadMailbox(false);
+    },
+
+    async selectStarred() {
+      this.mailboxScope = 'starred';
       this.selectedThread = null;
       this.messages = [];
       this.threadScope = 'all';
@@ -421,6 +436,16 @@ const MailWorkspace = {
         await this.request(`/symbolika-mail/threads/${thread.id}`, { method: 'PATCH', body: JSON.stringify(patch) });
         Object.assign(thread, patch);
         if (this.selectedThread?.id === thread.id) Object.assign(this.selectedThread, patch);
+        if (Object.prototype.hasOwnProperty.call(patch, 'is_starred')) {
+          this.totalStarred = Math.max(0, this.totalStarred + (patch.is_starred ? 1 : -1));
+          if (this.mailboxScope === 'starred' && !patch.is_starred) {
+            this.threads = this.threads.filter((row) => Number(row.id) !== Number(thread.id));
+            if (this.selectedThread?.id === thread.id) {
+              this.selectedThread = null;
+              this.messages = [];
+            }
+          }
+        }
         if (patch.is_archived) {
           this.selectedThread = null;
           this.messages = [];
@@ -888,13 +913,24 @@ const MailWorkspace = {
           <button type="button" class="symbolika-mail-button is-primary symbolika-mail-side-compose" @click="openComposer()">
             <v-icon name="edit" small /> Написать
           </button>
+          <div class="symbolika-mail-side-section-label">Быстрый доступ</div>
+          <button
+            type="button"
+            class="symbolika-mail-side-folder"
+            :class="{ 'is-active': mailboxScope === 'starred' }"
+            @click="selectStarred"
+          >
+            <v-icon name="star" small />
+            <span>Избранное</span>
+            <small v-if="totalStarred">{{ totalStarred }}</small>
+          </button>
           <div class="symbolika-mail-side-section-label">Папки</div>
           <button
             v-for="folder in folders"
             :key="folder.id"
             type="button"
             class="symbolika-mail-side-folder"
-            :class="{ 'is-active': Number(folder.id) === Number(selectedFolderId) }"
+            :class="{ 'is-active': mailboxScope === 'folder' && Number(folder.id) === Number(selectedFolderId) }"
             @click="selectFolder(folder)"
           >
             <v-icon :name="folder.slug === 'inbox' ? 'inbox' : folder.slug === 'sent' ? 'send' : folder.slug === 'archive' ? 'archive' : 'folder'" small />
@@ -937,7 +973,7 @@ const MailWorkspace = {
             <aside class="symbolika-mail-list">
               <div class="symbolika-mail-list-head">
                 <div class="symbolika-mail-list-title">
-                  <strong>{{ selectedFolder?.name || 'Письма' }}</strong>
+                  <strong>{{ mailboxScope === 'starred' ? 'Избранное' : (selectedFolder?.name || 'Письма') }}</strong>
                   <span class="symbolika-mail-list-count">{{ visibleThreads.length }}</span>
                 </div>
                 <div class="symbolika-mail-scopes" aria-label="Фильтр писем">
