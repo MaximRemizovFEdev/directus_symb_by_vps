@@ -8,6 +8,7 @@ const MailWorkspace = {
       error: '',
       errorTimer: null,
       notice: '',
+      noticeTimer: null,
       mode: 'mock',
       configured: false,
       actor: null,
@@ -93,6 +94,14 @@ const MailWorkspace = {
   },
 
   watch: {
+    notice(value) {
+      window.clearTimeout(this.noticeTimer);
+      if (!value) return;
+      this.noticeTimer = window.setTimeout(() => {
+        this.notice = '';
+        this.noticeTimer = null;
+      }, 5000);
+    },
     error(value) {
       window.clearTimeout(this.errorTimer);
       if (!value) return;
@@ -117,6 +126,7 @@ const MailWorkspace = {
   beforeUnmount() {
     window.clearTimeout(this.searchTimer);
     window.clearTimeout(this.errorTimer);
+    window.clearTimeout(this.noticeTimer);
     window.clearInterval(this.autoRefreshTimer);
   },
 

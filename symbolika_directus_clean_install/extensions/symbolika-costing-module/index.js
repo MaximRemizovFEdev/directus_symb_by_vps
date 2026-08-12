@@ -1041,6 +1041,7 @@ export const CostingModule = {
       error: '',
       errorToast: '',
       errorToastTimer: null,
+      savedMessageTimers: {},
       search: '',
       activeFilter: 'all',
       limit: 100,
@@ -2891,6 +2892,9 @@ export const CostingModule = {
   },
 
   watch: {
+    feedbackSavedMessage(value) { this.scheduleSavedMessageClear('feedbackSavedMessage', value); },
+    notificationSavedMessage(value) { this.scheduleSavedMessageClear('notificationSavedMessage', value); },
+    profileSavedMessage(value) { this.scheduleSavedMessageClear('profileSavedMessage', value); },
     error(value) {
       if (value) this.showErrorToast(value);
     },
@@ -2980,9 +2984,21 @@ export const CostingModule = {
     if (this.pagingCompletionTimer) clearTimeout(this.pagingCompletionTimer);
     if (this.orderDraftSaveTimer) clearTimeout(this.orderDraftSaveTimer);
     if (this.errorToastTimer) clearTimeout(this.errorToastTimer);
+    Object.values(this.savedMessageTimers || {}).forEach((timer) => clearTimeout(timer));
   },
 
   methods: {
+    scheduleSavedMessageClear(field, value) {
+      if (this.savedMessageTimers[field]) clearTimeout(this.savedMessageTimers[field]);
+      if (!value) {
+        delete this.savedMessageTimers[field];
+        return;
+      }
+      this.savedMessageTimers[field] = window.setTimeout(() => {
+        if (this[field] === value) this[field] = '';
+        delete this.savedMessageTimers[field];
+      }, 5000);
+    },
     setupOverlayStacking() {
       this.teardownOverlayStacking();
       this.overlayStackCounter = 2000;
