@@ -699,11 +699,14 @@ const MailWorkspace = {
         .symbolika-mail-message-from small, .symbolika-mail-message time { color: var(--theme--foreground-subdued); font-size: 10px; }
         .symbolika-mail-message-body { margin-block-start: 15px; color: var(--theme--foreground); font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
         .symbolika-mail-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-block-start: 14px; }
-        .symbolika-mail-attachment { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: center; gap: 8px; min-inline-size: 180px; max-inline-size: 300px; padding: 8px 10px; border: 1px solid var(--theme--border-color); border-radius: 10px; background: var(--theme--background-normal); }
+        .symbolika-mail-attachment { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-inline-size: 220px; max-inline-size: 380px; padding: 8px 10px; border: 1px solid var(--theme--border-color); border-radius: 10px; background: var(--theme--background-normal); }
         .symbolika-mail-attachment .v-icon { color: #FB923C; }
         .symbolika-mail-attachment strong, .symbolika-mail-attachment small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .symbolika-mail-attachment strong { font-size: 11px; }
         .symbolika-mail-attachment small { color: var(--theme--foreground-subdued); font-size: 9px; }
+        .symbolika-mail-attachment-actions { display: flex; align-items: center; gap: 4px; }
+        .symbolika-mail-attachment-action { display: grid; place-items: center; inline-size: 30px; block-size: 30px; border: 1px solid var(--theme--border-color); border-radius: 8px; color: var(--theme--foreground); background: var(--theme--background); text-decoration: none; }
+        .symbolika-mail-attachment-action:hover { border-color: #F97316; color: #F97316; }
         .symbolika-mail-reply-bar { position: sticky; z-index: 4; inset-block-end: 0; display: flex; justify-content: flex-end; padding: 12px 22px; border-block-start: 1px solid var(--theme--border-color-subdued); background: color-mix(in srgb, var(--theme--background) 91%, transparent); box-shadow: 0 -12px 30px rgb(0 0 0 / .08); backdrop-filter: blur(16px); }
         .symbolika-mail-alert { position: fixed; z-index: 10050; inset: 76px 24px auto auto; max-inline-size: min(460px, calc(100vw - 32px)); padding: 11px 14px; border: 1px solid #10B981; border-radius: 10px; background: color-mix(in srgb, #10B981 16%, var(--theme--background-normal)); color: #6EE7B7; font-size: 12px; font-weight: 750; box-shadow: 0 14px 40px rgb(0 0 0 / .25); pointer-events: none; }
         .symbolika-mail-alert.is-error { display: grid; grid-template-columns: 30px minmax(0, 1fr) 26px; align-items: center; gap: 10px; min-block-size: 58px; border-color: #F43F5E; background: color-mix(in srgb, #F43F5E 15%, var(--theme--background-normal)); color: var(--theme--foreground); animation: symbolika-mail-error-in .18s ease-out; pointer-events: auto; }
@@ -991,6 +994,10 @@ const MailWorkspace = {
                       <div v-for="(file, index) in message.attachments" :key="index" class="symbolika-mail-attachment">
                         <v-icon name="attach_file" small />
                         <span><strong>{{ file.name }}</strong><small>{{ formatBytes(file.size) }} · {{ file.type || 'файл' }}</small></span>
+                        <span class="symbolika-mail-attachment-actions">
+                          <a class="symbolika-mail-attachment-action" :href="'/symbolika-mail/messages/' + message.id + '/attachments/' + index" target="_blank" rel="noopener" title="Открыть"><v-icon name="open_in_new" small /></a>
+                          <a class="symbolika-mail-attachment-action" :href="'/symbolika-mail/messages/' + message.id + '/attachments/' + index + '?download=1'" title="Скачать"><v-icon name="download" small /></a>
+                        </span>
                       </div>
                     </div>
                   </article>

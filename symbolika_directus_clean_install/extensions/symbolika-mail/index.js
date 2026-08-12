@@ -1,10 +1,15 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
+import { randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
 const MAIL_ROLES = new Set(['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер']);
 const ADMIN_ROLES = new Set(['Administrator', 'Управляющий']);
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+const MAIL_ATTACHMENT_ROOT = '/directus/uploads/symbolika-mail';
 
 function cleanText(value, max = 5000) {
   return String(value ?? '').trim().slice(0, max);
@@ -42,6 +47,22 @@ function normalizeSubject(value) {
 
 function apiError(res, status, message) {
   return res.status(status).json({ errors: [{ message }] });
+}
+
+function safeAttachmentName(value) {
+  const normalized = cleanText(value || 'Вложение', 500)
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/^\.+/, '')
+    .trim();
+  return normalized || 'Вложение';
+}
+
+function contentDisposition(disposition, filename) {
+  const fallback = safeAttachmentName(filename).replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  const encoded = encodeURIComponent(safeAttachmentName(filename))
+    .replace(/['()]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 export default {
@@ -195,6 +216,27 @@ export default {
       return smtpTransport;
     };
 
+    const persistAttachments = async (parsed) => {
+      const sourceAttachments = parsed.attachments || [];
+      if (!sourceAttachments.length) return [];
+      await mkdir(MAIL_ATTACHMENT_ROOT, { recursive: true });
+      const saved = [];
+      for (const item of sourceAttachments) {
+        const content = Buffer.isBuffer(item.content) ? item.content : Buffer.from(item.content || '');
+        const name = safeAttachmentName(item.filename || 'Вложение');
+        const extension = path.extname(name).replace(/[^.A-Za-z0-9_-]/g, '').slice(0, 20);
+        const storageName = `${randomUUID()}${extension}`;
+        await writeFile(path.join(MAIL_ATTACHMENT_ROOT, storageName), content, { mode: 0o600 });
+        saved.push({
+          name,
+          size: Number(item.size || content.length || 0),
+          type: cleanText(item.contentType || 'application/octet-stream', 255),
+          storage_name: storageName,
+        });
+      }
+      return saved;
+    };
+
     const upsertIncomingMessage = async (folder, parsed, actor) => {
       const from = addressList(parsed.from)[0] || { name: '', email: 'unknown@symb62.ru' };
       const to = addressList(parsed.to);
@@ -202,8 +244,17 @@ export default {
       const externalThreadId = cleanText(references[0] || parsed.inReplyTo || `${normalizeSubject(parsed.subject)}|${from.email}`, 500);
       const messageId = cleanText(parsed.messageId, 1000) || null;
       if (messageId) {
-        const exists = await database('symbolika_mail_messages').where('message_id', messageId).first('id');
-        if (exists) return false;
+        const exists = await database('symbolika_mail_messages').where('message_id', messageId).first('id', 'attachments');
+        if (exists) {
+          const currentAttachments = jsonArray(exists.attachments);
+          const needsFiles = (parsed.attachments || []).length > 0
+            && (!currentAttachments.length || currentAttachments.some((item) => !item.storage_name));
+          if (needsFiles) {
+            const attachments = await persistAttachments(parsed);
+            await database('symbolika_mail_messages').where('id', exists.id).update({ attachments: JSON.stringify(attachments) });
+          }
+          return false;
+        }
       }
 
       const customer = await database('customers').whereRaw('lower(email) = lower(?)', [from.email]).first('id', 'company');
@@ -243,11 +294,7 @@ export default {
         })
         .returning('*');
 
-      const attachments = (parsed.attachments || []).map((item) => ({
-        name: cleanText(item.filename || 'Вложение', 500),
-        size: Number(item.size || item.content?.length || 0),
-        type: cleanText(item.contentType, 255),
-      }));
+      const attachments = await persistAttachments(parsed);
       await database('symbolika_mail_messages').insert({
         thread_id: thread.id,
         message_id: messageId,
@@ -342,6 +389,42 @@ export default {
             })),
           },
         });
+      } catch (error) {
+        return next(error);
+      }
+    });
+
+    router.get('/messages/:messageId/attachments/:attachmentIndex', async (req, res, next) => {
+      try {
+        const actor = await actorContext(req, res);
+        if (!actor) return;
+        const messageId = Number(req.params.messageId);
+        const attachmentIndex = Number(req.params.attachmentIndex);
+        if (!Number.isInteger(messageId) || !Number.isInteger(attachmentIndex) || attachmentIndex < 0) {
+          return apiError(res, 400, 'Некорректная ссылка на вложение.');
+        }
+        const message = await database('symbolika_mail_messages').where('id', messageId).first('id', 'thread_id', 'attachments');
+        if (!message || !await accessibleThread(message.thread_id, actor)) {
+          return apiError(res, 404, 'Вложение не найдено или недоступно.');
+        }
+        const attachment = jsonArray(message.attachments)[attachmentIndex];
+        const storageName = cleanText(attachment?.storage_name, 255);
+        if (!attachment || !/^[A-Za-z0-9._-]+$/.test(storageName)) {
+          return apiError(res, 404, 'Файл ещё не загружен. Обновите почту и повторите попытку.');
+        }
+        const filePath = path.join(MAIL_ATTACHMENT_ROOT, storageName);
+        const resolvedRoot = path.resolve(MAIL_ATTACHMENT_ROOT) + path.sep;
+        if (!path.resolve(filePath).startsWith(resolvedRoot)) return apiError(res, 400, 'Некорректный путь вложения.');
+        const fileStat = await stat(filePath).catch(() => null);
+        if (!fileStat?.isFile()) return apiError(res, 404, 'Файл вложения отсутствует. Обновите почту.');
+        const contentType = cleanText(attachment.type, 255) || 'application/octet-stream';
+        const inlineTypes = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'text/plain']);
+        const disposition = req.query?.download === '1' || !inlineTypes.has(contentType.toLowerCase()) ? 'attachment' : 'inline';
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Length', String(fileStat.size));
+        res.setHeader('Content-Disposition', contentDisposition(disposition, attachment.name));
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        return createReadStream(filePath).on('error', next).pipe(res);
       } catch (error) {
         return next(error);
       }
