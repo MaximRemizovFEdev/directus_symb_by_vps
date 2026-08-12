@@ -20131,6 +20131,13 @@ export const CostingModule = {
         .symbolika-notification-switch input:checked + span::after { inset-inline-start: 19px; background: #fff; }
         .symbolika-notification-settings-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
         .symbolika-notification-settings-actions > span { display: inline-flex; align-items: center; gap: 5px; margin-inline-end: auto; color: #34d399; font-size: 11px; font-weight: 750; }
+        .symbolika-notification-field-title { display: inline-flex; align-items: center; gap: 6px; }
+        .symbolika-notification-help { position: relative; display: inline-grid; place-items: center; inline-size: 19px; block-size: 19px; padding: 0; border: 1px solid var(--theme--border-color); border-radius: 50%; background: var(--theme--background); color: var(--theme--foreground-subdued); cursor: help; }
+        .symbolika-notification-help:hover, .symbolika-notification-help:focus-visible { border-color: var(--theme--primary); color: var(--theme--primary); outline: none; }
+        .symbolika-notification-help-popover { position: absolute; z-index: 30; inset-inline-start: 50%; inset-block-end: calc(100% + 9px); display: none; inline-size: min(340px, calc(100vw - 44px)); padding: 12px 13px; border: 1px solid color-mix(in srgb, var(--theme--primary) 42%, var(--theme--border-color)); border-radius: 11px; background: var(--theme--background-normal); color: var(--theme--foreground); box-shadow: 0 16px 45px rgb(0 0 0 / .34); font-size: 11px; font-weight: 500; line-height: 1.5; text-align: start; text-transform: none; letter-spacing: normal; transform: translateX(-50%); }
+        .symbolika-notification-help-popover strong { display: block; margin-block-end: 5px; color: var(--theme--primary); font-size: 11px; }
+        .symbolika-notification-help-popover a { color: var(--theme--primary); text-decoration: underline; }
+        .symbolika-notification-help:hover .symbolika-notification-help-popover, .symbolika-notification-help:focus-visible .symbolika-notification-help-popover { display: block; }
         @media (max-width: 760px) {
           .symbolika-notification-page { gap: 10px; padding: 0 0 22px; }
           .symbolika-notification-hero { align-items: flex-start; padding: 14px; border-radius: 14px; }
@@ -21760,7 +21767,7 @@ export const CostingModule = {
                   <div><strong>ВКонтакте</strong><small>Личные сообщения от сообщества</small></div>
                   <label class="symbolika-notification-switch"><input v-model="notificationSettings.vk_enabled" type="checkbox" /><span></span></label>
                 </div>
-                <label><span>VK peer ID</span><input v-model="notificationSettings.vk_peer_id" class="symbolika-costing-input" type="text" placeholder="Например: 123456789" /></label>
+                <label><span class="symbolika-notification-field-title">VK peer ID<button type="button" class="symbolika-notification-help" aria-label="Как узнать VK peer ID">?<span class="symbolika-notification-help-popover"><strong>Как узнать VK peer ID</strong>Разрешите сообщения от нашего сообщества и напишите ему. Для личной беседы peer ID обычно равен цифровому ID вашей страницы. Его можно узнать по ссылке вида vk.com/id123456789. Введите только цифры.</span></button></span><input v-model="notificationSettings.vk_peer_id" class="symbolika-costing-input" type="text" placeholder="Например: 123456789" /></label>
               </article>
               <article class="symbolika-notification-channel is-telegram">
                 <div class="symbolika-notification-channel-head">
@@ -21768,7 +21775,7 @@ export const CostingModule = {
                   <div><strong>Telegram</strong><small>Сообщения через рабочего бота</small></div>
                   <label class="symbolika-notification-switch"><input v-model="notificationSettings.telegram_enabled" type="checkbox" /><span></span></label>
                 </div>
-                <label><span>Telegram chat ID</span><input v-model="notificationSettings.telegram_chat_id" class="symbolika-costing-input" type="text" placeholder="Например: 123456789" /></label>
+                <label><span class="symbolika-notification-field-title">Telegram chat ID<button type="button" class="symbolika-notification-help" aria-label="Как узнать Telegram chat ID">?<span class="symbolika-notification-help-popover"><strong>Как узнать Telegram chat ID</strong>Откройте нашего бота, нажмите «Запустить» и отправьте ему любое сообщение. Затем напишите боту @userinfobot команду /start — он покажет ваш цифровой ID. Скопируйте число без @ и пробелов.</span></button></span><input v-model="notificationSettings.telegram_chat_id" class="symbolika-costing-input" type="text" placeholder="Например: 123456789" /></label>
               </article>
             </div>
             <footer class="symbolika-notification-settings-actions">

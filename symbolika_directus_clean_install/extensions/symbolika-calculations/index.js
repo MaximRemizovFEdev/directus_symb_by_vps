@@ -388,11 +388,19 @@ export default ({ filter, action }, { database, logger, env }) => {
   async function sendCustomerTelegram(recipient, message) {
     const token = env?.SYMBOLIKA_TELEGRAM_BOT_TOKEN;
     if (!token) throw new Error('Не настроен Telegram-бот.');
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: recipient, text: message, disable_web_page_preview: true }),
-    });
+    const apiBase = String(env?.SYMBOLIKA_TELEGRAM_API_BASE || 'https://api.telegram.org').replace(/\/$/, '');
+    let response;
+    try {
+      response = await fetch(`${apiBase}/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ chat_id: recipient, text: message, disable_web_page_preview: true }),
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch (error) {
+      const reason = error?.cause?.code || error?.cause?.message || error?.name || error?.message || 'ошибка сети';
+      throw new Error(`Telegram API недоступен (${reason}). Проверьте исходящее соединение VPS или SYMBOLIKA_TELEGRAM_API_BASE.`);
+    }
     const payload = await response.json().catch(() => null);
     if (!response.ok || !payload?.ok) throw new Error(payload?.description || `Telegram HTTP ${response.status}`);
     return payload?.result?.message_id ? String(payload.result.message_id) : null;
