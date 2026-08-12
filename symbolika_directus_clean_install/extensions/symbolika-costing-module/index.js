@@ -783,14 +783,28 @@ const adminConfigs = {
     collection: 'directus_users',
     endpoint: '/users',
     title: 'Пользователи и роли',
+    description: 'Создание учетных записей сотрудников, назначение ролей и управление доступом без перехода в системный Directus.',
     sort: 'email',
     fields: 'id,email,first_name,last_name,status,role',
-    createDisabled: true,
     columns: [
-      { key: 'email', label: 'Email', type: 'text', readonly: true, wide: true },
+      { key: 'email', label: 'Email для входа', type: 'email', required: true, wide: true },
+      { key: 'password', label: 'Временный пароль', type: 'password', requiredOnCreate: true, createOnly: true },
+      { key: 'password_confirm', label: 'Повторите пароль', type: 'password', requiredOnCreate: true, createOnly: true, payload: false },
       { key: 'first_name', label: 'Имя', type: 'text' },
       { key: 'last_name', label: 'Фамилия', type: 'text' },
       { key: 'role', label: 'Роль', type: 'relation', options: 'directusRoles', required: true },
+      { key: 'status', label: 'Статус', type: 'select', required: true, choices: [
+        { value: 'active', text: 'Активен' },
+        { value: 'invited', text: 'Приглашен' },
+        { value: 'suspended', text: 'Заблокирован' },
+        { value: 'archived', text: 'Архив' },
+      ] },
+    ],
+    tableColumns: [
+      { key: 'email', label: 'Email', type: 'email', wide: true },
+      { key: 'first_name', label: 'Имя', type: 'text' },
+      { key: 'last_name', label: 'Фамилия', type: 'text' },
+      { key: 'role', label: 'Роль', type: 'relation', options: 'directusRoles' },
       { key: 'status', label: 'Статус', type: 'select', choices: [
         { value: 'active', text: 'Активен' },
         { value: 'invited', text: 'Приглашен' },
@@ -1336,6 +1350,12 @@ export const CostingModule = {
 
     activeAdminTableColumns() {
       return this.activeAdminConfig?.tableColumns || this.activeAdminConfig?.columns || [];
+    },
+
+    activeAdminFormColumns() {
+      if (!this.activeAdminConfig) return [];
+      const isNew = this.adminEditing === 'new';
+      return this.activeAdminConfig.columns.filter((column) => isNew || !column.createOnly);
     },
 
     activeAdminRows() {
@@ -6405,7 +6425,7 @@ export const CostingModule = {
 
     adminRowSearchText(row) {
       if (!this.activeAdminConfig) return '';
-      return this.activeAdminConfig.columns
+      return this.activeAdminTableColumns
         .map((column) => this.adminDisplayValue(row, column))
         .join(' ')
         .toLowerCase();
@@ -6527,6 +6547,8 @@ export const CostingModule = {
     adminFieldInputType(column) {
       if (['number', 'money'].includes(column.type)) return 'number';
       if (column.type === 'date') return 'date';
+      if (column.type === 'email') return 'email';
+      if (column.type === 'password') return 'password';
       return 'text';
     },
 
@@ -6573,6 +6595,9 @@ export const CostingModule = {
           status: 'confirmed',
         };
       }
+      if (config.collection === 'directus_users') {
+        return { status: 'active' };
+      }
       return {};
     },
 
@@ -6602,7 +6627,8 @@ export const CostingModule = {
       const config = this.activeAdminConfig;
       const payload = {};
       config.columns.forEach((column) => {
-        if (column.readonly) return;
+        if (column.readonly || column.payload === false) return;
+        if (column.createOnly && this.adminEditing !== 'new') return;
         if (config.collection === 'procurement_requests' && column.key === 'status' && !this.canManageProcurementStatus) return;
         let value = this.adminForm[column.key];
         if (column.type === 'relation') value = value ? value : null;
@@ -6636,12 +6662,34 @@ export const CostingModule = {
     async saveAdminForm() {
       const config = this.activeAdminConfig;
       if (!config || this.adminSaving) return;
+      const isNew = this.adminEditing === 'new';
       const payload = this.adminPayload();
 
-      const missing = config.columns.find((column) => column.required && !payload[column.key]);
+      const missing = this.activeAdminFormColumns.find((column) => {
+        if (!column.required && !(isNew && column.requiredOnCreate)) return false;
+        const value = column.payload === false ? this.adminForm[column.key] : payload[column.key];
+        return !String(value ?? '').trim();
+      });
       if (missing) {
         this.error = `Заполните поле "${missing.label}".`;
         return;
+      }
+      if (config.collection === 'directus_users') {
+        payload.email = String(payload.email || '').trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) {
+          this.error = 'Укажите корректный email для входа.';
+          return;
+        }
+        if (isNew && String(payload.password || '').length < 8) {
+          this.error = 'Временный пароль должен содержать не менее 8 символов.';
+          return;
+        }
+        if (isNew && payload.password !== this.adminForm.password_confirm) {
+          this.error = 'Пароли не совпадают.';
+          return;
+        }
+        payload.first_name = String(payload.first_name || '').trim() || null;
+        payload.last_name = String(payload.last_name || '').trim() || null;
       }
       if (config.collection === 'customer_operations' && !payload.customer && !payload.customer_company) {
         this.error = 'Выберите клиента или компанию.';
@@ -6674,7 +6722,6 @@ export const CostingModule = {
       this.error = '';
 
       try {
-        const isNew = this.adminEditing === 'new';
         const url = isNew ? config.endpoint : `${config.endpoint}/${this.adminEditing}`;
         if (config.collection === 'procurement_requests') {
           if (isNew && this.currentEmployeeId) payload.requested_by_employee = Number(this.currentEmployeeId);
@@ -24811,7 +24858,7 @@ export const CostingModule = {
               @click="startAdminCreate"
             >
               <v-icon name="add" small />
-              {{ activeTab === 'admin_procurement' ? 'Создать заявку' : 'Добавить' }}
+              {{ activeTab === 'admin_procurement' ? 'Создать заявку' : (activeTab === 'admin_users' ? 'Добавить пользователя' : 'Добавить') }}
             </button>
           </div>
 
@@ -24839,18 +24886,19 @@ export const CostingModule = {
 
           <div v-if="adminEditing" class="symbolika-costing-admin-form">
             <label
-              v-for="column in activeAdminConfig.columns"
+              v-for="column in activeAdminFormColumns"
               :key="column.key"
               class="symbolika-costing-label"
               :class="{ 'symbolika-costing-label-wide': column.wide }"
             >
-              {{ column.label }}{{ column.required ? ' *' : '' }}
+              {{ column.label }}{{ column.required || (adminEditing === 'new' && column.requiredOnCreate) ? ' *' : '' }}
               <input
-                v-if="['text', 'number', 'money', 'date'].includes(column.type)"
+                v-if="['text', 'email', 'password', 'number', 'money', 'date'].includes(column.type)"
                 v-model="adminForm[column.key]"
                 class="symbolika-costing-input"
                 :type="adminFieldInputType(column)"
                 :step="column.type === 'money' ? '0.01' : '1'"
+                :autocomplete="column.type === 'password' ? 'new-password' : (column.type === 'email' ? 'email' : 'off')"
                 :disabled="adminColumnReadonly(column)"
               />
               <textarea
@@ -24897,7 +24945,7 @@ export const CostingModule = {
                 Отмена
               </button>
               <button type="button" class="symbolika-costing-button symbolika-costing-button-compact" :disabled="adminSaving" @click="saveAdminForm">
-                {{ adminSaving ? 'Сохраняю...' : 'Сохранить' }}
+                {{ adminSaving ? 'Сохраняю...' : (activeTab === 'admin_users' && adminEditing === 'new' ? 'Создать пользователя' : 'Сохранить') }}
               </button>
             </div>
           </div>
