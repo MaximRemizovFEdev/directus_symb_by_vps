@@ -13411,6 +13411,19 @@ UPDATE directus_fields
 SET options = '{"choices":[{"text":"Начальный остаток","value":"opening_balance"},{"text":"Покупка на маркетплейсе","value":"marketplace_purchase"},{"text":"Выдача / снятие наличных","value":"cash_withdrawal"},{"text":"Прочая просьба","value":"other"}]}'::json
 WHERE collection = 'customer_operations' AND field = 'operation_type';
 
+-- Office managers own customer relationships in the same way as managers:
+-- their calculations, reconciliation and client operations remain scoped by
+-- the employee linked to the current Directus user.
+DELETE FROM directus_permissions
+WHERE policy = '00000000-0000-4000-8000-000000000202'
+  AND collection IN ('customer_operations', 'manager_finance_summary');
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy) VALUES
+  ('customer_operations','read','{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,NULL,'*','00000000-0000-4000-8000-000000000202'),
+  ('customer_operations','create','{}'::json,'{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,'operation_date,operation_type,direction,amount,customer,customer_company,manager_employee,status,description,reference','00000000-0000-4000-8000-000000000202'),
+  ('customer_operations','update','{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,'{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,'operation_date,operation_type,direction,amount,customer,customer_company,status,description,reference','00000000-0000-4000-8000-000000000202'),
+  ('manager_finance_summary','read','{"directus_user":{"_eq":"$CURRENT_USER"}}'::json,NULL,NULL,'id,employee,employee_name,order_percent,orders_count,orders_sum,paid_orders_sum,unpaid_orders_sum,commission_total,commission_accrued,commission_expected,commission_paid,commission_to_pay','00000000-0000-4000-8000-000000000202');
+
 UPDATE directus_permissions
 SET fields = fields || ',opening_balance_amount,opening_balance_direction,opening_balance_date,opening_balance_comment'
 WHERE collection IN ('customers', 'customer_companies')

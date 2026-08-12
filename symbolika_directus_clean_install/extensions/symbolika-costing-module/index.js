@@ -502,12 +502,12 @@ const moduleSections = {
   finance: {
     title: 'Финансы',
     tabs: ['finance', 'client_operations', 'gift_certificates'],
-    roles: ['Administrator', 'Управляющий', 'Менеджер'],
+    roles: ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер'],
   },
   clients: {
     title: 'Клиенты',
     tabs: ['clients', 'companies'],
-    roles: ['Administrator', 'Управляющий', 'Менеджер'],
+    roles: ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер'],
   },
   admin: {
     title: 'Админка',
@@ -1299,7 +1299,7 @@ export const CostingModule = {
       else if (this.currentRoleName === 'Шелкография') roleTabs = withWorkTabs(['my_orders', 'screen', 'labels', 'admin_inventory', 'admin_procurement']);
       else if (this.currentRoleName === 'Контрагент') roleTabs = tabs.filter((tab) => tab.id === 'contractor_work');
       else if (this.currentRoleName === 'Менеджер') roleTabs = withWorkTabs(['my_orders', 'estimates', 'office', 'finance', 'client_operations', 'gift_certificates', 'clients', 'companies', 'admin_procurement']);
-      else if (this.currentRoleName === 'Офис-менеджер') roleTabs = withWorkTabs(['my_orders', 'office', 'admin_procurement']);
+      else if (this.currentRoleName === 'Офис-менеджер') roleTabs = withWorkTabs(['my_orders', 'estimates', 'office', 'finance', 'client_operations', 'clients', 'companies']);
       else if (this.currentRoleName === 'Дизайнер') roleTabs = tabs.filter((tab) => ['my_orders', 'tasks', 'tasks_archive', 'events', 'admin_procurement'].includes(tab.id));
       else roleTabs = [];
 
@@ -3348,13 +3348,13 @@ export const CostingModule = {
       });
       if (fromLoadedRows) return this.detailOrderContext(fromLoadedRows);
 
-      if (!['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName)) return null;
+      if (!['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) return null;
       try {
         const params = new URLSearchParams();
         params.set('fields', overviewFields.join(','));
         params.set('filter[id][_eq]', String(orderId));
         params.set('limit', '1');
-        if (this.currentRoleName === 'Менеджер') {
+        if (['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) {
           if (!this.currentEmployeeId) return null;
           params.set('filter[manager_employee][_eq]', String(this.currentEmployeeId));
         }
@@ -4377,7 +4377,7 @@ export const CostingModule = {
         body{font:14px Arial,sans-serif;color:#172033;margin:34px}h1{margin:0 0 6px;font-size:26px}h2{font-size:17px;margin:28px 0 10px}.muted{color:#687386}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:22px 0}.card{border:1px solid #d9dee8;border-radius:10px;padding:14px}.card span{display:block;color:#687386;font-size:12px;margin-bottom:7px}.card strong{font-size:19px}table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid #e5e8ee;text-align:left}.num{text-align:right}tfoot td{font-weight:700}.signature{margin-top:40px;display:flex;justify-content:space-between}@media print{body{margin:18mm}.no-print{display:none}}
       </style></head><body><h1>Расчётный лист</h1><div class="muted">${this.escapeHtml(this.profileMonthName(`${slip.month}-01`))} · ${this.escapeHtml(slip.employee.name)}${slip.employee.position ? ` · ${this.escapeHtml(slip.employee.position)}` : ''}</div>
       <div class="grid"><div class="card"><span>Сумма заказов</span><strong>${money(slip.orders_sum)}</strong></div><div class="card"><span>Оплачено</span><strong>${money(slip.paid_orders_sum)}</strong></div><div class="card"><span>Не оплачено</span><strong>${money(slip.unpaid_orders_sum)}</strong></div></div>
-      <h2>Начисления и выплаты</h2><table><tbody><tr><td>Оклад</td><td class="num">${money(slip.salary_fixed)}</td></tr><tr><td>Процентная часть (${this.escapeHtml(this.formatMoney(slip.order_percent))}%)</td><td class="num">${money(slip.commission_accrued)}</td></tr><tr><td>Премиальная часть</td><td class="num">${money(slip.bonus_paid)}</td></tr><tr><td>Выплата зарплаты</td><td class="num">${money(slip.salary_paid)}</td></tr><tr><td>Авансы</td><td class="num">${money(slip.advances_paid)}</td></tr></tbody><tfoot><tr><td>Начислено всего</td><td class="num">${money(slip.total_accrued)}</td></tr><tr><td>Выплачено всего</td><td class="num">${money(slip.total_paid)}</td></tr><tr><td>Осталось выплатить</td><td class="num">${money(slip.salary_due)}</td></tr></tfoot></table>
+      <h2>Ваши начисления и выплаты</h2><table><tbody><tr><td>Оклад</td><td class="num">${money(slip.salary_fixed)}</td></tr><tr><td>Процентная часть (${this.escapeHtml(this.formatMoney(slip.order_percent))}%)</td><td class="num">${money(slip.commission_accrued)}</td></tr><tr><td>Премиальная часть</td><td class="num">${money(slip.bonus_paid)}</td></tr><tr><td>Получено как зарплата</td><td class="num">${money(slip.salary_paid)}</td></tr><tr><td>Полученные авансы</td><td class="num">${money(slip.advances_paid)}</td></tr></tbody><tfoot><tr><td>Ваш доход за месяц</td><td class="num">${money(slip.total_accrued)}</td></tr><tr><td>Получено всего</td><td class="num">${money(slip.total_paid)}</td></tr><tr><td>К получению</td><td class="num">${money(slip.salary_due)}</td></tr></tfoot></table>
       ${bonuses ? `<h2>Премии</h2><table><thead><tr><th>Дата</th><th>За что</th><th class="num">Сумма</th></tr></thead><tbody>${bonuses}</tbody></table>` : ''}
       <div class="signature"><span>Сотрудник ____________________</span><span>Ответственный ____________________</span></div><script>window.onload=()=>window.print()<\/script></body></html>`);
       printWindow.document.close();
@@ -9892,7 +9892,7 @@ export const CostingModule = {
         date: this.formatDate(new Date()),
         customer: selectedCustomer?.name || (!this.financeCompanyFilter ? firstRow.customer_name : '') || 'Все клиенты',
         company: selectedCompany?.name || firstRow.customer_company_name || 'Все компании',
-        manager: this.currentRoleName === 'Менеджер' ? (this.managerFinanceStats.employee_name || firstRow.manager_name || '-') : (firstRow.manager_name || 'Все менеджеры'),
+        manager: ['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName) ? (this.managerFinanceStats.employee_name || firstRow.manager_name || '-') : (firstRow.manager_name || 'Все менеджеры'),
         period: `${this.financeDateFrom ? this.formatDate(this.financeDateFrom) : 'с начала'} - ${this.financeDateTo ? this.formatDate(this.financeDateTo) : 'по сегодня'}`,
       };
     },
@@ -10935,7 +10935,7 @@ export const CostingModule = {
     },
 
     canEditEntityOpeningBalance() {
-      return ['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName)
+      return ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)
         && ['customer', 'company'].includes(this.entityDetail?.type);
     },
 
@@ -10975,7 +10975,7 @@ export const CostingModule = {
     },
 
     canEditCustomerNotifications() {
-      return ['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName)
+      return ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)
         && ['customer', 'company'].includes(this.entityDetail?.type);
     },
 
@@ -21770,29 +21770,29 @@ export const CostingModule = {
               <section class="symbolika-profile-salary-grid">
                 <article class="symbolika-profile-salary-card is-accrued">
                   <span><v-icon name="account_balance_wallet" /></span>
-                  <div><small>Начислено</small><strong>{{ formatMoney(profileData.salary.salary_accrued) }} ₽</strong><p>оклад, процент и премии</p></div>
+                  <div><small>Ваш доход за месяц</small><strong>{{ formatMoney(profileData.salary.salary_accrued) }} ₽</strong><p>оклад, процент и премии</p></div>
                 </article>
                 <article class="symbolika-profile-salary-card is-paid">
                   <span><v-icon name="payments" /></span>
-                  <div><small>Выплачено</small><strong>{{ formatMoney(parseMoney(profileData.salary.salary_paid) + parseMoney(profileData.salary.advances_paid) + parseMoney(profileData.salary.bonus_paid)) }} ₽</strong><p>зарплата, авансы и премии</p></div>
+                  <div><small>Вы уже получили</small><strong>{{ formatMoney(parseMoney(profileData.salary.salary_paid) + parseMoney(profileData.salary.advances_paid) + parseMoney(profileData.salary.bonus_paid)) }} ₽</strong><p>зарплата, авансы и премии</p></div>
                 </article>
                 <article class="symbolika-profile-salary-card" :class="parseMoney(profileData.salary.salary_debt) > 0 ? 'is-debt' : 'is-clear'">
                   <span><v-icon :name="parseMoney(profileData.salary.salary_debt) > 0 ? 'schedule' : 'verified'" /></span>
-                  <div><small>Осталось выплатить</small><strong>{{ formatMoney(profileData.salary.salary_debt) }} ₽</strong><p>{{ parseMoney(profileData.salary.salary_debt) > 0 ? 'текущий остаток' : 'расчёты закрыты' }}</p></div>
+                  <div><small>К получению</small><strong>{{ formatMoney(profileData.salary.salary_debt) }} ₽</strong><p>{{ parseMoney(profileData.salary.salary_debt) > 0 ? 'вам осталось получить' : 'всё получено' }}</p></div>
                 </article>
               </section>
 
               <section class="symbolika-profile-salary-details">
-                <article><span>Оклад</span><strong>{{ formatMoney(profileData.salary.salary_fixed) }} ₽</strong></article>
-                <article><span>Процент</span><strong>{{ formatMoney(profileData.salary.order_percent) }}%</strong></article>
+                <article><span>Ваш оклад</span><strong>{{ formatMoney(profileData.salary.salary_fixed) }} ₽</strong></article>
+                <article><span>Ваша ставка</span><strong>{{ formatMoney(profileData.salary.order_percent) }}%</strong></article>
                 <article><span>Оплаченные заказы</span><strong>{{ formatMoney(profileData.salary.paid_orders_sum) }} ₽</strong></article>
-                <article><span>Начислено процентов</span><strong>{{ formatMoney(profileData.salary.commission_accrued) }} ₽</strong></article>
-                <article><span>Премии</span><strong>{{ formatMoney(profileData.salary.bonus_paid) }} ₽</strong></article>
+                <article><span>Ваш процент</span><strong>{{ formatMoney(profileData.salary.commission_accrued) }} ₽</strong></article>
+                <article><span>Ваши премии</span><strong>{{ formatMoney(profileData.salary.bonus_paid) }} ₽</strong></article>
               </section>
 
               <div v-if="profileData.salary_history?.length" class="symbolika-costing-table-wrap symbolika-profile-history">
                 <table class="symbolika-costing-table symbolika-costing-table-compact">
-                  <thead><tr><th>Месяц</th><th class="symbolika-costing-num">Оклад</th><th class="symbolika-costing-num">Процент</th><th class="symbolika-costing-num">Начислено</th><th class="symbolika-costing-num">Выплачено</th><th class="symbolika-costing-num">Остаток</th></tr></thead>
+                  <thead><tr><th>Месяц</th><th class="symbolika-costing-num">Оклад</th><th class="symbolika-costing-num">Процент</th><th class="symbolika-costing-num">Ваш доход</th><th class="symbolika-costing-num">Получено</th><th class="symbolika-costing-num">К получению</th></tr></thead>
                   <tbody>
                     <tr v-for="row in profileData.salary_history" :key="'profile-salary-' + row.id">
                       <td><strong>{{ profileMonthName(row.month_start) }}</strong></td>
@@ -24579,7 +24579,7 @@ export const CostingModule = {
         </div>
 
         <div v-if="activeTab === 'finance' && moduleSection !== 'clients'" class="symbolika-costing-reconciliation">
-          <div v-if="currentRoleName === 'Менеджер'" class="symbolika-costing-dashboard symbolika-costing-dashboard-tight">
+          <div v-if="['Менеджер', 'Офис-менеджер'].includes(currentRoleName)" class="symbolika-costing-dashboard symbolika-costing-dashboard-tight">
             <div class="symbolika-costing-card blue">
               <div class="symbolika-costing-card-title">Моя выручка</div>
               <div class="symbolika-costing-card-value">{{ formatMoney(managerFinanceStats.orders_sum) }}</div>
@@ -25621,9 +25621,9 @@ export const CostingModule = {
                 <div><span>Оклад</span><strong>{{ formatMoney(payslipDialog.data.salary_fixed) }} ₽</strong></div>
                 <div><span>Процентная часть · {{ formatMoney(payslipDialog.data.order_percent) }}%</span><strong>{{ formatMoney(payslipDialog.data.commission_accrued) }} ₽</strong></div>
                 <div><span>Премиальная часть</span><strong>{{ formatMoney(payslipDialog.data.bonus_paid) }} ₽</strong></div>
-                <div class="is-total"><span>Начислено всего</span><strong>{{ formatMoney(payslipDialog.data.total_accrued) }} ₽</strong></div>
-                <div><span>Зарплата и авансы</span><strong>{{ formatMoney(parseMoney(payslipDialog.data.salary_paid) + parseMoney(payslipDialog.data.advances_paid)) }} ₽</strong></div>
-                <div class="is-due"><span>Осталось выплатить</span><strong>{{ formatMoney(payslipDialog.data.salary_due) }} ₽</strong></div>
+                <div class="is-total"><span>Ваш доход за месяц</span><strong>{{ formatMoney(payslipDialog.data.total_accrued) }} ₽</strong></div>
+                <div><span>Получено: зарплата и авансы</span><strong>{{ formatMoney(parseMoney(payslipDialog.data.salary_paid) + parseMoney(payslipDialog.data.advances_paid)) }} ₽</strong></div>
+                <div class="is-due"><span>К получению</span><strong>{{ formatMoney(payslipDialog.data.salary_due) }} ₽</strong></div>
               </div>
               <div v-if="payslipDialog.data.bonuses?.length" class="symbolika-payslip-bonuses">
                 <h3>Премии</h3>

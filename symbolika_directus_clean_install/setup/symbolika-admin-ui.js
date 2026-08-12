@@ -87,6 +87,12 @@
     '/admin/documentation',
     '/admin/help',
   ];
+  const officeManagerHiddenModulePaths = [
+    '/admin/symbolika-admin',
+    '/admin/symbolika-management',
+    '/admin/symbolika-production',
+    '/admin/symbolika-contractor',
+  ];
   const symbolikaDefaultModulePath = '/admin/symbolika-orders';
   const serviceNavigationState = {
     roleName: null,
@@ -216,6 +222,27 @@
       const item = getNavigationItem(link);
       item.dataset.symbolikaSystemNavigation = 'hidden';
       item.style.display = 'none';
+    }
+  }
+
+  async function applyRoleModuleVisibility() {
+    if (isAdminLoginPath()) return;
+    const roleName = serviceNavigationState.roleName || await loadCurrentRoleName();
+    if (!roleName) return;
+
+    for (const link of document.querySelectorAll('.module-bar a[href], .modules a[href]')) {
+      const href = link.getAttribute('href') || '';
+      let pathname = href;
+      try {
+        pathname = new URL(href, window.location.origin).pathname;
+      } catch {}
+      const hiddenForOfficeManager = roleName === '\u041e\u0444\u0438\u0441-\u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440'
+        && officeManagerHiddenModulePaths.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+      const item = getNavigationItem(link);
+      const wasHiddenForRole = item.dataset.symbolikaRoleModule === 'hidden';
+      item.dataset.symbolikaRoleModule = hiddenForOfficeManager ? 'hidden' : 'visible';
+      if (hiddenForOfficeManager) item.style.display = 'none';
+      else if (wasHiddenForRole) item.style.display = '';
     }
   }
 
@@ -1403,6 +1430,7 @@
       applyServiceNavigationVisibility();
       applyStandardContentVisibility();
       applyHiddenSystemModules();
+      applyRoleModuleVisibility();
       applyNotificationCenterShortcut();
     });
   });
@@ -1427,6 +1455,7 @@
   applyServiceNavigationVisibility();
   applyStandardContentVisibility();
   applyHiddenSystemModules();
+  applyRoleModuleVisibility();
   applyNotificationCenterShortcut();
 
   let attempts = 0;
@@ -1436,6 +1465,7 @@
     createPushButton();
     applyServiceNavigationVisibility();
     applyStandardContentVisibility();
+    applyRoleModuleVisibility();
     applyNotificationCenterShortcut();
     attempts += 1;
     if (attempts >= 20) window.clearInterval(interval);
