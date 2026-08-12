@@ -2,7 +2,8 @@ param(
     [string]$Server = "82.146.53.84",
     [string]$User = "root",
     [string]$RemoteRepository = "/opt/symbolika/directus_symb_by_vps",
-    [string]$Branch = "dev-v1"
+    [string]$Branch = "dev-v1",
+    [string]$IdentityFile = "$env:USERPROFILE\.ssh\symbolika_vps"
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,6 +20,9 @@ if ($Branch -notmatch '^[A-Za-z0-9._/-]+$') {
 if ($RemoteRepository -notmatch '^/[A-Za-z0-9._/-]+$') {
     throw "Некорректный путь репозитория: $RemoteRepository"
 }
+if (-not (Test-Path -LiteralPath $IdentityFile)) {
+    throw "Не найден SSH-ключ: $IdentityFile"
+}
 
 $serverScript = Join-Path $PSScriptRoot "update-server.sh"
 if (-not (Test-Path -LiteralPath $serverScript)) {
@@ -29,7 +33,7 @@ $target = "$User@$Server"
 $remoteScript = "/tmp/symbolika-update.sh"
 
 Write-Host "Загрузка сценария обновления на $target..." -ForegroundColor Cyan
-& scp $serverScript "${target}:${remoteScript}"
+& scp -i $IdentityFile -o IdentitiesOnly=yes $serverScript "${target}:${remoteScript}"
 if ($LASTEXITCODE -ne 0) {
     throw "Не удалось передать сценарий на VPS"
 }
@@ -37,7 +41,7 @@ if ($LASTEXITCODE -ne 0) {
 $remoteCommand = "chmod 700 '$remoteScript'; '$remoteScript' '$RemoteRepository' '$Branch'; code=`$?; rm -f '$remoteScript'; exit `$code"
 
 Write-Host "Запуск безопасного обновления..." -ForegroundColor Cyan
-& ssh $target $remoteCommand
+& ssh -i $IdentityFile -o IdentitiesOnly=yes $target $remoteCommand
 if ($LASTEXITCODE -ne 0) {
     throw "Обновление VPS завершилось с ошибкой"
 }

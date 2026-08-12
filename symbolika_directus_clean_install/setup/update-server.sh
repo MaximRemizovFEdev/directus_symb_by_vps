@@ -60,6 +60,9 @@ STAMP="$(date '+%Y%m%d-%H%M%S')"
 BACKUP_NAME="symbolika-before-update-${STAMP}-${CURRENT_COMMIT:0:8}.dump"
 CONTAINER_BACKUP="/tmp/${BACKUP_NAME}"
 HOST_BACKUP="${BACKUP_DIR}/${BACKUP_NAME}"
+UPLOADS_BACKUP="${BACKUP_DIR}/uploads-before-update-${STAMP}-${CURRENT_COMMIT:0:8}.tar.gz"
+ENV_BACKUP="${BACKUP_DIR}/env-before-update-${STAMP}-${CURRENT_COMMIT:0:8}.backup"
+RELEASE_MARKER="${BACKUP_DIR}/release-before-update-${STAMP}-${CURRENT_COMMIT:0:8}.txt"
 
 log "Создание резервной копии: ${HOST_BACKUP}"
 docker exec "$DB_CONTAINER" pg_dump -U directus -d directus -Fc -f "$CONTAINER_BACKUP"
@@ -68,6 +71,13 @@ docker cp "${DB_CONTAINER}:${CONTAINER_BACKUP}" "$HOST_BACKUP"
 docker exec "$DB_CONTAINER" rm -f "$CONTAINER_BACKUP"
 chmod 600 "$HOST_BACKUP"
 test -s "$HOST_BACKUP" || fail "Получен пустой backup"
+
+log "Архивирование uploads и серверной конфигурации"
+tar -C "$PROJECT_DIR" -czf "$UPLOADS_BACKUP" uploads
+tar -tzf "$UPLOADS_BACKUP" >/dev/null
+cp "$PROJECT_DIR/.env" "$ENV_BACKUP"
+printf 'commit=%s\nbranch=%s\ncreated_at=%s\n' "$CURRENT_COMMIT" "$BRANCH" "$(date --iso-8601=seconds)" > "$RELEASE_MARKER"
+chmod 600 "$UPLOADS_BACKUP" "$ENV_BACKUP" "$RELEASE_MARKER"
 
 if test "$CURRENT_COMMIT" = "$TARGET_COMMIT"; then
   log "Код уже актуален: ${CURRENT_COMMIT}"
@@ -114,4 +124,4 @@ docker logs --tail 50 "$DIRECTUS_CONTAINER"
 trap - ERR
 
 FINAL_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-log "Готово. Версия: ${FINAL_COMMIT}. Backup: ${HOST_BACKUP}"
+log "Готово. Версия: ${FINAL_COMMIT}. Backup: ${HOST_BACKUP}; ${UPLOADS_BACKUP}; ${ENV_BACKUP}"
