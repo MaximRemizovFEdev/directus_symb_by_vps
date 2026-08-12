@@ -86,13 +86,52 @@
     '/admin/docs',
     '/admin/documentation',
     '/admin/help',
+    '/admin/users',
+    '/admin/user-directory',
   ];
-  const officeManagerHiddenModulePaths = [
-    '/admin/symbolika-admin',
-    '/admin/symbolika-management',
-    '/admin/symbolika-production',
-    '/admin/symbolika-contractor',
+  const sharedEmployeeModulePaths = [
+    '/admin/symbolika-orders',
+    '/admin/symbolika-tasks',
+    '/admin/symbolika-mail-module',
+    '/admin/symbolika-profile-module',
   ];
+  const roleModulePaths = new Map([
+    ['Administrator', new Set([
+      ...sharedEmployeeModulePaths,
+      '/admin/symbolika-production',
+      '/admin/symbolika-procurement',
+      '/admin/symbolika-management',
+      '/admin/symbolika-admin',
+    ])],
+    ['\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u044e\u0449\u0438\u0439', new Set([
+      ...sharedEmployeeModulePaths,
+      '/admin/symbolika-production',
+      '/admin/symbolika-procurement',
+      '/admin/symbolika-management',
+    ])],
+    ['\u041c\u0435\u043d\u0435\u0434\u0436\u0435\u0440', new Set([
+      ...sharedEmployeeModulePaths,
+      '/admin/symbolika-procurement',
+    ])],
+    ['\u041e\u0444\u0438\u0441-\u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440', new Set(sharedEmployeeModulePaths)],
+    ['\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e', new Set([
+      ...sharedEmployeeModulePaths,
+      '/admin/symbolika-production',
+      '/admin/symbolika-procurement',
+    ])],
+    ['\u0428\u0435\u043b\u043a\u043e\u0433\u0440\u0430\u0444\u0438\u044f', new Set([
+      ...sharedEmployeeModulePaths,
+      '/admin/symbolika-production',
+      '/admin/symbolika-procurement',
+    ])],
+    ['\u0414\u0438\u0437\u0430\u0439\u043d\u0435\u0440', new Set([
+      ...sharedEmployeeModulePaths,
+      '/admin/symbolika-procurement',
+    ])],
+    ['\u041a\u043e\u043d\u0442\u0440\u0430\u0433\u0435\u043d\u0442', new Set([
+      '/admin/symbolika-profile-module',
+    ])],
+  ]);
   const symbolikaDefaultModulePath = '/admin/symbolika-orders';
   const serviceNavigationState = {
     roleName: null,
@@ -206,6 +245,11 @@
       'документация',
       'documentation',
       'docs',
+      'help',
+      '\u043f\u043e\u043c\u043e\u0449\u044c',
+      '\u0441\u043f\u0440\u0430\u0432\u043a\u0430',
+      'user directory',
+      '\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438',
     ].some((part) => label.includes(part));
     if (!href) return isHiddenByLabel;
     try {
@@ -230,18 +274,19 @@
     const roleName = serviceNavigationState.roleName || await loadCurrentRoleName();
     if (!roleName) return;
 
+    const allowedPaths = roleModulePaths.get(roleName) || new Set(['/admin/symbolika-profile-module']);
     for (const link of document.querySelectorAll('.module-bar a[href], .modules a[href]')) {
       const href = link.getAttribute('href') || '';
       let pathname = href;
       try {
         pathname = new URL(href, window.location.origin).pathname;
       } catch {}
-      const hiddenForOfficeManager = roleName === '\u041e\u0444\u0438\u0441-\u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440'
-        && officeManagerHiddenModulePaths.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+      if (!pathname.startsWith('/admin/symbolika-')) continue;
+      const allowedForRole = [...allowedPaths].some((path) => pathname === path || pathname.startsWith(`${path}/`));
       const item = getNavigationItem(link);
       const wasHiddenForRole = item.dataset.symbolikaRoleModule === 'hidden';
-      item.dataset.symbolikaRoleModule = hiddenForOfficeManager ? 'hidden' : 'visible';
-      if (hiddenForOfficeManager) item.style.display = 'none';
+      item.dataset.symbolikaRoleModule = allowedForRole ? 'visible' : 'hidden';
+      if (!allowedForRole) item.style.display = 'none';
       else if (wasHiddenForRole) item.style.display = '';
     }
   }

@@ -237,6 +237,8 @@ input[type="week"]::-webkit-calendar-picker-indicator {
 .module-bar a[href*="/admin/docs"],
 .module-bar a[href*="/admin/documentation"],
 .module-bar a[href*="/admin/help"],
+.module-bar a[href*="/admin/users"],
+.module-bar a[href*="/admin/user-directory"],
 [data-symbolika-system-navigation="hidden"] {
   display: none !important;
 }
