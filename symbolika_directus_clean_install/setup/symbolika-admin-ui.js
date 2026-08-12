@@ -230,6 +230,7 @@
 
   function isHiddenSystemModuleLink(link) {
     const href = link?.getAttribute?.('href') || '';
+    const isSystemModuleBarItem = Boolean(link?.closest?.('.module-bar'));
     const label = [
       link?.getAttribute?.('aria-label'),
       link?.getAttribute?.('title'),
@@ -251,12 +252,17 @@
       'user directory',
       '\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438',
     ].some((part) => label.includes(part));
-    if (!href) return isHiddenByLabel;
+    // Подписи вроде «Пользователи» используются и внутри рабочих модулей.
+    // По тексту скрываем только пункты первого системного меню Directus;
+    // остальные ссылки проверяем исключительно по системному URL.
+    if (!href) return isSystemModuleBarItem && isHiddenByLabel;
     try {
       const url = new URL(href, window.location.origin);
-      return hiddenSystemModulePaths.some((path) => url.pathname === path || url.pathname.startsWith(`${path}/`)) || isHiddenByLabel;
+      return hiddenSystemModulePaths.some((path) => url.pathname === path || url.pathname.startsWith(`${path}/`))
+        || (isSystemModuleBarItem && isHiddenByLabel);
     } catch (error) {
-      return hiddenSystemModulePaths.some((path) => href === path || href.includes(path)) || isHiddenByLabel;
+      return hiddenSystemModulePaths.some((path) => href === path || href.includes(path))
+        || (isSystemModuleBarItem && isHiddenByLabel);
     }
   }
 
