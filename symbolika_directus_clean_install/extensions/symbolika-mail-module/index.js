@@ -320,7 +320,7 @@ const MailWorkspace = {
 
     openSignatureDialog(employee = null) {
       this.signatureTargetEmployee = employee || null;
-      this.signatureForm = employee?.email_signature ?? this.actor?.signature ?? '';
+      this.signatureForm = employee?.email_signature ?? this.actor?.signature_custom ?? '';
       this.signatureLinkVisible = false;
       this.signatureLinkForm = { text: '', url: 'https://' };
       this.showSignatureDialog = true;
@@ -379,9 +379,14 @@ const MailWorkspace = {
         });
         if (this.signatureTargetEmployee) {
           this.signatureTargetEmployee.email_signature = result.signature;
-          if (Number(this.signatureTargetEmployee.id) === Number(this.actor?.employee_id)) this.actor.signature = result.signature;
+          this.signatureTargetEmployee.signature_preview = result.signature_html;
+          if (Number(this.signatureTargetEmployee.id) === Number(this.actor?.employee_id)) {
+            this.actor.signature_custom = result.signature;
+            this.actor.signature = result.signature_html;
+          }
         } else {
-          this.actor.signature = result.signature;
+          this.actor.signature_custom = result.signature;
+          this.actor.signature = result.signature_html;
         }
         this.showSignatureDialog = false;
         this.notice = this.signatureTargetEmployee
@@ -842,6 +847,8 @@ const MailWorkspace = {
         .symbolika-mail-signature-preview { margin-block: 9px 14px; padding: 12px; border-inline-start: 3px solid #F97316; background: var(--theme--background-subdued); color: var(--theme--foreground-subdued); font-size: 12px; white-space: pre-wrap; }
         .symbolika-mail-signature-preview small { display: block; margin-block-end: 7px; color: #FB923C; font-size: 9px; font-weight: 850; text-transform: uppercase; }
         .symbolika-mail-signature-preview div { white-space: normal; }
+        .symbolika-mail-branded-preview { margin-block: 12px 18px; padding: 14px; overflow: auto; border: 1px solid var(--theme--border-color-subdued); border-radius: 12px; background: #eef1f4; }
+        .symbolika-mail-branded-preview > table { margin-inline: auto !important; }
         .symbolika-mail-signature-preview a, .symbolika-mail-signature-editor a { color: #F97316; text-decoration: underline; }
         .symbolika-mail-editor-shell { overflow: hidden; border: 1px solid var(--theme--border-color); border-radius: 12px; background: var(--theme--background); }
         .symbolika-mail-editor-toolbar { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px; border-block-end: 1px solid var(--theme--border-color-subdued); background: var(--theme--background-subdued); }
@@ -1209,7 +1216,9 @@ const MailWorkspace = {
           <form class="symbolika-mail-dialog" @submit.prevent="saveSignature">
             <header class="symbolika-mail-dialog-head"><h2>{{ signatureTargetEmployee ? 'Подпись · ' + signatureTargetEmployee.full_name : 'Моя подпись' }}</h2><button type="button" class="symbolika-mail-icon-button" @click="showSignatureDialog = false"><v-icon name="close" small /></button></header>
             <div class="symbolika-mail-dialog-body">
-              <p class="symbolika-mail-help">Оформите подпись визуально: выделяйте текст, меняйте начертание и выравнивание, добавляйте списки и ссылки с понятным текстом. Подпись автоматически добавляется к исходящим письмам.</p>
+              <p class="symbolika-mail-help">Фирменная подпись автоматически собирается из карточки сотрудника и добавляется к исходящим письмам.</p>
+              <div class="symbolika-mail-branded-preview" v-html="signatureTargetEmployee?.signature_preview || actor?.signature"></div>
+              <p class="symbolika-mail-help">ФИО, публичная должность, телефон и почтовый адрес подставляются автоматически. Ниже можно добавить индивидуальный текст, ссылки или дополнительную информацию после основного блока.</p>
               <div class="symbolika-mail-editor-shell">
                 <div class="symbolika-mail-editor-toolbar" aria-label="Форматирование подписи">
                   <button type="button" class="symbolika-mail-editor-tool" title="Жирный" @click="formatSignature('bold')"><strong>Ж</strong></button>
@@ -1254,7 +1263,7 @@ const MailWorkspace = {
                 <p>Подпись автоматически добавляется к исходящим письмам конкретного сотрудника.</p>
                 <div v-for="employee in settings.employees" :key="'signature-' + employee.id" class="symbolika-mail-signature-row">
                   <div><strong>{{ employee.full_name }}</strong><small>{{ employee.email || 'Нет учетной почты' }}</small></div>
-                  <div class="symbolika-mail-signature-summary" v-html="employee.email_signature || 'Подпись не настроена'"></div>
+                  <div class="symbolika-mail-signature-summary" v-html="employee.signature_preview || 'Подпись не настроена'"></div>
                   <button type="button" class="symbolika-mail-button" @click="openSignatureDialog(employee)"><v-icon name="edit" small /> Настроить</button>
                 </div>
               </section>

@@ -768,11 +768,12 @@ const adminConfigs = {
     endpoint: '/items/employees',
     title: 'Сотрудники',
     sort: 'full_name',
-    fields: 'id,full_name,phone,position,salary_fixed,order_percent,is_active,directus_user',
+    fields: 'id,full_name,phone,public_position,position,salary_fixed,order_percent,is_active,directus_user',
     columns: [
       { key: 'full_name', label: 'ФИО', type: 'text', required: true, wide: true },
       { key: 'phone', label: 'Телефон', type: 'text' },
       { key: 'position', label: 'Должность', type: 'relation', options: 'employeePositions' },
+      { key: 'public_position', label: 'Публичная должность', type: 'text', wide: true },
       { key: 'salary_fixed', label: 'Оклад', type: 'money' },
       { key: 'order_percent', label: '% с заказов', type: 'number' },
       { key: 'directus_user', label: 'Пользователь', type: 'relation', options: 'directusUsers' },

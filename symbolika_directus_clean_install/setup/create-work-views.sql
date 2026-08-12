@@ -468,6 +468,7 @@ ALTER TABLE symbolika_tasks ADD COLUMN IF NOT EXISTS task_type varchar(32) NOT N
 ALTER TABLE symbolika_tasks ADD COLUMN IF NOT EXISTS result_url text;
 ALTER TABLE symbolika_tasks ADD COLUMN IF NOT EXISTS source_url text;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS email_signature text;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS public_position character varying(255);
 
 CREATE INDEX IF NOT EXISTS symbolika_tasks_assigned_to_idx ON symbolika_tasks(assigned_to);
 CREATE INDEX IF NOT EXISTS symbolika_tasks_created_by_employee_idx ON symbolika_tasks(created_by_employee);
@@ -3829,6 +3830,20 @@ UPDATE directus_fields
 SET translations = json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0435\043b\0435\0444\043e\043d'))::json
 WHERE collection = 'employees'
   AND field = 'phone';
+
+DELETE FROM directus_fields
+WHERE collection = 'employees'
+  AND field = 'public_position';
+
+INSERT INTO directus_fields (
+  collection, field, special, interface, options, display, display_options,
+  readonly, hidden, sort, width, translations, required, searchable
+) VALUES (
+  'employees', 'public_position', NULL, 'input', NULL, NULL, NULL,
+  false, false, 5, 'full',
+  json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0443\0431\043b\0438\0447\043d\0430\044f \0434\043e\043b\0436\043d\043e\0441\0442\044c'))::json,
+  false, true
+);
 
 -- Normalize legacy office/production Directus labels that were created before
 -- the repository was cleaned up from broken Cyrillic encodings.
