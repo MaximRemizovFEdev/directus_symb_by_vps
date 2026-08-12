@@ -3116,6 +3116,11 @@ export const CostingModule = {
         this.loadAutomationHealth({ silent: true });
         this.loadFeedbackReports({ silent: true });
       }
+      if (tab === 'payroll') {
+        this.loadSalaryRows();
+        this.loadManagerSummary();
+        this.loadEmployees();
+      }
       this.$nextTick(() => {
         this.bindPagingObserver();
       });
@@ -6738,6 +6743,13 @@ export const CostingModule = {
         this.cancelAdminEdit();
         if (config.collection === 'customer_operations') {
           await Promise.all([this.loadAdminData(), this.loadFinanceRows(), this.loadCustomers(), this.loadCompanies()]);
+        } else if (config.collection === 'employees') {
+          await Promise.all([
+            this.loadAdminData(),
+            this.loadEmployees(),
+            this.loadSalaryRows(),
+            this.loadManagerSummary(),
+          ]);
         } else {
           await this.loadAdminData();
         }
@@ -17200,27 +17212,27 @@ export const CostingModule = {
         }
 
         .symbolika-costing-payroll-table col.symbolika-costing-payroll-employee {
-          width: 15% !important;
+          width: 14% !important;
         }
 
         .symbolika-costing-payroll-table col.symbolika-costing-payroll-terms {
-          width: 13% !important;
+          width: 12% !important;
         }
 
         .symbolika-costing-payroll-table col.symbolika-costing-payroll-orders {
-          width: 24% !important;
+          width: 22% !important;
         }
 
         .symbolika-costing-payroll-table col.symbolika-costing-payroll-accruals {
-          width: 17% !important;
+          width: 16% !important;
         }
 
         .symbolika-costing-payroll-table col.symbolika-costing-payroll-payouts {
-          width: 19% !important;
+          width: 18% !important;
         }
 
         .symbolika-costing-payroll-table col.symbolika-costing-payroll-action-col {
-          width: 12% !important;
+          width: 18% !important;
         }
 
         .symbolika-costing-payroll-table th,
@@ -20313,8 +20325,29 @@ export const CostingModule = {
         .symbolika-payroll-period { min-inline-size: 210px; }
         .symbolika-payroll-period .symbolika-costing-label { margin: 0; }
         .symbolika-payroll-toolbar-actions,
-        .symbolika-payroll-row-actions,
         .symbolika-profile-payslip-actions { display: flex; align-items: center; gap: 8px; }
+        .symbolika-payroll-row-actions {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          align-items: center;
+          gap: 7px;
+          inline-size: 100%;
+        }
+        .symbolika-payroll-row-actions .symbolika-costing-mini-button {
+          min-inline-size: 0;
+          inline-size: 100%;
+          justify-content: center;
+          white-space: nowrap;
+          padding-inline: 9px;
+        }
+        .symbolika-payroll-row-actions .symbolika-costing-payroll-action {
+          border-color: color-mix(in srgb, var(--symbolika-accent) 65%, transparent);
+          background: color-mix(in srgb, var(--symbolika-accent) 14%, transparent);
+          color: var(--symbolika-accent);
+        }
+        .symbolika-payroll-row-actions .symbolika-costing-payroll-action:hover {
+          background: color-mix(in srgb, var(--symbolika-accent) 24%, transparent);
+        }
         .symbolika-profile-payslip-actions .symbolika-costing-input { inline-size: 165px; }
         .symbolika-manager-summary-wrap { margin-block-end: 22px; }
         .symbolika-manager-summary-wrap,
@@ -20350,7 +20383,7 @@ export const CostingModule = {
             font-size: 0;
           }
           .symbolika-payroll-row-actions {
-            display: grid;
+            grid-template-columns: 34px 34px;
             justify-content: center;
             gap: 4px;
           }
@@ -23811,7 +23844,7 @@ export const CostingModule = {
                   </td>
                   <td>
                     <div class="symbolika-payroll-row-actions">
-                      <button type="button" class="symbolika-costing-mini-button" @click="openPayslip(row.employee, payrollMonth)"><v-icon name="description" small />Листок</button>
+                      <button type="button" class="symbolika-costing-mini-button" title="Открыть расчётный лист" @click="openPayslip(row.employee, payrollMonth)"><v-icon name="description" small />Расчёт</button>
                       <button type="button" class="symbolika-costing-mini-button symbolika-costing-payroll-action" @click="openExpenseDialog('salary_payment', row.employee)"><v-icon name="payments" small />Выплатить</button>
                     </div>
                   </td>
