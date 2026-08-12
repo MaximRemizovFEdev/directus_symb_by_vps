@@ -15,6 +15,59 @@ function cleanText(value, max = 5000) {
   return String(value ?? '').trim().slice(0, max);
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function sanitizeSignatureHtml(value) {
+  const source = cleanText(value, 20000);
+  if (!source) return '';
+  const withMarkup = /<\/?[a-z][^>]*>/i.test(source)
+    ? source
+    : escapeHtml(source).replace(/\r?\n/g, '<br>');
+  const withoutUnsafeBlocks = withMarkup
+    .replace(/<(script|style|iframe|object|embed|form|input|button)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<(script|style|iframe|object|embed|form|input|button)\b[^>]*\/?>/gi, '');
+  const allowed = new Set(['p', 'br', 'div', 'span', 'strong', 'b', 'em', 'i', 'u', 's', 'ul', 'ol', 'li', 'a']);
+  return withoutUnsafeBlocks.replace(/<\/?([a-z0-9]+)\b([^>]*)>/gi, (match, rawTag, rawAttributes) => {
+    const tag = rawTag.toLowerCase();
+    if (!allowed.has(tag)) return '';
+    if (match.startsWith('</')) return tag === 'br' ? '' : `</${tag}>`;
+    if (tag === 'br') return '<br>';
+    const attributes = [];
+    const alignment = String(rawAttributes || '').match(/(?:style\s*=\s*["'][^"']*text-align\s*:\s*|align\s*=\s*["']?)(left|center|right)/i)?.[1];
+    if (alignment && ['p', 'div'].includes(tag)) attributes.push(`style="text-align:${alignment.toLowerCase()}"`);
+    if (tag === 'a') {
+      const href = String(rawAttributes || '').match(/href\s*=\s*(["'])(.*?)\1/i)?.[2] || '';
+      if (/^(https?:\/\/|mailto:|tel:)/i.test(href)) {
+        attributes.push(`href="${escapeHtml(href)}"`, 'target="_blank"', 'rel="noopener noreferrer"');
+      }
+    }
+    return `<${tag}${attributes.length ? ` ${attributes.join(' ')}` : ''}>`;
+  }).slice(0, 20000);
+}
+
+function signaturePlainText(value) {
+  return sanitizeSignatureHtml(value)
+    .replace(/<br\s*>/gi, '\n')
+    .replace(/<\/\s*(p|div|li)\s*>/gi, '\n')
+    .replace(/<li\b[^>]*>/gi, '• ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function boolEnv(value, fallback = false) {
   if (value === undefined || value === null || value === '') return fallback;
   return ['true', '1', 'yes', 'on'].includes(String(value).toLowerCase());
@@ -379,7 +432,7 @@ export default {
               email: actor.email,
               role: actor.role_name,
               is_admin: actor.is_admin,
-              signature: actor.email_signature || '',
+              signature: sanitizeSignatureHtml(actor.email_signature),
             },
             mode: mailMode(),
             configured: Boolean(env?.SYMBOLIKA_IMAP_HOST && env?.SYMBOLIKA_IMAP_USER && env?.SYMBOLIKA_IMAP_PASSWORD),
@@ -534,8 +587,10 @@ export default {
         if (!to.length || to.some((email) => !EMAIL_PATTERN.test(email))) return apiError(res, 400, 'Укажите корректный адрес получателя.');
         const subject = cleanText(req.body?.subject || '(без темы)', 2000);
         const body = cleanText(req.body?.body, 200000);
-        const signature = req.body?.include_signature === false ? '' : cleanText(actor.email_signature, 20000);
-        const deliveredBody = signature ? `${body}\n\n-- \n${signature}` : body;
+        const signatureHtml = req.body?.include_signature === false ? '' : sanitizeSignatureHtml(actor.email_signature);
+        const signatureText = signaturePlainText(signatureHtml);
+        const deliveredBody = signatureText ? `${body}\n\n-- \n${signatureText}` : body;
+        const deliveredHtml = `${escapeHtml(body).replace(/\r?\n/g, '<br>')}${signatureHtml ? `<div style="margin-top:24px">${signatureHtml}</div>` : ''}`;
         if (!body) return apiError(res, 400, 'Введите текст письма.');
 
         const replyThread = req.body?.thread_id ? await accessibleThread(req.body.thread_id, actor) : null;
@@ -566,6 +621,7 @@ export default {
             to,
             subject,
             text: deliveredBody,
+            html: deliveredHtml,
             inReplyTo: replyThread?.external_thread_id?.startsWith('<') ? replyThread.external_thread_id : undefined,
           });
           messageId = result?.messageId || messageId;
@@ -607,6 +663,7 @@ export default {
           sender_alias: fromAlias,
           subject,
           body_text: deliveredBody,
+          body_html: deliveredHtml,
           attachments: '[]',
           is_read: true,
           is_test: mailMode() !== 'imap',
@@ -699,7 +756,7 @@ export default {
       try {
         const actor = await actorContext(req, res);
         if (!actor) return;
-        return res.json({ data: { signature: actor.email_signature || '' } });
+        return res.json({ data: { signature: sanitizeSignatureHtml(actor.email_signature) } });
       } catch (error) {
         return next(error);
       }
@@ -710,7 +767,7 @@ export default {
         const actor = await actorContext(req, res);
         if (!actor) return;
         if (!actor.employee_id) return apiError(res, 400, 'У пользователя не заполнена карточка сотрудника.');
-        const signature = cleanText(req.body?.signature, 20000) || null;
+        const signature = sanitizeSignatureHtml(req.body?.signature) || null;
         await database('employees').where('id', actor.employee_id).update({ email_signature: signature });
         return res.json({ data: { signature: signature || '' } });
       } catch (error) {
@@ -808,6 +865,7 @@ export default {
           .where('e.is_active', true)
           .select('e.id', 'e.full_name', 'e.email_signature', 'u.email')
           .orderBy('e.full_name');
+        employees.forEach((employee) => { employee.email_signature = sanitizeSignatureHtml(employee.email_signature); });
         return res.json({
           data: {
             folders: await folderRows(actor),
@@ -895,7 +953,7 @@ export default {
         if (!actor.is_admin) return apiError(res, 403, 'Подписи сотрудников может настраивать только администратор или управляющий.');
         const employee = await database('employees').where('id', Number(req.params.id)).first('id');
         if (!employee) return apiError(res, 404, 'Сотрудник не найден.');
-        const signature = cleanText(req.body?.signature, 20000) || null;
+        const signature = sanitizeSignatureHtml(req.body?.signature) || null;
         await database('employees').where('id', employee.id).update({ email_signature: signature });
         return res.json({ data: { id: employee.id, signature: signature || '' } });
       } catch (error) {
