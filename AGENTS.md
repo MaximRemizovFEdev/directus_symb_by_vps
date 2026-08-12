@@ -59,8 +59,8 @@ symbolika-db
 Тонкие модули-обертки над `symbolika-costing-module`:
 
 - `symbolika-admin-module` — админка, справочники, расходы, зарплаты, финрезультат.
-- `symbolika-clients-module` — клиенты и компании.
-- `symbolika-finance-module` — сверки, оплаты, показатели менеджеров.
+- `symbolika-clients-module` — legacy-обертка для совместимости ссылок; клиенты и компании выведены в `Заказы`.
+- `symbolika-finance-module` — legacy-обертка для совместимости ссылок; сверки и клиентские операции выведены в `Заказы`.
 - `symbolika-management-module` — себестоимость и управление заказами.
 - `symbolika-production-module` — производство, шелкография, этикетки.
 - `symbolika-contractor-module` — будущий кабинет контрагента.

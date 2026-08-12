@@ -35,8 +35,8 @@ symbolika-db
 
 - `extensions/symbolika-costing-module` — основной рабочий интерфейс.
 - `extensions/symbolika-admin-module` — раздел админки.
-- `extensions/symbolika-clients-module` — клиенты и компании.
-- `extensions/symbolika-finance-module` — финансы и сверки.
+- `extensions/symbolika-clients-module` — совместимость старых прямых ссылок; рабочие страницы клиентов и компаний находятся внутри `Заказов`.
+- `extensions/symbolika-finance-module` — совместимость старых прямых ссылок; сверки и клиентские операции находятся внутри `Заказов`.
 - `extensions/symbolika-management-module` — управление и себестоимость.
 - `extensions/symbolika-production-module` — производство, шелкография, этикетки.
 - `extensions/symbolika-contractor-module` — будущий кабинет контрагента.
