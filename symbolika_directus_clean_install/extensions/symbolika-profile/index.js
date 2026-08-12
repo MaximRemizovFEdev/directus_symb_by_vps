@@ -303,9 +303,9 @@ export default {
       const commissionAccrued = Math.round(paidOrders * orderPercent) / 100;
       const salaryPaid = sumType('salary_payment');
       const advancesPaid = sumType('employee_advance');
-      const bonusPaid = sumType('employee_bonus');
-      const totalAccrued = salaryFixed + commissionAccrued + bonusPaid;
-      const totalPaid = salaryPaid + advancesPaid + bonusPaid;
+      const bonusAccrued = sumType('employee_bonus');
+      const totalAccrued = salaryFixed + commissionAccrued + bonusAccrued;
+      const totalPaid = salaryPaid + advancesPaid;
 
       return {
         month: period.key,
@@ -321,7 +321,8 @@ export default {
         paid_orders_sum: paidOrders,
         unpaid_orders_sum: Number(orderTotals?.unpaid_orders_sum || 0),
         commission_accrued: commissionAccrued,
-        bonus_paid: bonusPaid,
+        bonus_paid: bonusAccrued,
+        bonus_accrued: bonusAccrued,
         salary_paid: salaryPaid,
         advances_paid: advancesPaid,
         total_accrued: totalAccrued,

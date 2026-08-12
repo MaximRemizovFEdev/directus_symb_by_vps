@@ -278,7 +278,7 @@ const managerFinanceFields = [
 const expenseTypes = [
   { text: 'Аренда', value: 'rent' },
   { text: 'Выплата зарплаты', value: 'salary_payment' },
-  { text: 'Премия сотруднику', value: 'employee_bonus' },
+  { text: 'Назначенная премия', value: 'employee_bonus' },
   { text: 'Оплата контрагенту', value: 'contractor_payment' },
   { text: 'Оплата за доставку', value: 'delivery' },
   { text: 'Материалы (бумага, тонер)', value: 'production_materials' },
@@ -2695,7 +2695,7 @@ export const CostingModule = {
     financeDashboardExpenseBreakdown() {
       const currentMonthKey = this.monthKey(new Date());
       return expenseTypes
-        .filter((type) => type.value !== 'contractor_payment')
+        .filter((type) => !['contractor_payment', 'employee_bonus'].includes(type.value))
         .map((type) => ({
           type: type.value,
           title: type.text,
@@ -2705,7 +2705,7 @@ export const CostingModule = {
             return sum + this.parseMoney(row.amount);
           }, 0),
         }))
-        .filter((row) => row.amount || ['rent', 'delivery', 'salary_payment', 'employee_advance', 'employee_bonus'].includes(row.type));
+        .filter((row) => row.amount || ['rent', 'delivery', 'salary_payment', 'employee_advance'].includes(row.type));
     },
 
     visiblePayrollExpenseRows() {
@@ -5346,6 +5346,7 @@ export const CostingModule = {
         saving: false,
         expense_date: preset.expense_date || this.todayInput(),
         expense_type: type,
+        bonus_month: String(preset.expense_date || this.todayInput()).slice(0, 7),
         amount: preset.amount === undefined || preset.amount === null ? '' : this.moneyInput(preset.amount),
         employee: employee || '',
         contractor: preset.contractor || '',
@@ -5426,12 +5427,14 @@ export const CostingModule = {
       }
 
       if (['salary_payment', 'employee_advance', 'employee_bonus'].includes(form.expense_type) && !form.employee) {
-        this.error = 'Для выплаты нужно выбрать сотрудника.';
+        this.error = form.expense_type === 'employee_bonus'
+          ? 'Выберите сотрудника для назначения премии.'
+          : 'Для выплаты нужно выбрать сотрудника.';
         return;
       }
 
       if (form.expense_type === 'employee_bonus' && !String(form.comment || '').trim()) {
-        this.error = 'Укажите, за что выплачивается премия.';
+        this.error = 'Укажите, за что назначается премия.';
         return;
       }
 
@@ -5470,7 +5473,9 @@ export const CostingModule = {
         await this.request('/items/business_expenses', {
           method: 'POST',
           body: JSON.stringify({
-            expense_date: form.expense_date || this.todayInput(),
+            expense_date: form.expense_type === 'employee_bonus'
+              ? `${form.bonus_month || this.monthKey(new Date())}-01`
+              : (form.expense_date || this.todayInput()),
             expense_type: form.expense_type || 'other',
             amount,
             employee: form.employee ? Number(form.employee) : null,
@@ -21854,7 +21859,7 @@ export const CostingModule = {
                 </article>
                 <article class="symbolika-profile-salary-card is-paid">
                   <span><v-icon name="payments" /></span>
-                  <div><small>Вы уже получили</small><strong>{{ formatMoney(parseMoney(profileData.salary.salary_paid) + parseMoney(profileData.salary.advances_paid) + parseMoney(profileData.salary.bonus_paid)) }} ₽</strong><p>зарплата, авансы и премии</p></div>
+                  <div><small>Вы уже получили</small><strong>{{ formatMoney(parseMoney(profileData.salary.salary_paid) + parseMoney(profileData.salary.advances_paid)) }} ₽</strong><p>зарплата и авансы</p></div>
                 </article>
                 <article class="symbolika-profile-salary-card" :class="parseMoney(profileData.salary.salary_debt) > 0 ? 'is-debt' : 'is-clear'">
                   <span><v-icon :name="parseMoney(profileData.salary.salary_debt) > 0 ? 'schedule' : 'verified'" /></span>
@@ -21867,7 +21872,7 @@ export const CostingModule = {
                 <article><span>Ваша ставка</span><strong>{{ formatMoney(profileData.salary.order_percent) }}%</strong></article>
                 <article><span>Оплаченные заказы</span><strong>{{ formatMoney(profileData.salary.paid_orders_sum) }} ₽</strong></article>
                 <article><span>Ваш процент</span><strong>{{ formatMoney(profileData.salary.commission_accrued) }} ₽</strong></article>
-                <article><span>Ваши премии</span><strong>{{ formatMoney(profileData.salary.bonus_paid) }} ₽</strong></article>
+                <article><span>Назначено премий</span><strong>{{ formatMoney(profileData.salary.bonus_paid) }} ₽</strong></article>
               </section>
 
               <div v-if="profileData.salary_history?.length" class="symbolika-costing-table-wrap symbolika-profile-history">
@@ -21879,7 +21884,7 @@ export const CostingModule = {
                       <td class="symbolika-costing-num">{{ formatMoney(row.salary_fixed) }}</td>
                       <td class="symbolika-costing-num">{{ formatMoney(row.commission_accrued) }}</td>
                       <td class="symbolika-costing-num">{{ formatMoney(row.salary_accrued) }}</td>
-                      <td class="symbolika-costing-num">{{ formatMoney(parseMoney(row.salary_paid) + parseMoney(row.advances_paid) + parseMoney(row.bonus_paid)) }}</td>
+                      <td class="symbolika-costing-num">{{ formatMoney(parseMoney(row.salary_paid) + parseMoney(row.advances_paid)) }}</td>
                       <td class="symbolika-costing-num"><span class="symbolika-costing-pill" :class="parseMoney(row.salary_debt) > 0 ? 'symbolika-costing-pill-orange' : 'symbolika-costing-pill-green'">{{ formatMoney(row.salary_debt) }}</span></td>
                     </tr>
                   </tbody>
@@ -23705,7 +23710,7 @@ export const CostingModule = {
               </label>
             </div>
             <div class="symbolika-payroll-toolbar-actions">
-              <button type="button" class="symbolika-costing-mini-button" @click="openExpenseDialog('employee_bonus')"><v-icon name="military_tech" small />Выплатить премию</button>
+              <button type="button" class="symbolika-costing-mini-button" @click="openExpenseDialog('employee_bonus')"><v-icon name="military_tech" small />Назначить премию</button>
               <button type="button" class="symbolika-costing-button" @click="openExpenseDialog('salary_payment')"><v-icon name="payments" small />Добавить выплату</button>
             </div>
           </div>
@@ -23821,7 +23826,7 @@ export const CostingModule = {
                         <strong>{{ formatMoneyCompact(row.salary_accrued) }}</strong>
                       </div>
                       <div v-if="parseMoney(row.bonus_paid)" class="symbolika-costing-metric-line">
-                        <span>Премии</span>
+                        <span>Назначено премий</span>
                         <strong>{{ formatMoneyCompact(row.bonus_paid) }}</strong>
                       </div>
                     </div>
@@ -23830,7 +23835,7 @@ export const CostingModule = {
                     <div class="symbolika-costing-metric-stack">
                       <div class="symbolika-costing-metric-line">
                         <span>Выплачено</span>
-                        <strong>{{ formatMoneyCompact(parseMoney(row.salary_paid) + parseMoney(row.advances_paid) + parseMoney(row.bonus_paid)) }}</strong>
+                        <strong>{{ formatMoneyCompact(parseMoney(row.salary_paid) + parseMoney(row.advances_paid)) }}</strong>
                       </div>
                       <div class="symbolika-costing-metric-line">
                         <span>Долг</span>
@@ -23854,7 +23859,7 @@ export const CostingModule = {
             <div v-if="!visibleSalaryRows.length" class="symbolika-costing-empty">Нет сотрудников для расчета</div>
           </div>
 
-          <div class="symbolika-costing-section-title">Выплаты и авансы</div>
+          <div class="symbolika-costing-section-title">Начисления, выплаты и авансы</div>
           <div class="symbolika-costing-table-wrap">
             <table class="symbolika-costing-table symbolika-costing-table-finance">
               <colgroup>
@@ -23886,7 +23891,7 @@ export const CostingModule = {
                 </tr>
               </tbody>
             </table>
-            <div v-if="!visiblePayrollExpenseRows.length" class="symbolika-costing-empty">Выплат и авансов пока нет</div>
+            <div v-if="!visiblePayrollExpenseRows.length" class="symbolika-costing-empty">Начислений и выплат пока нет</div>
           </div>
         </div>
 
@@ -25720,26 +25725,20 @@ export const CostingModule = {
             <div class="symbolika-costing-modal-head">
               <div>
                 <div class="symbolika-costing-subtle">Финансы</div>
-                <h2>{{ expenseDialog.expense_type === 'employee_bonus' ? 'Выплатить премию' : 'Добавить расход' }}</h2>
+                <h2>{{ expenseDialog.expense_type === 'employee_bonus' ? 'Назначить премию' : 'Добавить расход' }}</h2>
               </div>
               <button type="button" class="symbolika-costing-detail-close" @click="closeExpenseDialog">×</button>
             </div>
             <div class="symbolika-costing-modal-grid">
-              <label class="symbolika-costing-label symbolika-costing-detail-wide">
-                Клиент
-                <select v-model="giftCertificateDialog.customer" class="symbolika-costing-select">
-                  <option value="">Без привязки — универсальный сертификат</option>
-                  <option v-for="customer in customers" :key="customer.id" :value="customer.id">
-                    {{ customer.name }}{{ customer.phone ? ' · ' + customer.phone : '' }}
-                  </option>
-                </select>
-                <small class="symbolika-costing-subtle">После первого списания изменить клиента будет нельзя.</small>
-              </label>
-              <label class="symbolika-costing-label">
+              <label v-if="expenseDialog.expense_type !== 'employee_bonus'" class="symbolika-costing-label">
                 Дата
                 <input v-model="expenseDialog.expense_date" class="symbolika-costing-input" type="date" />
               </label>
-              <label class="symbolika-costing-label">
+              <label v-else class="symbolika-costing-label">
+                Месяц начисления
+                <input v-model="expenseDialog.bonus_month" class="symbolika-costing-input" type="month" />
+              </label>
+              <label v-if="expenseDialog.expense_type !== 'employee_bonus'" class="symbolika-costing-label">
                 Тип расхода
                 <select v-model="expenseDialog.expense_type" class="symbolika-costing-select">
                   <option v-for="type in expenseTypes" :key="type.value" :value="type.value">
@@ -25787,7 +25786,7 @@ export const CostingModule = {
                   </option>
                 </select>
               </label>
-              <label class="symbolika-costing-label">
+              <label v-if="expenseDialog.expense_type !== 'employee_bonus'" class="symbolika-costing-label">
                 Тип оплаты
                 <select v-model="expenseDialog.payment_type" class="symbolika-costing-select">
                   <option value="">Не выбран</option>
@@ -25797,7 +25796,7 @@ export const CostingModule = {
                 </select>
               </label>
               <label class="symbolika-costing-label">
-                {{ expenseDialog.expense_type === 'employee_bonus' ? 'За что премия *' : 'Комментарий' }}
+                {{ expenseDialog.expense_type === 'employee_bonus' ? 'За что назначена премия *' : 'Комментарий' }}
                 <textarea v-model="expenseDialog.comment" class="symbolika-costing-comment" :placeholder="expenseDialog.expense_type === 'employee_bonus' ? 'Например: за выполнение плана продаж' : ''"></textarea>
               </label>
             </div>
@@ -25806,7 +25805,7 @@ export const CostingModule = {
                 Отмена
               </button>
               <button type="button" class="symbolika-costing-button" :disabled="expenseDialog.saving" @click="saveExpense">
-                {{ expenseDialog.saving ? 'Сохраняю...' : (expenseDialog.expense_type === 'contractor_payment' ? 'Сохранить оплату' : (expenseDialog.expense_type === 'employee_bonus' ? 'Выплатить премию' : 'Сохранить расход')) }}
+                {{ expenseDialog.saving ? 'Сохраняю...' : (expenseDialog.expense_type === 'contractor_payment' ? 'Сохранить оплату' : (expenseDialog.expense_type === 'employee_bonus' ? 'Назначить премию' : 'Сохранить расход')) }}
               </button>
             </div>
           </div>

@@ -1011,14 +1011,6 @@ BEGIN
           AND be.expense_type = 'employee_advance'
           AND be.expense_date >= month_begin
           AND be.expense_date < (month_begin + interval '1 month')::date
-      ), 0)
-      - COALESCE((
-        SELECT SUM(be.amount)
-        FROM business_expenses be
-        WHERE be.employee = e.id
-          AND be.expense_type = 'employee_bonus'
-          AND be.expense_date >= month_begin
-          AND be.expense_date < (month_begin + interval '1 month')::date
       ), 0),
       2
     )
@@ -1140,14 +1132,6 @@ BEGIN
           AND be.expense_type = 'employee_advance'
           AND be.expense_date >= b.month_start
           AND be.expense_date < (b.month_start + interval '1 month')::date
-      ), 0)
-      - COALESCE((
-        SELECT SUM(be.amount)
-        FROM business_expenses be
-        WHERE be.employee = b.employee
-          AND be.expense_type = 'employee_bonus'
-          AND be.expense_date >= b.month_start
-          AND be.expense_date < (b.month_start + interval '1 month')::date
       ), 0),
       2
     )
@@ -1260,13 +1244,15 @@ BEGIN
   INTO business_expenses_month
   FROM business_expenses
   WHERE expense_date >= month_begin
-    AND expense_date < (month_begin + interval '1 month')::date;
+    AND expense_date < (month_begin + interval '1 month')::date
+    AND expense_type <> 'employee_bonus';
 
   SELECT COALESCE(SUM(amount), 0)
   INTO business_expenses_year
   FROM business_expenses
   WHERE expense_date >= year_begin
-    AND expense_date < (year_begin + interval '1 year')::date;
+    AND expense_date < (year_begin + interval '1 year')::date
+    AND expense_type <> 'employee_bonus';
 
   DELETE FROM finance_dashboard_metrics;
 
@@ -8576,7 +8562,7 @@ INSERT INTO directus_fields (
   ('finance_dashboard_series', 'updated_at', NULL, 'datetime', NULL, NULL, NULL, true, false, 8, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\0431\043d\043e\0432\043b\0435\043d\043e'))::json, false, true),
   ('business_expenses', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'half', NULL, true, true),
   ('business_expenses', 'expense_date', NULL, 'datetime', NULL, 'datetime', NULL, false, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0430\0442\0430'))::json, true, true),
-  ('business_expenses', 'expense_type', NULL, 'select-dropdown', '{"choices":[{"text":"Аренда","value":"rent"},{"text":"Материалы (бумага, тонер)","value":"production_materials"},{"text":"Производственная расходка","value":"production_consumables"},{"text":"Обслуживание и ремонт техники","value":"equipment_maintenance"},{"text":"Закупка прочих запасов","value":"inventory_purchase"},{"text":"Выплата зарплаты","value":"salary_payment"},{"text":"Премия сотруднику","value":"employee_bonus"},{"text":"Оплата за доставку","value":"delivery"},{"text":"Прочие расходы","value":"other"},{"text":"Аванс сотруднику","value":"employee_advance"}]}'::json, 'labels', NULL, false, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0438\043f \0440\0430\0441\0445\043e\0434\0430'))::json, true, true),
+  ('business_expenses', 'expense_type', NULL, 'select-dropdown', '{"choices":[{"text":"Аренда","value":"rent"},{"text":"Материалы (бумага, тонер)","value":"production_materials"},{"text":"Производственная расходка","value":"production_consumables"},{"text":"Обслуживание и ремонт техники","value":"equipment_maintenance"},{"text":"Закупка прочих запасов","value":"inventory_purchase"},{"text":"Выплата зарплаты","value":"salary_payment"},{"text":"Назначенная премия","value":"employee_bonus"},{"text":"Оплата за доставку","value":"delivery"},{"text":"Прочие расходы","value":"other"},{"text":"Аванс сотруднику","value":"employee_advance"}]}'::json, 'labels', NULL, false, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0438\043f \0440\0430\0441\0445\043e\0434\0430'))::json, true, true),
   ('business_expenses', 'amount', NULL, 'input', NULL, NULL, NULL, false, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0443\043c\043c\0430'))::json, true, true),
   ('business_expenses', 'employee', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}"}'::json, 'related-values', '{"template":"{{full_name}}"}'::json, false, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
   ('business_expenses', 'payment_type', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0438\043f \043e\043f\043b\0430\0442\044b'))::json, false, true),
