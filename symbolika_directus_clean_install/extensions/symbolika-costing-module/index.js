@@ -21175,7 +21175,7 @@ export const CostingModule = {
         <div class="symbolika-costing-workspace">
           <main class="symbolika-costing-main" :class="{ 'is-alt-view': supportsWorkspaceViewModes && workspaceViewMode !== 'table' }">
 
-        <div v-if="!availableTabs.length" class="symbolika-costing-empty">
+        <div v-if="currentRoleName && !availableTabs.length" class="symbolika-costing-empty">
           Для вашей роли нет доступных рабочих таблиц.
         </div>
 
@@ -28104,9 +28104,14 @@ export function createSymbolikaSectionModule(section) {
   return {
     ...CostingModule,
     data() {
+      const initialTab = moduleSections[section]?.tabs?.[0] || '';
       return {
         ...CostingModule.data(),
         moduleSection: section,
+        // Вкладка должна соответствовать открытому модулю уже при первом
+        // рендере, до асинхронной загрузки пользователя и его роли.
+        activeTab: initialTab,
+        profileLoading: section === 'profile',
       };
     },
   };
