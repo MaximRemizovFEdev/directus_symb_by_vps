@@ -45,6 +45,8 @@ const MailWorkspace = {
       showSignatureDialog: false,
       signatureForm: '',
       signatureTargetEmployee: null,
+      signatureSettings: {},
+      signatureDefaults: {},
       signatureLinkVisible: false,
       signatureLinkForm: { text: '', url: 'https://' },
       signatureSelection: null,
@@ -321,12 +323,18 @@ const MailWorkspace = {
     openSignatureDialog(employee = null) {
       this.signatureTargetEmployee = employee || null;
       this.signatureForm = employee?.email_signature ?? this.actor?.signature_custom ?? '';
+      this.signatureSettings = { ...(employee?.signature_settings || this.actor?.signature_settings || {}) };
+      this.signatureDefaults = { ...(employee?.signature_defaults || this.actor?.signature_defaults || {}) };
       this.signatureLinkVisible = false;
       this.signatureLinkForm = { text: '', url: 'https://' };
       this.showSignatureDialog = true;
       this.$nextTick(() => {
         if (this.$refs.signatureEditor) this.$refs.signatureEditor.innerHTML = this.signatureForm;
       });
+    },
+
+    resetSignatureSettings() {
+      this.signatureSettings = { ...this.signatureDefaults };
     },
 
     syncSignatureEditor(event) {
@@ -375,18 +383,24 @@ const MailWorkspace = {
           ? `/symbolika-mail/employees/${this.signatureTargetEmployee.id}/signature`
           : '/symbolika-mail/signature';
         const result = await this.request(endpoint, {
-          method: 'PATCH', body: JSON.stringify({ signature: this.signatureForm }),
+          method: 'PATCH', body: JSON.stringify({ signature: this.signatureForm, settings: this.signatureSettings }),
         });
         if (this.signatureTargetEmployee) {
           this.signatureTargetEmployee.email_signature = result.signature;
           this.signatureTargetEmployee.signature_preview = result.signature_html;
+          this.signatureTargetEmployee.signature_settings = result.signature_settings;
+          this.signatureTargetEmployee.signature_defaults = result.signature_defaults;
           if (Number(this.signatureTargetEmployee.id) === Number(this.actor?.employee_id)) {
             this.actor.signature_custom = result.signature;
             this.actor.signature = result.signature_html;
+            this.actor.signature_settings = result.signature_settings;
+            this.actor.signature_defaults = result.signature_defaults;
           }
         } else {
           this.actor.signature_custom = result.signature;
           this.actor.signature = result.signature_html;
+          this.actor.signature_settings = result.signature_settings;
+          this.actor.signature_defaults = result.signature_defaults;
         }
         this.showSignatureDialog = false;
         this.notice = this.signatureTargetEmployee
@@ -831,6 +845,7 @@ const MailWorkspace = {
         .symbolika-mail-dialog { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; inline-size: min(720px, 100%); max-block-size: min(820px, calc(100vh - 44px)); overflow: hidden; border: 1px solid var(--theme--border-color); border-radius: 18px; background: var(--theme--background-normal); box-shadow: 0 30px 100px rgb(0 0 0 / .55); }
         .symbolika-mail-dialog.is-compose { inline-size: min(800px, 100%); }
         .symbolika-mail-dialog.is-settings { inline-size: min(1050px, 100%); }
+        .symbolika-mail-dialog.is-signature-editor { inline-size: min(1220px, 100%); }
         .symbolika-mail-dialog-head, .symbolika-mail-dialog-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 18px; border-block-end: 1px solid var(--theme--border-color-subdued); }
         .symbolika-mail-dialog-head h2 { margin: 0; font-size: 18px; }
         .symbolika-mail-dialog-actions { justify-content: flex-end; border-block: 1px solid var(--theme--border-color-subdued) 0; border-block-start: 1px solid var(--theme--border-color-subdued); }
@@ -850,6 +865,28 @@ const MailWorkspace = {
         .symbolika-mail-branded-preview { margin-block: 12px 18px; padding: 14px; overflow: auto; border: 1px solid var(--theme--border-color-subdued); border-radius: 12px; background: #eef1f4; }
         .symbolika-mail-branded-preview > table { margin-inline: auto !important; }
         .symbolika-mail-signature-preview a, .symbolika-mail-signature-editor a { color: #F97316; text-decoration: underline; }
+        .symbolika-mail-signature-designer { display: grid; grid-template-columns: minmax(420px, .9fr) minmax(500px, 1.1fr); gap: 18px; align-items: start; margin-block-end: 18px; }
+        .symbolika-mail-signature-fields, .symbolika-mail-signature-live { padding: 16px; border: 1px solid var(--theme--border-color-subdued); border-radius: 14px; background: var(--theme--background-subdued); }
+        .symbolika-mail-signature-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-block-end: 14px; }
+        .symbolika-mail-signature-section-head div { display: grid; gap: 3px; }
+        .symbolika-mail-signature-section-head span { color: var(--theme--foreground-subdued); font-size: 10px; }
+        .symbolika-mail-button.is-compact { min-block-size: 32px; padding: 6px 10px; font-size: 10px; white-space: nowrap; }
+        .symbolika-mail-signature-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+        .symbolika-mail-signature-grid .is-wide { grid-column: 1 / -1; }
+        .symbolika-mail-signature-live > strong { display: block; margin-block-end: 12px; }
+        .symbolika-mail-signature-card { display: grid; grid-template-columns: minmax(145px, .7fr) minmax(180px, .9fr) minmax(210px, 1.1fr); overflow: hidden; min-block-size: 250px; border: 1px solid #3d4855; border-radius: 14px; background: #171c22; color: #f5f7fa; box-shadow: 0 14px 34px rgb(0 0 0 / .22); }
+        .symbolika-mail-signature-brand, .symbolika-mail-signature-person, .symbolika-mail-signature-contacts { display: flex; flex-direction: column; justify-content: center; min-inline-size: 0; padding: 20px; }
+        .symbolika-mail-signature-brand img { display: block; inline-size: 100%; max-inline-size: 175px; block-size: auto; margin: auto; }
+        .symbolika-mail-signature-brand b { font-size: 21px; text-align: center; }
+        .symbolika-mail-signature-person { border-inline-start: 2px solid #f97316; }
+        .symbolika-mail-signature-person h3 { margin: 0; color: #f5f7fa; font-size: clamp(18px, 2vw, 24px); line-height: 1.08; overflow-wrap: anywhere; }
+        .symbolika-mail-signature-person > b { margin-block-start: 6px; color: #f97316; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+        .symbolika-mail-signature-person i { inline-size: 38px; block-size: 2px; margin-block: 15px; background: #f97316; }
+        .symbolika-mail-signature-person p { margin: 0; color: #c3c9d1; font-size: 11px; font-style: italic; line-height: 1.55; }
+        .symbolika-mail-signature-contacts { gap: 4px; }
+        .symbolika-mail-signature-contacts a { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 8px; min-block-size: 34px; color: #f5f7fa; text-decoration: none; }
+        .symbolika-mail-signature-contacts a > b { color: #f97316; }
+        .symbolika-mail-signature-contacts a span { padding-block: 7px; border-block-end: 1px solid #46515e; font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
         .symbolika-mail-editor-shell { overflow: hidden; border: 1px solid var(--theme--border-color); border-radius: 12px; background: var(--theme--background); }
         .symbolika-mail-editor-toolbar { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px; border-block-end: 1px solid var(--theme--border-color-subdued); background: var(--theme--background-subdued); }
         .symbolika-mail-editor-tool { display: inline-grid; place-items: center; min-inline-size: 34px; block-size: 32px; padding: 0 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--theme--foreground); font-size: 12px; font-weight: 800; cursor: pointer; }
@@ -921,6 +958,7 @@ const MailWorkspace = {
           .symbolika-mail-sync-state > span { display: none; }
         }
         @media (max-width: 1100px) {
+          .symbolika-mail-signature-designer { grid-template-columns: 1fr; }
           .symbolika-mail-content { grid-template-columns: 300px minmax(0, 1fr); }
           .symbolika-mail-topbar { grid-template-columns: minmax(260px, 1fr) auto; gap: 10px; padding-inline: 14px; }
           .symbolika-mail-sync-state, .symbolika-mail-top-actions > .symbolika-mail-mode { display: none; }
@@ -932,6 +970,11 @@ const MailWorkspace = {
           .symbolika-mail-settings-folder > button { justify-self: end; }
         }
         @media (max-width: 760px) {
+          .symbolika-mail-signature-grid { grid-template-columns: 1fr; }
+          .symbolika-mail-signature-grid .is-wide { grid-column: auto; }
+          .symbolika-mail-signature-section-head { display: grid; }
+          .symbolika-mail-signature-card { grid-template-columns: 1fr; }
+          .symbolika-mail-signature-person { border-inline-start: 0; border-block: 1px solid #46515e; }
           .symbolika-mail-shell { block-size: calc(100vh - 56px); }
           .symbolika-mail-topbar { grid-template-columns: minmax(0, 1fr) auto; min-block-size: 62px; padding: 8px 10px; }
           .symbolika-mail-top-actions { justify-content: flex-end; overflow: visible; }
@@ -1213,12 +1256,47 @@ const MailWorkspace = {
         </div>
 
         <div v-if="showSignatureDialog" class="symbolika-mail-overlay is-signature" @click.self="showSignatureDialog = false">
-          <form class="symbolika-mail-dialog" @submit.prevent="saveSignature">
+          <form class="symbolika-mail-dialog is-signature-editor" @submit.prevent="saveSignature">
             <header class="symbolika-mail-dialog-head"><h2>{{ signatureTargetEmployee ? 'Подпись · ' + signatureTargetEmployee.full_name : 'Моя подпись' }}</h2><button type="button" class="symbolika-mail-icon-button" @click="showSignatureDialog = false"><v-icon name="close" small /></button></header>
             <div class="symbolika-mail-dialog-body">
-              <p class="symbolika-mail-help">Фирменная подпись автоматически собирается из карточки сотрудника и добавляется к исходящим письмам.</p>
-              <div class="symbolika-mail-branded-preview" v-html="signatureTargetEmployee?.signature_preview || actor?.signature"></div>
-              <p class="symbolika-mail-help">ФИО, публичная должность, телефон и почтовый адрес подставляются автоматически. Ниже можно добавить индивидуальный текст, ссылки или дополнительную информацию после основного блока.</p>
+              <div class="symbolika-mail-signature-designer">
+                <section class="symbolika-mail-signature-fields">
+                  <div class="symbolika-mail-signature-section-head">
+                    <div><strong>Данные подписи</strong><span>Изменения здесь не меняют карточку сотрудника.</span></div>
+                    <button type="button" class="symbolika-mail-button is-compact" @click="resetSignatureSettings">Вернуть из карточки</button>
+                  </div>
+                  <div class="symbolika-mail-signature-grid">
+                    <label class="symbolika-mail-field">Имя и фамилия<input v-model="signatureSettings.full_name" class="symbolika-mail-input" /></label>
+                    <label class="symbolika-mail-field">Публичная должность<input v-model="signatureSettings.position" class="symbolika-mail-input" /></label>
+                    <label class="symbolika-mail-field">Телефон<input v-model="signatureSettings.phone" class="symbolika-mail-input" placeholder="+7 (___) ___-__-__" /></label>
+                    <label class="symbolika-mail-field">Email<input v-model="signatureSettings.email" class="symbolika-mail-input" type="email" /></label>
+                    <label class="symbolika-mail-field">Сайт — текст<input v-model="signatureSettings.website_label" class="symbolika-mail-input" /></label>
+                    <label class="symbolika-mail-field">Сайт — ссылка<input v-model="signatureSettings.website_url" class="symbolika-mail-input" /></label>
+                    <label class="symbolika-mail-field is-wide">Адрес офиса<input v-model="signatureSettings.address" class="symbolika-mail-input" /></label>
+                    <label class="symbolika-mail-field is-wide">Ссылка на Яндекс Карты<input v-model="signatureSettings.map_url" class="symbolika-mail-input" /></label>
+                    <label class="symbolika-mail-field">VK — текст<input v-model="signatureSettings.vk_label" class="symbolika-mail-input" /></label>
+                    <label class="symbolika-mail-field">VK — ссылка<input v-model="signatureSettings.vk_url" class="symbolika-mail-input" /></label>
+                    <label class="symbolika-mail-field is-wide">Слоган, строка 1<input v-model="signatureSettings.slogan_line_1" class="symbolika-mail-input" /></label>
+                    <label class="symbolika-mail-field is-wide">Слоган, строка 2<input v-model="signatureSettings.slogan_line_2" class="symbolika-mail-input" /></label>
+                    <label class="symbolika-mail-field is-wide">Логотип — URL изображения<input v-model="signatureSettings.logo_url" class="symbolika-mail-input" /></label>
+                  </div>
+                </section>
+                <section class="symbolika-mail-signature-live">
+                  <strong>Живое превью</strong>
+                  <div class="symbolika-mail-signature-card">
+                    <div class="symbolika-mail-signature-brand"><img v-if="signatureSettings.logo_url" :src="signatureSettings.logo_url" alt="Символика" /><b v-else>Символика</b></div>
+                    <div class="symbolika-mail-signature-person"><h3>{{ signatureSettings.full_name || 'Имя Фамилия' }}</h3><b>{{ signatureSettings.position || 'Должность' }}</b><i></i><p>{{ signatureSettings.slogan_line_1 }}<br v-if="signatureSettings.slogan_line_2" />{{ signatureSettings.slogan_line_2 }}</p></div>
+                    <div class="symbolika-mail-signature-contacts">
+                      <a v-if="signatureSettings.phone" :href="'tel:' + signatureSettings.phone">☎ <span>{{ signatureSettings.phone }}</span></a>
+                      <a v-if="signatureSettings.email" :href="'mailto:' + signatureSettings.email">✉ <span>{{ signatureSettings.email }}</span></a>
+                      <a v-if="signatureSettings.website_label" :href="signatureSettings.website_url" target="_blank">◎ <span>{{ signatureSettings.website_label }}</span></a>
+                      <a v-if="signatureSettings.address" :href="signatureSettings.map_url" target="_blank">◉ <span>{{ signatureSettings.address }}</span></a>
+                      <a v-if="signatureSettings.vk_label" :href="signatureSettings.vk_url" target="_blank"><b>VK</b> <span>{{ signatureSettings.vk_label }}</span></a>
+                    </div>
+                  </div>
+                </section>
+              </div>
+              <p class="symbolika-mail-help">Дополнительный блок после фирменной подписи — можно оставить пустым.</p>
               <div class="symbolika-mail-editor-shell">
                 <div class="symbolika-mail-editor-toolbar" aria-label="Форматирование подписи">
                   <button type="button" class="symbolika-mail-editor-tool" title="Жирный" @click="formatSignature('bold')"><strong>Ж</strong></button>

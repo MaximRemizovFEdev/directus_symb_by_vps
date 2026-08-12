@@ -68,22 +68,69 @@ function signaturePlainText(value) {
     .trim();
 }
 
+const SIGNATURE_DEFAULTS = Object.freeze({
+  website_label: 'symb62.ru',
+  website_url: 'https://symb62.ru',
+  address: 'г. Рязань, ул. Соборная, 46г',
+  map_url: 'https://yandex.ru/maps/?text=%D0%B3.%20%D0%A0%D1%8F%D0%B7%D0%B0%D0%BD%D1%8C%2C%20%D1%83%D0%BB.%20%D0%A1%D0%BE%D0%B1%D0%BE%D1%80%D0%BD%D0%B0%D1%8F%2C%2046%D0%B3',
+  vk_label: 'vk.com/universymbols',
+  vk_url: 'https://vk.com/universymbols',
+  slogan_line_1: 'Создаём бренд. Печатаем идеи.',
+  slogan_line_2: 'Работаем с вниманием к деталям.',
+  logo_url: 'https://static.tildacdn.com/tild6465-3739-4736-b565-653037393965/2.png',
+});
+
+function jsonObject(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  try {
+    const parsed = JSON.parse(value || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function safeUrl(value, fallback = '') {
+  const url = cleanText(value, 1500);
+  return !url || /^https?:\/\//i.test(url) ? url : fallback;
+}
+
+function signatureDefaults(employee, email) {
+  return {
+    full_name: cleanText(employee?.employee_name || employee?.full_name || 'Символика', 255),
+    position: cleanText(employee?.public_position || 'Команда Символики', 255),
+    phone: cleanText(employee?.employee_phone || employee?.phone, 64),
+    email: cleanText(email || employee?.email, 255).toLowerCase(),
+    ...SIGNATURE_DEFAULTS,
+  };
+}
+
+function signatureSettings(employee, email, input = undefined) {
+  const defaults = signatureDefaults(employee, email);
+  const source = input === undefined ? jsonObject(employee?.email_signature_settings) : jsonObject(input);
+  const text = (key, max = 500) => Object.prototype.hasOwnProperty.call(source, key)
+    ? cleanText(source[key], max)
+    : defaults[key];
+  return {
+    full_name: text('full_name', 255), position: text('position', 255), phone: text('phone', 64),
+    email: EMAIL_PATTERN.test(text('email', 255)) ? text('email', 255).toLowerCase() : defaults.email,
+    website_label: text('website_label', 255), website_url: safeUrl(text('website_url', 1500), defaults.website_url),
+    address: text('address', 500), map_url: safeUrl(text('map_url', 1500), defaults.map_url),
+    vk_label: text('vk_label', 255), vk_url: safeUrl(text('vk_url', 1500), defaults.vk_url),
+    slogan_line_1: text('slogan_line_1', 500), slogan_line_2: text('slogan_line_2', 500),
+    logo_url: safeUrl(text('logo_url', 1500), defaults.logo_url),
+  };
+}
+
 function brandedSignatureHtml(employee, email) {
-  const name = escapeHtml(employee?.employee_name || employee?.full_name || 'Символика');
-  const position = escapeHtml(employee?.public_position || 'Команда Символики');
-  const phone = cleanText(employee?.employee_phone || employee?.phone, 64);
-  const mailbox = cleanText(email || employee?.email, 255).toLowerCase();
-  const phoneLink = phone.replace(/[^+\d]/g, '');
-  const logoUrl = 'https://static.tildacdn.com/tild6533-3333-4138-b565-643366316463/photo.png';
-  const contactRow = (icon, content, href = '') => content ? `<tr><td style="padding:4px 9px 4px 0;vertical-align:middle"><span style="display:inline-block;width:24px;height:24px;border-radius:50%;background:#f97316;color:#ffffff;text-align:center;line-height:24px;font-size:13px">${icon}</span></td><td class="symb-contact" style="padding:4px 0;border-bottom:1px solid #d8dde3;color:#28313d;font-size:13px;line-height:18px">${href ? `<a class="symb-contact" href="${href}" style="color:#28313d;text-decoration:none">${content}</a>` : content}</td></tr>` : '';
+  const settings = signatureSettings(employee, email);
+  const phoneLink = settings.phone.replace(/[^+\d]/g, '');
+  const contactRow = (icon, content, href = '') => content ? `<tr><td style="padding:5px 10px 5px 0;vertical-align:middle"><span style="display:inline-block;width:26px;height:26px;border-radius:50%;background:#f97316;color:#fff;text-align:center;line-height:26px;font-size:13px">${icon}</span></td><td style="padding:5px 0;border-bottom:1px solid #46515e;color:#f5f7fa;font-size:13px;line-height:18px">${href ? `<a href="${escapeHtml(href)}" style="color:#f5f7fa;text-decoration:none">${escapeHtml(content)}</a>` : escapeHtml(content)}</td></tr>` : '';
   const custom = sanitizeSignatureHtml(employee?.email_signature);
-  return `<style>
-@media (prefers-color-scheme:dark){.symb-signature{background:#171c22!important}.symb-signature,.symb-signature a,.symb-signature .symb-text{color:#f5f7fa!important;-webkit-text-fill-color:#f5f7fa!important}.symb-signature .symb-muted{color:#c3c9d1!important;-webkit-text-fill-color:#c3c9d1!important}.symb-signature .symb-line{border-color:#47515d!important}.symb-signature .symb-contact{color:#f5f7fa!important;-webkit-text-fill-color:#f5f7fa!important;border-color:#47515d!important}}
-@media only screen and (max-width:620px){.symb-signature .symb-cell{display:block!important;width:auto!important;padding:14px 18px!important;border-left:0!important}.symb-signature .symb-brand{border-bottom:1px solid #f97316!important}.symb-signature .symb-person{border-bottom:1px solid #d8dde3!important}}
-</style><table role="presentation" class="symb-signature" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:760px;margin-top:22px;border:1px solid #e3e6ea;border-radius:14px;background:#ffffff;color:#28313d;font-family:Arial,sans-serif;box-shadow:0 4px 16px rgba(30,41,59,.08)"><tr>
-<td class="symb-cell symb-brand" style="width:180px;padding:24px 25px;vertical-align:middle;text-align:center"><img src="${escapeHtml(logoUrl)}" width="54" alt="" style="display:block;width:54px;height:auto;margin:0 auto"><div class="symb-text" style="margin-top:12px;color:#1f2937;font-size:22px;font-weight:800;letter-spacing:.01em">Символика</div></td>
-<td class="symb-cell symb-person symb-line" style="width:245px;padding:24px 28px;border-left:2px solid #f97316;vertical-align:middle"><div class="symb-text" style="color:#202833;font-size:21px;font-weight:800;line-height:26px">${name}</div><div style="margin-top:5px;color:#f97316;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase">${position}</div><div style="width:38px;height:2px;margin:15px 0;background:#f97316"></div><div class="symb-muted" style="color:#66717f;font-size:12px;font-style:italic;line-height:18px">Создаём бренд. Печатаем идеи.<br>Работаем с вниманием к деталям.</div></td>
-<td class="symb-cell" style="padding:20px 24px;vertical-align:middle"><table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%">${contactRow('☎', escapeHtml(phone), phoneLink ? `tel:${escapeHtml(phoneLink)}` : '')}${contactRow('✉', escapeHtml(mailbox), mailbox ? `mailto:${escapeHtml(mailbox)}` : '')}${contactRow('⌘', 'symb62.ru', 'https://symb62.ru')}${contactRow('⌖', 'г. Рязань, Соборная 46Г, вход внутри двора')}${contactRow('VK', 'vk.com/universymbols', 'https://vk.com/universymbols')}</table></td>
+  return `<style>@media only screen and (max-width:620px){.symb-signature .symb-cell{display:block!important;width:auto!important;padding:15px 18px!important;border-left:0!important}.symb-signature .symb-person{border-top:1px solid #46515e!important;border-bottom:1px solid #46515e!important}}</style><table role="presentation" class="symb-signature" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:760px;margin-top:22px;border:1px solid #39434f;border-radius:14px;background:#171c22;color:#f5f7fa;font-family:Arial,sans-serif;box-shadow:0 4px 16px rgba(15,23,42,.18)"><tr>
+<td class="symb-cell" style="width:190px;padding:25px;vertical-align:middle;text-align:center">${settings.logo_url ? `<img src="${escapeHtml(settings.logo_url)}" width="168" alt="Символика" style="display:block;width:168px;max-width:100%;height:auto;margin:0 auto">` : '<div style="font-size:24px;font-weight:800">Символика</div>'}</td>
+<td class="symb-cell symb-person" style="width:235px;padding:25px 28px;border-left:2px solid #f97316;vertical-align:middle"><div style="color:#f5f7fa;font-size:22px;font-weight:800;line-height:27px">${escapeHtml(settings.full_name)}</div><div style="margin-top:5px;color:#f97316;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase">${escapeHtml(settings.position)}</div><div style="width:38px;height:2px;margin:15px 0;background:#f97316"></div><div style="color:#c3c9d1;font-size:12px;font-style:italic;line-height:18px">${escapeHtml(settings.slogan_line_1)}${settings.slogan_line_2 ? `<br>${escapeHtml(settings.slogan_line_2)}` : ''}</div></td>
+<td class="symb-cell" style="padding:20px 24px;vertical-align:middle"><table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%">${contactRow('☎', settings.phone, phoneLink ? `tel:${phoneLink}` : '')}${contactRow('✉', settings.email, settings.email ? `mailto:${settings.email}` : '')}${contactRow('◎', settings.website_label, settings.website_url)}${contactRow('◉', settings.address, settings.map_url)}${contactRow('VK', settings.vk_label, settings.vk_url)}</table></td>
 </tr></table>${custom ? `<div style="max-width:760px;margin-top:10px;font-family:Arial,sans-serif;font-size:12px;color:#66717f">${custom}</div>` : ''}`;
 }
 
@@ -176,7 +223,7 @@ export default {
         .select(
           'u.id as user_id', 'u.email', 'u.first_name', 'u.last_name', 'u.avatar',
           'r.name as role_name', 'e.id as employee_id', 'e.full_name as employee_name',
-          'e.email_signature', 'e.public_position', 'e.phone as employee_phone',
+          'e.email_signature', 'e.email_signature_settings', 'e.public_position', 'e.phone as employee_phone',
         )
         .first();
       if (!actor || !MAIL_ROLES.has(actor.role_name)) {
@@ -453,6 +500,8 @@ export default {
               is_admin: actor.is_admin,
               signature: brandedSignatureHtml(actor, actor.email),
               signature_custom: sanitizeSignatureHtml(actor.email_signature),
+              signature_settings: signatureSettings(actor, actor.email),
+              signature_defaults: signatureDefaults(actor, actor.email),
             },
             mode: mailMode(),
             configured: Boolean(env?.SYMBOLIKA_IMAP_HOST && env?.SYMBOLIKA_IMAP_USER && env?.SYMBOLIKA_IMAP_PASSWORD),
@@ -776,7 +825,12 @@ export default {
       try {
         const actor = await actorContext(req, res);
         if (!actor) return;
-        return res.json({ data: { signature: brandedSignatureHtml(actor, actor.email), signature_custom: sanitizeSignatureHtml(actor.email_signature) } });
+        return res.json({ data: {
+          signature: brandedSignatureHtml(actor, actor.email),
+          signature_custom: sanitizeSignatureHtml(actor.email_signature),
+          signature_settings: signatureSettings(actor, actor.email),
+          signature_defaults: signatureDefaults(actor, actor.email),
+        } });
       } catch (error) {
         return next(error);
       }
@@ -788,9 +842,19 @@ export default {
         if (!actor) return;
         if (!actor.employee_id) return apiError(res, 400, 'У пользователя не заполнена карточка сотрудника.');
         const signature = sanitizeSignatureHtml(req.body?.signature) || null;
-        await database('employees').where('id', actor.employee_id).update({ email_signature: signature });
+        const settings = signatureSettings(actor, actor.email, req.body?.settings);
+        await database('employees').where('id', actor.employee_id).update({
+          email_signature: signature,
+          email_signature_settings: JSON.stringify(settings),
+        });
         actor.email_signature = signature;
-        return res.json({ data: { signature: signature || '', signature_html: brandedSignatureHtml(actor, actor.email) } });
+        actor.email_signature_settings = settings;
+        return res.json({ data: {
+          signature: signature || '',
+          signature_html: brandedSignatureHtml(actor, actor.email),
+          signature_settings: settings,
+          signature_defaults: signatureDefaults(actor, actor.email),
+        } });
       } catch (error) {
         return next(error);
       }
@@ -884,10 +948,12 @@ export default {
         const employees = await database('employees as e')
           .leftJoin('directus_users as u', 'u.id', 'e.directus_user')
           .where('e.is_active', true)
-          .select('e.id', 'e.full_name', 'e.email_signature', 'e.public_position', 'e.phone', 'u.email')
+          .select('e.id', 'e.full_name', 'e.email_signature', 'e.email_signature_settings', 'e.public_position', 'e.phone', 'u.email')
           .orderBy('e.full_name');
         employees.forEach((employee) => {
           employee.email_signature = sanitizeSignatureHtml(employee.email_signature);
+          employee.signature_settings = signatureSettings(employee, employee.email);
+          employee.signature_defaults = signatureDefaults(employee, employee.email);
           employee.signature_preview = brandedSignatureHtml(employee, employee.email);
         });
         return res.json({
@@ -978,12 +1044,23 @@ export default {
         const employee = await database('employees as e')
           .leftJoin('directus_users as u', 'u.id', 'e.directus_user')
           .where('e.id', Number(req.params.id))
-          .first('e.id', 'e.full_name', 'e.public_position', 'e.phone', 'u.email');
+          .first('e.id', 'e.full_name', 'e.email_signature_settings', 'e.public_position', 'e.phone', 'u.email');
         if (!employee) return apiError(res, 404, 'Сотрудник не найден.');
         const signature = sanitizeSignatureHtml(req.body?.signature) || null;
-        await database('employees').where('id', employee.id).update({ email_signature: signature });
+        const settings = signatureSettings(employee, employee.email, req.body?.settings);
+        await database('employees').where('id', employee.id).update({
+          email_signature: signature,
+          email_signature_settings: JSON.stringify(settings),
+        });
         employee.email_signature = signature;
-        return res.json({ data: { id: employee.id, signature: signature || '', signature_html: brandedSignatureHtml(employee, employee.email) } });
+        employee.email_signature_settings = settings;
+        return res.json({ data: {
+          id: employee.id,
+          signature: signature || '',
+          signature_html: brandedSignatureHtml(employee, employee.email),
+          signature_settings: settings,
+          signature_defaults: signatureDefaults(employee, employee.email),
+        } });
       } catch (error) {
         return next(error);
       }

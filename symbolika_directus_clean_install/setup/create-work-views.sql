@@ -469,6 +469,7 @@ ALTER TABLE symbolika_tasks ADD COLUMN IF NOT EXISTS result_url text;
 ALTER TABLE symbolika_tasks ADD COLUMN IF NOT EXISTS source_url text;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS email_signature text;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS public_position character varying(255);
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS email_signature_settings jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE INDEX IF NOT EXISTS symbolika_tasks_assigned_to_idx ON symbolika_tasks(assigned_to);
 CREATE INDEX IF NOT EXISTS symbolika_tasks_created_by_employee_idx ON symbolika_tasks(created_by_employee);
