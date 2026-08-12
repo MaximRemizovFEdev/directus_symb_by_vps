@@ -47,6 +47,8 @@ const MailWorkspace = {
       settingsLoading: false,
       settings: null,
       savingFolderId: null,
+      creatingFolder: false,
+      newFolder: { name: '', imap_name: '', alias_email: '', employee: null, is_shared: false },
       savingSignatureEmployeeId: null,
     };
   },
@@ -121,7 +123,7 @@ const MailWorkspace = {
       return payload.data;
     },
 
-    async loadMailbox(initial = false) {
+    async loadMailbox(initial = false, preserveReader = false) {
       if (initial) this.loading = true;
       this.error = '';
       try {
@@ -406,11 +408,7 @@ const MailWorkspace = {
       try {
         const result = await this.request('/symbolika-mail/sync', { method: 'POST', body: '{}' });
         if (!silent) this.notice = result.message || `Синхронизация завершена. Новых писем: ${result.synced || 0}.`;
-        await this.loadMailbox(false);
-        if (silent && this.selectedThread) {
-          const fresh = this.threads.find((row) => Number(row.id) === Number(this.selectedThread.id));
-          if (fresh) await this.openThread(fresh);
-        }
+        await this.loadMailbox(false, true);
       } catch (error) {
         if (!silent) this.error = error.message;
       } finally {
@@ -469,6 +467,29 @@ const MailWorkspace = {
         this.error = error.message;
       } finally {
         this.savingFolderId = null;
+      }
+    },
+
+    async createFolder() {
+      if (this.creatingFolder) return;
+      if (!this.newFolder.name.trim()) {
+        this.error = 'Укажите название новой папки.';
+        return;
+      }
+      this.creatingFolder = true;
+      try {
+        const created = await this.request('/symbolika-mail/folders', {
+          method: 'POST',
+          body: JSON.stringify(this.newFolder),
+        });
+        this.newFolder = { name: '', imap_name: '', alias_email: '', employee: null, is_shared: false };
+        this.settings.folders.push(created);
+        this.notice = `Папка «${created.name}» создана.`;
+        await this.loadMailbox(false, true);
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.creatingFolder = false;
       }
     },
 
@@ -644,7 +665,7 @@ const MailWorkspace = {
         .symbolika-mail-list-head { position: sticky; z-index: 4; inset-block-start: 0; display: grid; gap: 10px; padding: 14px 14px 11px; border-block-end: 1px solid var(--theme--border-color-subdued); background: color-mix(in srgb, var(--theme--background-subdued) 94%, transparent); backdrop-filter: blur(16px); }
         .symbolika-mail-list-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-inline-size: 0; }
         .symbolika-mail-list-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
-        .symbolika-mail-list-count { display: inline-grid; place-items: center; min-inline-size: 26px; block-size: 26px; padding-inline: 7px; border-radius: 999px; background: var(--theme--background-accent); color: var(--theme--foreground-subdued); font-size: 10px; font-weight: 850; }
+        .symbolika-mail-list-count { display: inline-flex; align-items: center; justify-content: center; min-inline-size: 42px; block-size: 28px; padding-inline: 10px; border: 1px solid var(--theme--border-color-subdued); border-radius: 999px; background: var(--theme--background-normal); color: var(--theme--foreground); font-size: 10px; font-weight: 850; font-variant-numeric: tabular-nums; }
         .symbolika-mail-scopes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
         .symbolika-mail-scope { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-inline-size: 0; min-block-size: 30px; padding: 0 7px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--theme--foreground-subdued); font-size: 10px; font-weight: 760; cursor: pointer; }
         .symbolika-mail-scope:hover { background: var(--theme--background-normal); color: var(--theme--foreground); }
@@ -663,7 +684,7 @@ const MailWorkspace = {
         .symbolika-mail-thread-name, .symbolika-mail-thread-subject, .symbolika-mail-thread-preview { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .symbolika-mail-thread-name { color: var(--theme--foreground-subdued); font-size: 12px; font-weight: 750; }
         .symbolika-mail-thread-subject { margin-block-start: 3px; font-size: 13px; font-weight: 720; }
-        .symbolika-mail-thread-preview { margin-block-start: 3px; color: var(--theme--foreground-subdued); font-size: 11px; }
+        .symbolika-mail-thread-preview { margin-block-start: 4px; color: var(--theme--foreground-subdued); font-size: 11px; line-height: 1.35; }
         .symbolika-mail-thread-time { padding-inline-end: 7px; color: var(--theme--foreground-subdued); font-size: 9px; white-space: nowrap; }
         .symbolika-mail-star { color: #F59E0B; }
         .symbolika-mail-reader { position: relative; min-inline-size: 0; overflow: auto; background: radial-gradient(circle at 50% 0, rgb(249 115 22 / .035), transparent 34%), var(--theme--background); scrollbar-width: thin; }
@@ -749,6 +770,8 @@ const MailWorkspace = {
         .symbolika-mail-signature-row small { margin-block-start: 4px; color: var(--theme--foreground-subdued); font-size: 10px; }
         .symbolika-mail-signature-row .symbolika-mail-textarea { min-block-size: 76px; }
         .symbolika-mail-settings-folder { display: grid; grid-template-columns: 1.1fr 1.2fr 1.2fr 1fr auto auto; align-items: end; gap: 9px; padding: 12px 0; border-block-start: 1px solid var(--theme--border-color-subdued); }
+        .symbolika-mail-settings-folder.is-new { margin-block: 12px 4px; padding: 14px; border: 1px dashed rgb(249 115 22 / .45); border-radius: 12px; background: rgb(249 115 22 / .055); }
+        .symbolika-mail-settings-folder.is-new .symbolika-mail-button { border-color: #F97316; }
         .symbolika-mail-checkbox { display: inline-flex; align-items: center; gap: 7px; min-block-size: 42px; color: var(--theme--foreground); font-size: 11px; font-weight: 700; white-space: nowrap; }
         .symbolika-mail-loading { display: grid; place-items: center; min-block-size: 240px; color: var(--theme--foreground-subdued); }
         .symbolika-mail-empty-list { padding: 38px 20px; color: var(--theme--foreground-subdued); text-align: center; font-size: 12px; }
@@ -756,14 +779,15 @@ const MailWorkspace = {
         .symbolika-mail-side-title { display: flex; align-items: center; justify-content: space-between; padding: 3px 8px 15px; font-size: 18px; font-weight: 900; }
         .symbolika-mail-side-title span { display: inline-flex; align-items: center; gap: 8px; }
         .symbolika-mail-side-title span::before { inline-size: 9px; block-size: 9px; border-radius: 3px; background: #F97316; content: ''; box-shadow: 0 0 0 4px rgb(249 115 22 / .11); }
-        .symbolika-mail-side-title small { display: grid; place-items: center; min-inline-size: 24px; block-size: 24px; border-radius: 999px; background: #F97316; color: #17120F; font-size: 10px; }
+        .symbolika-mail-side-title small { display: inline-flex; align-items: center; justify-content: center; min-inline-size: 48px; block-size: 28px; padding-inline: 10px; border: 1px solid rgb(249 115 22 / .40); border-radius: 999px; background: rgb(249 115 22 / .14); color: #FB923C; font-size: 10px; font-weight: 900; font-variant-numeric: tabular-nums; white-space: nowrap; }
         .symbolika-mail-side-compose { inline-size: 100%; min-block-size: 44px; margin-block-end: 15px; border-radius: 12px; box-shadow: 0 8px 22px rgb(249 115 22 / .16); }
         .symbolika-mail-side-section-label { padding: 3px 9px 7px; color: var(--theme--foreground-subdued); font-size: 9px; font-weight: 850; text-transform: uppercase; letter-spacing: .08em; }
         .symbolika-mail-side-folder { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 8px; inline-size: 100%; min-block-size: 40px; margin-block-end: 2px; padding: 0 10px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--theme--foreground-subdued); text-align: start; cursor: pointer; }
         .symbolika-mail-side-folder:hover { background: var(--theme--background-normal); color: var(--theme--foreground); }
         .symbolika-mail-side-folder.is-active { border-color: rgb(249 115 22 / .25); background: color-mix(in srgb, #F97316 14%, var(--theme--background-normal)); color: #FB923C; box-shadow: inset 3px 0 #F97316; }
         .symbolika-mail-side-folder span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 750; }
-        .symbolika-mail-side-folder small { min-inline-size: 22px; padding: 3px 6px; border-radius: 999px; background: var(--theme--background-accent); color: var(--theme--foreground); text-align: center; font-size: 9px; }
+        .symbolika-mail-side-folder small { display: inline-flex; align-items: center; justify-content: center; min-inline-size: 30px; block-size: 22px; padding-inline: 8px; border: 1px solid var(--theme--border-color-subdued); border-radius: 999px; background: var(--theme--background-normal); color: var(--theme--foreground); text-align: center; font-size: 9px; font-weight: 850; font-variant-numeric: tabular-nums; }
+        .symbolika-mail-side-folder.is-active small { border-color: rgb(249 115 22 / .35); background: rgb(249 115 22 / .12); color: #FB923C; }
         .symbolika-mail-side-footer { margin-block-start: auto; padding-block-start: 13px; border-block-start: 1px solid var(--theme--border-color-subdued); }
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) .symbolika-mail-mode,
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) .symbolika-mail-side-folder.is-active {
@@ -859,7 +883,7 @@ const MailWorkspace = {
         <nav class="symbolika-mail-side-nav" aria-label="Почтовые папки">
           <div class="symbolika-mail-side-title">
             <span>Почта</span>
-            <small v-if="totalUnread">{{ totalUnread }}</small>
+            <small v-if="totalUnread">{{ totalUnread }} новых</small>
           </div>
           <button type="button" class="symbolika-mail-button is-primary symbolika-mail-side-compose" @click="openComposer()">
             <v-icon name="edit" small /> Написать
@@ -937,7 +961,7 @@ const MailWorkspace = {
                     <v-icon v-if="thread.is_starred" class="symbolika-mail-star" name="star" small />
                   </span>
                   <span class="symbolika-mail-thread-subject">{{ thread.subject }}</span>
-                  <span class="symbolika-mail-thread-preview">{{ thread.preview }}</span>
+                  <span class="symbolika-mail-thread-preview">{{ thread.preview || 'Нет текстового фрагмента' }}</span>
                 </span>
                 <time class="symbolika-mail-thread-time">{{ formatDate(thread.last_message_at) }}</time>
               </button>
@@ -1106,6 +1130,14 @@ const MailWorkspace = {
                 </div>
               </section>
               <section class="symbolika-mail-settings-section"><h3>Папки и псевдонимы</h3><p>Сопоставление папок REG.RU с сотрудниками и адресами отправителя.</p></section>
+              <div class="symbolika-mail-settings-folder is-new">
+                <label class="symbolika-mail-field">Название<input v-model.trim="newFolder.name" class="symbolika-mail-input" placeholder="Новая папка" /></label>
+                <label class="symbolika-mail-field">Папка IMAP<input v-model.trim="newFolder.imap_name" class="symbolika-mail-input" placeholder="INBOX.Новая папка" /></label>
+                <label class="symbolika-mail-field">Псевдоним<input v-model.trim="newFolder.alias_email" class="symbolika-mail-input" type="email" placeholder="manager@symb62.ru" /></label>
+                <label class="symbolika-mail-field">Сотрудник<select v-model="newFolder.employee" class="symbolika-mail-select"><option :value="null">Не назначен</option><option v-for="employee in settings.employees" :key="'new-' + employee.id" :value="employee.id">{{ employee.full_name }}</option></select></label>
+                <label class="symbolika-mail-checkbox"><input v-model="newFolder.is_shared" type="checkbox" /> Общая</label>
+                <button type="button" class="symbolika-mail-button" :disabled="creatingFolder" @click="createFolder">{{ creatingFolder ? 'Создаём…' : 'Добавить' }}</button>
+              </div>
               <div v-for="folder in settings.folders" :key="folder.id" class="symbolika-mail-settings-folder">
                 <label class="symbolika-mail-field">Название<input v-model.trim="folder.name" class="symbolika-mail-input" /></label>
                 <label class="symbolika-mail-field">Папка IMAP<input v-model.trim="folder.imap_name" class="symbolika-mail-input" placeholder="INBOX/Менеджер" /></label>

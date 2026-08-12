@@ -45,6 +45,25 @@ function normalizeSubject(value) {
     .toLowerCase();
 }
 
+function plainMailPreview(value, max = 240) {
+  return cleanText(value, Math.max(max * 6, 1000))
+    .replace(/<!doctype[^>]*>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<br\s*\/?\s*>/gi, ' ')
+    .replace(/<\/p\s*>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
 function apiError(res, status, message) {
   return res.status(status).json({ errors: [{ message }] });
 }
@@ -266,7 +285,7 @@ export default {
         ? await database('orders').whereRaw('upper(order_number) = ?', [orderNumber]).first('id', 'customer', 'customer_company')
         : null;
       const sentAt = parsed.date || new Date();
-      const preview = cleanText(parsed.text || parsed.html || '', 240).replace(/\s+/g, ' ');
+      const preview = plainMailPreview(parsed.text || parsed.html || '', 240);
       const participants = [{ name: from.name, email: from.email }];
       const threadInsert = {
         folder_id: folder.id,
@@ -357,7 +376,12 @@ export default {
             configured: Boolean(env?.SYMBOLIKA_IMAP_HOST && env?.SYMBOLIKA_IMAP_USER && env?.SYMBOLIKA_IMAP_PASSWORD),
             folders,
             selected_folder: selected?.id || null,
-            threads: threads.map((row) => ({ ...row, participants: jsonArray(row.participants), tags: jsonArray(row.tags) })),
+            threads: threads.map((row) => ({
+              ...row,
+              preview: plainMailPreview(row.preview, 240),
+              participants: jsonArray(row.participants),
+              tags: jsonArray(row.tags),
+            })),
           },
         });
       } catch (error) {
@@ -813,6 +837,41 @@ export default {
         if ('is_active' in (req.body || {})) update.is_active = Boolean(req.body.is_active);
         await database('symbolika_mail_folders').where('id', current.id).update(update);
         return res.json({ data: { id: current.id, ...update } });
+      } catch (error) {
+        return next(error);
+      }
+    });
+
+    router.post('/folders', async (req, res, next) => {
+      try {
+        const actor = await actorContext(req, res);
+        if (!actor) return;
+        if (!actor.is_admin) return apiError(res, 403, 'Создавать почтовые папки может только администратор или управляющий.');
+        const name = cleanText(req.body?.name, 255);
+        if (!name) return apiError(res, 400, 'Укажите название папки.');
+        const aliasEmail = cleanText(req.body?.alias_email, 255).toLowerCase();
+        if (aliasEmail && !EMAIL_PATTERN.test(aliasEmail)) return apiError(res, 400, 'Некорректный адрес псевдонима.');
+        const baseSlug = cleanText(name, 120).toLowerCase()
+          .replace(/[^a-zа-яё0-9]+/gi, '-')
+          .replace(/^-+|-+$/g, '') || 'folder';
+        let slug = baseSlug;
+        let suffix = 2;
+        while (await database('symbolika_mail_folders').where('slug', slug).first('id')) slug = `${baseSlug}-${suffix++}`;
+        const maxSort = await database('symbolika_mail_folders').max('sort as value').first();
+        const [created] = await database('symbolika_mail_folders').insert({
+          slug,
+          name,
+          imap_name: cleanText(req.body?.imap_name, 500) || null,
+          alias_email: aliasEmail || null,
+          employee: Number(req.body?.employee || 0) || null,
+          is_shared: Boolean(req.body?.is_shared),
+          is_system: false,
+          is_active: true,
+          sort: Number(maxSort?.value || 100) + 10,
+          date_created: new Date(),
+          date_updated: new Date(),
+        }).returning('*');
+        return res.status(201).json({ data: created });
       } catch (error) {
         return next(error);
       }
