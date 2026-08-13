@@ -239,6 +239,11 @@ input[type="week"]::-webkit-calendar-picker-indicator {
 .module-bar a[href*="/admin/help"],
 .module-bar a[href*="/admin/users"],
 .module-bar a[href*="/admin/user-directory"],
+.module-bar :is(a, button):has([data-icon="help"]),
+.module-bar :is(a, button):has([data-icon="help_outline"]),
+.module-bar :is(a, button):has([data-icon="question_mark"]),
+.module-bar :is(a, button):has([data-icon="contact_support"]),
+.module-bar :is(a, button):has([data-icon="live_help"]),
 [data-symbolika-system-navigation="hidden"] {
   display: none !important;
 }

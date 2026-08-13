@@ -252,16 +252,26 @@
       'user directory',
       '\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438',
     ].some((part) => label.includes(part));
+    const systemIcon = link?.querySelector?.('[data-icon]')?.getAttribute?.('data-icon') || '';
+    const isHiddenHelpIcon = isSystemModuleBarItem && [
+      'help',
+      'help_outline',
+      'question_mark',
+      'contact_support',
+      'live_help',
+    ].includes(systemIcon.toLowerCase());
     // Подписи вроде «Пользователи» используются и внутри рабочих модулей.
     // По тексту скрываем только пункты первого системного меню Directus;
     // остальные ссылки проверяем исключительно по системному URL.
-    if (!href) return isSystemModuleBarItem && isHiddenByLabel;
+    if (!href) return isHiddenHelpIcon || (isSystemModuleBarItem && isHiddenByLabel);
     try {
       const url = new URL(href, window.location.origin);
       return hiddenSystemModulePaths.some((path) => url.pathname === path || url.pathname.startsWith(`${path}/`))
+        || isHiddenHelpIcon
         || (isSystemModuleBarItem && isHiddenByLabel);
     } catch (error) {
       return hiddenSystemModulePaths.some((path) => href === path || href.includes(path))
+        || isHiddenHelpIcon
         || (isSystemModuleBarItem && isHiddenByLabel);
     }
   }
