@@ -113,7 +113,10 @@
       ...sharedEmployeeModulePaths,
       '/admin/symbolika-procurement',
     ])],
-    ['\u041e\u0444\u0438\u0441-\u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440', new Set(sharedEmployeeModulePaths)],
+    ['\u041e\u0444\u0438\u0441-\u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440', new Set([
+      ...sharedEmployeeModulePaths,
+      '/admin/symbolika-procurement',
+    ])],
     ['\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e', new Set([
       ...sharedEmployeeModulePaths,
       '/admin/symbolika-production',
