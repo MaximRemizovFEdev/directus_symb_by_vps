@@ -163,6 +163,7 @@ const financeFields = [
   'customer_company',
   'customer_company_name',
   'counterparty_name',
+  'manager_employee',
   'manager_name',
   'order_status_name',
   'order_sum',
@@ -184,6 +185,7 @@ const financeItemFields = [
   'customer_company',
   'customer_company_name',
   'counterparty_name',
+  'manager_employee',
   'manager_name',
   'order_status_name',
   'production_status_name',
@@ -322,6 +324,7 @@ const overviewFields = [
   'customer',
   'customer_company',
   'customer_display',
+  'manager_employee',
   'manager_name',
   'order_status',
   'order_status_name',
@@ -2802,6 +2805,7 @@ export const CostingModule = {
       const from = this.eventDateFrom ? new Date(`${this.eventDateFrom}T00:00:00`).getTime() : null;
       const to = this.eventDateTo ? new Date(`${this.eventDateTo}T23:59:59.999`).getTime() : null;
       return (this.eventRows || []).filter((event) => {
+        if (!this.eventIsVisibleToCurrentUser(event)) return false;
         if (this.eventEntityFilter !== 'all' && event.entity_type !== this.eventEntityFilter) return false;
         if (this.eventActionFilter !== 'all' && event.action !== this.eventActionFilter) return false;
         const timestamp = new Date(event.event_at).getTime();
@@ -2817,6 +2821,16 @@ export const CostingModule = {
           ...this.eventChangeSummary(event),
         ].join(' ').toLowerCase().includes(query);
       });
+    },
+
+    eventIsVisibleToCurrentUser(event) {
+      if (!['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) return true;
+      const currentUser = String(this.currentUserId || '');
+      if (!currentUser) return false;
+      if (String(this.entityId(event.access_manager_user) || '') === currentUser) return true;
+      if (event.order_id) return false;
+      return String(this.entityId(event.task_assigned_user) || '') === currentUser
+        || String(this.entityId(event.task_created_user) || '') === currentUser;
     },
 
     visibleEventGroups() {
@@ -3398,7 +3412,9 @@ export const CostingModule = {
 
     async findLinkedOrder(orderId) {
       const fromLoadedRows = this.linkedOrderSources().find((row) => {
-        return Number(this.entityId(this.orderId(row)) || 0) === Number(orderId);
+        if (Number(this.entityId(this.orderId(row)) || 0) !== Number(orderId)) return false;
+        if (!['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) return true;
+        return Number(this.entityId(row.manager_employee) || 0) === Number(this.currentEmployeeId || 0);
       });
       if (fromLoadedRows) return this.detailOrderContext(fromLoadedRows);
 
@@ -4893,6 +4909,15 @@ export const CostingModule = {
     },
 
     async openDetail(type, row, options = {}) {
+      if (this.detailIsOrder(row) && this.currentRoleName === 'Менеджер') {
+        const orderId = Number(this.entityId(this.orderId(row)) || 0);
+        const allowedOrder = orderId ? await this.findLinkedOrder(orderId) : null;
+        if (!allowedOrder) {
+          this.error = 'Этот заказ относится к другому менеджеру и недоступен.';
+          return;
+        }
+        row = { ...row, ...allowedOrder };
+      }
       this.entityDetail = null;
       this.detailOrderItems = [];
       this.detailOrderItemsOrderId = null;
@@ -5644,11 +5669,13 @@ export const CostingModule = {
         const fields = [
           'event_id', 'event_at', 'action', 'source_collection', 'source_id', 'entity_type',
           'entity_title', 'order_id', 'order_number', 'item_id', 'item_title', 'task_id',
-          'task_title', 'actor_user', 'actor_name', 'delta', 'before_delta',
+          'task_title', 'actor_user', 'actor_name', 'access_manager_user',
+          'task_assigned_user', 'task_created_user', 'delta', 'before_delta',
         ].join(',');
         const params = new URLSearchParams({ fields, sort: '-event_at,-event_id' });
         return await this.loadPagedCollection('events', '/items/symbolika_event_feed', params, (rows, append) => {
-          this.eventRows = append ? this.mergePagedRows(this.eventRows, rows) : rows;
+          const visibleRows = rows.filter((row) => this.eventIsVisibleToCurrentUser(row));
+          this.eventRows = append ? this.mergePagedRows(this.eventRows, visibleRows) : visibleRows;
         });
       } catch (error) {
         if (!silent) this.error = error.message;
@@ -5986,6 +6013,7 @@ export const CostingModule = {
       if (event.entity_type === 'task' && event.task_id) {
         const row = await this.findLinkedTask(event.task_id);
         if (row) this.openTaskDialog(row);
+        else this.error = 'Задача недоступна или была удалена.';
         return;
       }
       if (event.entity_type === 'item' && event.item_id) {
@@ -5997,12 +6025,14 @@ export const CostingModule = {
         if (event.order_id) {
           const order = await this.findLinkedOrder(event.order_id);
           if (order) await this.openDetail('order', order);
+          else this.error = 'Заказ относится к другому менеджеру и недоступен.';
         }
         return;
       }
       if (event.order_id) {
         const order = await this.findLinkedOrder(event.order_id);
         if (order) await this.openDetail('order', order);
+        else this.error = 'Заказ относится к другому менеджеру и недоступен.';
       }
     },
 
@@ -7082,6 +7112,13 @@ export const CostingModule = {
         const params = new URLSearchParams();
         params.set('fields', financeFields.join(','));
         params.set('sort', '-date,order_number,id');
+        if (['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) {
+          if (!this.currentEmployeeId) {
+            this.financeRows = [];
+            return;
+          }
+          params.set('filter[manager_employee][_eq]', String(this.currentEmployeeId));
+        }
         await this.loadPagedCollection('finance', '/items/customer_reconciliation', params, (rows, append) => {
           this.financeRows = append ? this.mergePagedRows(this.financeRows, rows) : rows;
         });
@@ -7095,6 +7132,13 @@ export const CostingModule = {
         const params = new URLSearchParams();
         params.set('fields', financeItemFields.join(','));
         params.set('sort', '-date,order_number,product_name,id');
+        if (['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) {
+          if (!this.currentEmployeeId) {
+            this.financeItemRows = [];
+            return;
+          }
+          params.set('filter[manager_employee][_eq]', String(this.currentEmployeeId));
+        }
         await this.loadPagedCollection('finance_items', '/items/customer_reconciliation_items', params, (rows, append) => {
           this.financeItemRows = append ? this.mergePagedRows(this.financeItemRows, rows) : rows;
         });

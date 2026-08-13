@@ -13434,5 +13434,157 @@ WHERE collection IN ('customers', 'customer_companies')
   AND fields <> '*'
   AND position('opening_balance_amount' in fields) = 0;
 
+-- A manager dashboard, reconciliation and event feed are always personal.
+-- The separate office policy may expose office issue collections, but must not
+-- widen personal finance or history to every order currently in the office.
+DELETE FROM directus_permissions
+WHERE policy = '00000000-0000-4000-8000-000000000203'
+  AND collection IN ('customer_reconciliation', 'customer_reconciliation_items', 'symbolika_event_feed');
+
+UPDATE directus_permissions
+SET permissions = '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json
+WHERE collection IN ('customer_reconciliation', 'customer_reconciliation_items')
+  AND action = 'read'
+  AND policy IN (
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202'
+  );
+
+UPDATE directus_permissions
+SET permissions = '{"_or":[{"access_manager_user":{"_eq":"$CURRENT_USER"}},{"_and":[{"order_id":{"_null":true}},{"task_assigned_user":{"_eq":"$CURRENT_USER"}}]},{"_and":[{"order_id":{"_null":true}},{"task_created_user":{"_eq":"$CURRENT_USER"}}]}]}'::json
+WHERE collection = 'symbolika_event_feed'
+  AND action = 'read'
+  AND policy IN (
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202'
+  );
+
+-- Legacy summary tables used by the custom order list did not retain the
+-- manager identity. Persist it on every refresh so Directus can enforce the
+-- same ownership rule as the source orders table.
+ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS manager_employee integer;
+ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS access_manager_user uuid;
+ALTER TABLE orders_overview_items ADD COLUMN IF NOT EXISTS access_manager_user uuid;
+
+DO $$
+DECLARE
+  summary_table text;
+BEGIN
+  FOREACH summary_table IN ARRAY ARRAY[
+    'orders_due_urgent', 'orders_due_today', 'orders_due_this_week',
+    'orders_due_next_week', 'orders_due_this_month', 'orders_due_next_month'
+  ]
+  LOOP
+    EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS manager_employee integer', summary_table);
+    EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS access_manager_user uuid', summary_table);
+  END LOOP;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION symbolika_scope_order_summary()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  SELECT o.manager_employee, e.directus_user
+    INTO NEW.manager_employee, NEW.access_manager_user
+  FROM orders o
+  LEFT JOIN employees e ON e.id = o.manager_employee
+  WHERE o.id = NEW.id;
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION symbolika_scope_order_summary_item()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  SELECT e.directus_user
+    INTO NEW.access_manager_user
+  FROM orders o
+  LEFT JOIN employees e ON e.id = o.manager_employee
+  WHERE o.id = NEW.orders_overview;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS symbolika_scope_orders_overview ON orders_overview;
+CREATE TRIGGER symbolika_scope_orders_overview
+BEFORE INSERT OR UPDATE OF id ON orders_overview
+FOR EACH ROW EXECUTE FUNCTION symbolika_scope_order_summary();
+
+DROP TRIGGER IF EXISTS symbolika_scope_orders_overview_items ON orders_overview_items;
+CREATE TRIGGER symbolika_scope_orders_overview_items
+BEFORE INSERT OR UPDATE OF orders_overview ON orders_overview_items
+FOR EACH ROW EXECUTE FUNCTION symbolika_scope_order_summary_item();
+
+DO $$
+DECLARE
+  summary_table text;
+BEGIN
+  FOREACH summary_table IN ARRAY ARRAY[
+    'orders_due_urgent', 'orders_due_today', 'orders_due_this_week',
+    'orders_due_next_week', 'orders_due_this_month', 'orders_due_next_month'
+  ]
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS symbolika_scope_%I ON %I', summary_table, summary_table);
+    EXECUTE format(
+      'CREATE TRIGGER symbolika_scope_%I BEFORE INSERT OR UPDATE OF id ON %I FOR EACH ROW EXECUTE FUNCTION symbolika_scope_order_summary()',
+      summary_table, summary_table
+    );
+  END LOOP;
+END;
+$$;
+
+UPDATE orders_overview summary
+SET manager_employee = o.manager_employee,
+    access_manager_user = e.directus_user
+FROM orders o
+LEFT JOIN employees e ON e.id = o.manager_employee
+WHERE o.id = summary.id;
+
+UPDATE orders_overview_items summary
+SET access_manager_user = e.directus_user
+FROM orders o
+LEFT JOIN employees e ON e.id = o.manager_employee
+WHERE o.id = summary.orders_overview;
+
+DO $$
+DECLARE
+  summary_table text;
+BEGIN
+  FOREACH summary_table IN ARRAY ARRAY[
+    'orders_due_urgent', 'orders_due_today', 'orders_due_this_week',
+    'orders_due_next_week', 'orders_due_this_month', 'orders_due_next_month'
+  ]
+  LOOP
+    EXECUTE format(
+      'UPDATE %I summary SET manager_employee = o.manager_employee, access_manager_user = e.directus_user FROM orders o LEFT JOIN employees e ON e.id = o.manager_employee WHERE o.id = summary.id',
+      summary_table
+    );
+  END LOOP;
+END;
+$$;
+
+DELETE FROM directus_permissions
+WHERE policy = '00000000-0000-4000-8000-000000000203'
+  AND collection IN (
+    'orders_overview', 'orders_overview_items', 'orders_due_urgent', 'orders_due_today',
+    'orders_due_this_week', 'orders_due_next_week', 'orders_due_this_month', 'orders_due_next_month'
+  );
+
+UPDATE directus_permissions
+SET permissions = '{"access_manager_user":{"_eq":"$CURRENT_USER"}}'::json
+WHERE action = 'read'
+  AND collection IN (
+    'orders_overview', 'orders_overview_items', 'orders_due_urgent', 'orders_due_today',
+    'orders_due_this_week', 'orders_due_next_week', 'orders_due_this_month', 'orders_due_next_month'
+  )
+  AND policy IN (
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202'
+  );
+
 COMMIT;
 
