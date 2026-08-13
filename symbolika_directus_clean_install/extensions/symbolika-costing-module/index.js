@@ -1163,6 +1163,7 @@ export const CostingModule = {
       giftCertificateTransactions: [],
       giftCertificateStatusFilter: 'all',
       giftCertificateDialog: null,
+      customerDirectoryDialog: null,
       copiedGiftCertificateId: null,
       estimateRows: [],
       estimateItemRows: [],
@@ -1475,6 +1476,12 @@ export const CostingModule = {
 
     canCreateOrderHere() {
       return this.canCreateOrders && ['dashboard', 'all_orders', 'my_orders'].includes(this.activeTab);
+    },
+
+    canCreateDirectoryEntity() {
+      if (!['clients', 'companies'].includes(this.activeTab)) return false;
+      if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) return true;
+      return ['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName) && !!this.currentEmployeeId;
     },
 
     canCreateEstimateHere() {
@@ -4465,7 +4472,7 @@ export const CostingModule = {
       if (allowed.has('payroll')) tasks.push(this.loadManagerSummary());
       if (allowed.has('finance')) tasks.push(this.loadFinanceRows(), this.loadFinanceItemRows(), this.loadManagerFinanceSummary(), this.loadCustomers(), this.loadCompanies(), this.loadGiftCertificates());
       if (allowed.has('gift_certificates')) tasks.push(this.loadGiftCertificates(), this.loadGiftCertificateTransactions(), this.loadCustomers(), this.loadCompanies());
-      if (allowed.has('clients') || allowed.has('companies')) tasks.push(this.loadFinanceRows(), this.loadCustomers(), this.loadCompanies(), this.loadGiftCertificates());
+      if (allowed.has('clients') || allowed.has('companies')) tasks.push(this.loadFinanceRows(), this.loadCustomers(), this.loadCompanies(), this.loadGiftCertificates(), this.loadEmployees());
       if (!allowed.has('finance') && !allowed.has('clients') && !allowed.has('companies') && (allowed.has('my_orders') || allowed.has('all_orders') || allowed.has('deadlines') || allowed.has('office'))) tasks.push(this.loadCustomers(), this.loadCompanies());
       if (allowed.has('contractors')) tasks.push(this.loadContractorRows());
       if (allowed.has('production') || allowed.has('screen') || allowed.has('production_archive') || allowed.has('contractor_work') || allowed.has('my_orders')) tasks.push(this.loadProductionStatuses());
@@ -7932,6 +7939,86 @@ export const CostingModule = {
         opening_balance_direction: form?.[`${prefix}_opening_balance_direction`] || 'customer_owes_us',
         opening_balance_date: form?.[`${prefix}_opening_balance_date`] || fallbackDate || this.todayInput(),
       };
+    },
+
+    openCustomerDirectoryDialog(type = '') {
+      if (!this.canCreateDirectoryEntity) return;
+      const entityType = type || (this.activeTab === 'companies' ? 'company' : 'customer');
+      this.error = '';
+      this.customerDirectoryDialog = {
+        type: entityType,
+        name: '',
+        phone: '',
+        email: '',
+        company: '',
+        manager: this.currentEmployeeId || '',
+        comment: '',
+        opening_balance_amount: '',
+        opening_balance_direction: 'customer_owes_us',
+        opening_balance_date: this.todayInput(),
+        opening_balance_comment: '',
+        saving: false,
+      };
+    },
+
+    closeCustomerDirectoryDialog() {
+      if (this.customerDirectoryDialog?.saving) return;
+      this.customerDirectoryDialog = null;
+    },
+
+    async saveCustomerDirectoryEntity() {
+      const form = this.customerDirectoryDialog;
+      if (!form || form.saving) return;
+      const name = String(form.name || '').trim();
+      if (!name) {
+        this.error = form.type === 'company' ? 'Укажите название компании.' : 'Укажите имя клиента.';
+        return;
+      }
+
+      const privileged = ['Administrator', 'Управляющий'].includes(this.currentRoleName);
+      const managerId = Number(privileged ? form.manager : this.currentEmployeeId || 0);
+      if (!managerId) {
+        this.error = privileged ? 'Выберите менеджера.' : 'К вашей учетной записи не привязан сотрудник.';
+        return;
+      }
+
+      const amount = this.parseMoney(form.opening_balance_amount);
+      const body = {
+        name,
+        phone: String(form.phone || '').trim() || null,
+        email: String(form.email || '').trim() || null,
+        manager: managerId,
+        comment: String(form.comment || '').trim() || null,
+      };
+      if (form.type === 'customer') body.company = form.company ? Number(form.company) : null;
+      if (amount > 0) {
+        body.opening_balance_amount = amount;
+        body.opening_balance_direction = form.opening_balance_direction || 'customer_owes_us';
+        body.opening_balance_date = form.opening_balance_date || this.todayInput();
+        body.opening_balance_comment = String(form.opening_balance_comment || '').trim() || null;
+      }
+
+      form.saving = true;
+      this.error = '';
+      try {
+        const collection = form.type === 'company' ? 'customer_companies' : 'customers';
+        const created = await this.request(`/items/${collection}`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+        });
+        this.customerDirectoryDialog = null;
+        await Promise.all([this.loadCustomers(), this.loadCompanies(), this.loadFinanceRows()]);
+        const entity = created?.data;
+        if (entity?.id) {
+          this.openEntityDetail(form.type, form.type === 'company'
+            ? { customer_company: entity.id, customer_company_name: name }
+            : { customer: entity.id, customer_name: name });
+        }
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        if (this.customerDirectoryDialog) this.customerDirectoryDialog.saving = false;
+      }
     },
 
     clearZeroInput(model, field) {
@@ -21250,6 +21337,10 @@ export const CostingModule = {
               <v-icon name="add_task" small />
               Новая задача
             </button>
+            <button v-if="canCreateDirectoryEntity" type="button" class="symbolika-costing-button" @click="openCustomerDirectoryDialog()">
+              <v-icon :name="activeTab === 'companies' ? 'domain_add' : 'person_add'" small />
+              {{ activeTab === 'companies' ? 'Новая компания' : 'Новый клиент' }}
+            </button>
             <div v-if="supportsWorkspaceViewModes" class="symbolika-costing-view-switch" aria-label="Вид страницы">
               <button
                 v-for="view in [{ id: 'table', icon: 'table_rows', title: 'Таблица' }, { id: 'cards', icon: 'grid_view', title: 'Карточки' }, { id: 'kanban', icon: 'view_kanban', title: 'Канбан' }]"
@@ -27008,6 +27099,80 @@ export const CostingModule = {
                 </button>
               </div>
             </template>
+          </div>
+        </div>
+
+        <div v-if="customerDirectoryDialog" class="symbolika-costing-modal-backdrop">
+          <div class="symbolika-costing-modal symbolika-costing-directory-create-modal">
+            <div class="symbolika-costing-modal-head">
+              <div>
+                <div class="symbolika-costing-subtle">{{ customerDirectoryDialog.type === 'company' ? 'Компании' : 'Клиенты' }}</div>
+                <h2>{{ customerDirectoryDialog.type === 'company' ? 'Новая компания' : 'Новый клиент' }}</h2>
+              </div>
+              <button type="button" class="symbolika-costing-detail-close" :disabled="customerDirectoryDialog.saving" @click="closeCustomerDirectoryDialog">×</button>
+            </div>
+            <div class="symbolika-costing-modal-grid">
+              <label class="symbolika-costing-label symbolika-costing-label-wide">
+                {{ customerDirectoryDialog.type === 'company' ? 'Название компании' : 'Имя клиента' }} *
+                <input v-model.trim="customerDirectoryDialog.name" class="symbolika-costing-input" autofocus />
+              </label>
+              <label class="symbolika-costing-label">
+                Телефон
+                <input v-model.trim="customerDirectoryDialog.phone" class="symbolika-costing-input" placeholder="+7..." />
+              </label>
+              <label class="symbolika-costing-label">
+                Email
+                <input v-model.trim="customerDirectoryDialog.email" class="symbolika-costing-input" type="email" placeholder="mail@example.ru" />
+              </label>
+              <label v-if="customerDirectoryDialog.type === 'customer'" class="symbolika-costing-label">
+                Компания
+                <select v-model="customerDirectoryDialog.company" class="symbolika-costing-select">
+                  <option value="">Лично, без компании</option>
+                  <option v-for="company in companies" :key="company.id" :value="company.id">{{ company.name }}</option>
+                </select>
+              </label>
+              <label v-if="['Administrator', 'Управляющий'].includes(currentRoleName)" class="symbolika-costing-label">
+                Менеджер *
+                <select v-model="customerDirectoryDialog.manager" class="symbolika-costing-select">
+                  <option value="">Не выбран</option>
+                  <option v-for="employee in employees" :key="employee.id" :value="employee.id">{{ employee.full_name }}</option>
+                </select>
+              </label>
+              <label class="symbolika-costing-label symbolika-costing-label-wide">
+                Комментарий
+                <textarea v-model.trim="customerDirectoryDialog.comment" class="symbolika-costing-input" rows="2"></textarea>
+              </label>
+            </div>
+            <details class="symbolika-costing-opening-balance">
+              <summary>Начальный баланс взаиморасчётов</summary>
+              <div class="symbolika-costing-modal-grid">
+                <label class="symbolika-costing-label">
+                  Сумма
+                  <input v-model="customerDirectoryDialog.opening_balance_amount" class="symbolika-costing-input" type="number" min="0" step="0.01" placeholder="0,00" />
+                </label>
+                <label class="symbolika-costing-label">
+                  Направление
+                  <select v-model="customerDirectoryDialog.opening_balance_direction" class="symbolika-costing-select">
+                    <option value="customer_owes_us">{{ customerDirectoryDialog.type === 'company' ? 'Компания должна нам' : 'Клиент должен нам' }}</option>
+                    <option value="we_owe_customer">{{ customerDirectoryDialog.type === 'company' ? 'Мы должны компании / аванс' : 'Мы должны клиенту / аванс' }}</option>
+                  </select>
+                </label>
+                <label class="symbolika-costing-label">
+                  На дату
+                  <input v-model="customerDirectoryDialog.opening_balance_date" class="symbolika-costing-input" type="date" />
+                </label>
+                <label class="symbolika-costing-label">
+                  Комментарий к балансу
+                  <input v-model.trim="customerDirectoryDialog.opening_balance_comment" class="symbolika-costing-input" />
+                </label>
+              </div>
+            </details>
+            <div class="symbolika-costing-modal-actions">
+              <button type="button" class="symbolika-costing-mini-button" :disabled="customerDirectoryDialog.saving" @click="closeCustomerDirectoryDialog">Отмена</button>
+              <button type="button" class="symbolika-costing-button" :disabled="customerDirectoryDialog.saving" @click="saveCustomerDirectoryEntity">
+                <v-icon name="save" small />{{ customerDirectoryDialog.saving ? 'Сохраняю…' : 'Создать' }}
+              </button>
+            </div>
           </div>
         </div>
 
