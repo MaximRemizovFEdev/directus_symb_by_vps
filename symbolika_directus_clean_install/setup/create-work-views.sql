@@ -11185,10 +11185,19 @@ UPDATE directus_permissions
 SET fields = fields || ',layout_revision_url_snapshot'
 WHERE collection = 'orders_items'
   AND action = 'read'
-  AND policy = '00000000-0000-4000-8000-000000000201'
+  AND policy IN ('00000000-0000-4000-8000-000000000201', '00000000-0000-4000-8000-000000000202')
   AND fields IS NOT NULL
   AND fields <> '*'
   AND fields NOT LIKE '%layout_revision_url_snapshot%';
+
+UPDATE directus_permissions
+SET fields = fields || ',layout_disk_path,layout_disk_name,layout_disk_size,layout_disk_mime_type,layout_disk_uploaded_at'
+WHERE collection = 'orders_items'
+  AND action = 'read'
+  AND policy IN ('00000000-0000-4000-8000-000000000201', '00000000-0000-4000-8000-000000000202')
+  AND fields IS NOT NULL
+  AND fields <> '*'
+  AND fields NOT LIKE '%layout_disk_name%';
 
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
 VALUES
@@ -12547,7 +12556,7 @@ WITH self_sales_policies(policy) AS (
       'order,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url'),
     ('orders_items', 'read', '{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}'::json,
       NULL::json, NULL::json,
-      'id,order,order_link,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,production_status,deadline,production_comment,technical_task_text,manager_employee,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url,layout_revision_url_snapshot'),
+      'id,order,order_link,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,production_status,deadline,production_comment,technical_task_text,manager_employee,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url,layout_revision_url_snapshot,layout_disk_path,layout_disk_name,layout_disk_size,layout_disk_mime_type,layout_disk_uploaded_at'),
     ('orders_items', 'update', '{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}'::json,
       NULL::json, NULL::json,
       'product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url'),

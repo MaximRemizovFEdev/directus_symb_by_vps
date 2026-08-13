@@ -3029,11 +3029,35 @@ export const CostingModule = {
       this.teardownOverlayStacking();
       this.overlayStackCounter = 2000;
       const selector = '.symbolika-costing-modal-backdrop, .symbolika-costing-detail-backdrop, .symbolika-costing-detail';
+      const layerGroup = (overlay) => {
+        if (overlay.classList.contains('symbolika-costing-detail-backdrop')) return 'detail-backdrop';
+        if (overlay.classList.contains('symbolika-costing-detail')) return 'detail';
+        return 'modal';
+      };
       const register = (node) => {
         if (!(node instanceof Element)) return;
         const overlays = [];
         if (node.matches(selector)) overlays.push(node);
         overlays.push(...node.querySelectorAll(selector));
+        const groups = new Set();
+        overlays.forEach((overlay) => {
+          if (overlay.dataset.symbolikaOverlayLayer) return;
+          groups.add(layerGroup(overlay));
+        });
+        if (groups.has('detail-backdrop')) {
+          const backdrop = document.querySelector('.symbolika-costing-detail-backdrop:not([data-symbolika-overlay-layer])');
+          const detail = document.querySelector('aside.symbolika-costing-detail:not([data-symbolika-overlay-layer])');
+          if (backdrop) {
+            this.overlayStackCounter += 1;
+            backdrop.dataset.symbolikaOverlayLayer = String(this.overlayStackCounter);
+            backdrop.style.setProperty('z-index', String(this.overlayStackCounter), 'important');
+          }
+          if (detail) {
+            this.overlayStackCounter += 1;
+            detail.dataset.symbolikaOverlayLayer = String(this.overlayStackCounter);
+            detail.style.setProperty('z-index', String(this.overlayStackCounter), 'important');
+          }
+        }
         overlays.forEach((overlay) => {
           if (overlay.dataset.symbolikaOverlayLayer) return;
           this.overlayStackCounter += 1;
@@ -3461,6 +3485,16 @@ export const CostingModule = {
       for (const source of sources) {
         const loaded = source.rows.find((row) => Number(row.id) === Number(itemId));
         if (loaded) return { type: source.type, row: loaded };
+      }
+      if (['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) {
+        try {
+          const params = new URLSearchParams();
+          params.set('fields', 'id,order,product_name,quantity,price_per_unit,order_sum,deadline,item_status,office_status,shipping_method,blank_source,product_category,product_subcategory,application_method,contractor_1,contractor_1_cost,technical_task_text,url,layout_revision_url_snapshot,layout_disk_path,layout_disk_name,layout_disk_size,layout_disk_mime_type,layout_disk_uploaded_at,needs_designer_help,designer_comment,designer_source_url,production_status,production_comment');
+          const payload = await this.request(`/items/orders_items/${Number(itemId)}?${params.toString()}`);
+          return payload.data ? { type: 'orders_items', row: payload.data } : null;
+        } catch {
+          return null;
+        }
       }
       try {
         const params = new URLSearchParams();
@@ -4901,9 +4935,53 @@ export const CostingModule = {
       const itemId = this.entityId(row?.order_item) || row?.id;
       if (!itemId) return row;
       try {
-        const payload = await this.request(`/items/orders_items/${itemId}?fields=id,internal_route_production,internal_route_screen`);
-        return payload?.data ? { ...row, ...payload.data } : row;
-      } catch {
+        const managerFields = [
+          'id',
+          'order',
+          'order.order_number',
+          'product_name',
+          'quantity',
+          'price_per_unit',
+          'order_sum',
+          'deadline',
+          'item_status',
+          'office_status',
+          'shipping_method',
+          'blank_source',
+          'product_category',
+          'product_subcategory',
+          'application_method',
+          'contractor_1.id',
+          'contractor_1.name',
+          'contractor_1.supplies_textile_blanks',
+          'contractor_1.supplies_merch_blanks',
+          'contractor_1_cost',
+          'technical_task_text',
+          'url',
+          'layout_revision_url_snapshot',
+          'layout_disk_path',
+          'layout_disk_name',
+          'layout_disk_size',
+          'layout_disk_mime_type',
+          'layout_disk_uploaded_at',
+          'needs_designer_help',
+          'designer_comment',
+          'designer_source_url',
+          'production_status',
+          'production_comment',
+        ];
+        const fields = ['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)
+          ? managerFields.join(',')
+          : 'id,internal_route_production,internal_route_screen';
+        const payload = await this.request(`/items/orders_items/${itemId}?fields=${encodeURIComponent(fields)}`);
+        if (!payload?.data) return row;
+        const hydrated = { ...row, ...payload.data };
+        ['product_category', 'product_subcategory', 'application_method', 'production_status', 'contractor_1', 'contractor_2'].forEach((field) => {
+          if (hydrated[field] !== undefined && hydrated[field] !== null) hydrated[field] = this.entityId(hydrated[field]);
+        });
+        return hydrated;
+      } catch (error) {
+        this.error = error?.message || 'Не удалось загрузить карточку позиции.';
         return row;
       }
     },
@@ -4987,7 +5065,7 @@ export const CostingModule = {
       this.detailItemsLoading = true;
       try {
         const params = new URLSearchParams();
-        params.set('fields', [
+        const managerFields = [
           'id',
           'order',
           'order.order_number',
@@ -5000,8 +5078,6 @@ export const CostingModule = {
           'office_status',
           'shipping_method',
           'blank_source',
-          'internal_route_production',
-          'internal_route_screen',
           'product_category',
           'product_subcategory',
           'application_method',
@@ -5010,9 +5086,6 @@ export const CostingModule = {
           'contractor_1.supplies_textile_blanks',
           'contractor_1.supplies_merch_blanks',
           'contractor_1_cost',
-          'contractor_2.id',
-          'contractor_2.name',
-          'contractor_2_cost',
           'technical_task_text',
           'url',
           'layout_revision_url_snapshot',
@@ -5024,10 +5097,18 @@ export const CostingModule = {
           'needs_designer_help',
           'designer_comment',
           'designer_source_url',
-          'production_status.id',
-          'production_status.name',
+          'production_status',
           'production_comment',
-        ].join(','));
+        ];
+        const privilegedFields = [
+          ...managerFields,
+          'internal_route_production',
+          'internal_route_screen',
+          'contractor_2.id',
+          'contractor_2.name',
+          'contractor_2_cost',
+        ];
+        params.set('fields', (['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName) ? managerFields : privilegedFields).join(','));
         params.set('filter[order][_eq]', String(orderId));
         params.set('sort', 'id');
         params.set('limit', '-1');
@@ -5035,9 +5116,10 @@ export const CostingModule = {
         const payload = await this.request(`/items/orders_items?${params.toString()}`);
         this.detailOrderItems = payload.data || [];
         this.detailOrderItemsOrderId = orderId;
-      } catch {
+      } catch (error) {
         this.detailOrderItems = [];
         this.detailOrderItemsOrderId = null;
+        this.error = error?.message || 'Не удалось загрузить позиции заказа.';
       } finally {
         this.detailItemsLoading = false;
       }
@@ -18673,10 +18755,12 @@ export const CostingModule = {
           inset: 0;
           z-index: 58;
           background: transparent;
+          pointer-events: none;
         }
 
         .symbolika-costing-detail {
           z-index: 59;
+          pointer-events: auto;
         }
 
         .symbolika-costing-detail-position-table {
