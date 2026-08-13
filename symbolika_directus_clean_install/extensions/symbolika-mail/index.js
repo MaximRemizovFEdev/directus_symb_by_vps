@@ -6,7 +6,7 @@ import { createReadStream } from 'node:fs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-const MAIL_ROLES = new Set(['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер']);
+const MAIL_ROLES = new Set(['Administrator', 'Управляющий', 'Менеджер']);
 const ADMIN_ROLES = new Set(['Administrator', 'Управляющий']);
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const MAIL_ATTACHMENT_ROOT = '/directus/uploads/symbolika-mail';

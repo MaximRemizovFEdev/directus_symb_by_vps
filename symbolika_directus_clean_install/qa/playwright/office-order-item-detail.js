@@ -31,7 +31,7 @@ async function run() {
   });
 
   try {
-    const roles = await api('/roles?filter[name][_eq]=Офис-менеджер&fields=id&limit=1');
+    const roles = await api('/roles?filter[name][_eq]=Менеджер&fields=id&limit=1');
     const category = (await api('/items/product_categories?fields=id&limit=1'))[0];
     if (!roles[0]?.id || !category?.id) throw new Error('Не найдены роль офис-менеджера или категория.');
     userId = (await api('/users', {

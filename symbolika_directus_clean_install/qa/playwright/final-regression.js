@@ -103,7 +103,7 @@ async function run() {
   const users = {};
   users.managerA = await createUser('Менеджер', position('Менеджер'), 'manager-a');
   users.managerB = await createUser('Менеджер', position('Менеджер'), 'manager-b');
-  users.office = await createUser('Офис-менеджер', position('Офис-менеджер'), 'office');
+  users.office = await createUser('Менеджер', position('Офис-менеджер'), 'office');
   users.production = await createUser('Производство', position('Производство'), 'production');
   users.screen = await createUser('Шелкография', null, 'screen');
   users.designer = await createUser('Дизайнер', null, 'designer');

@@ -35,7 +35,7 @@ const roleCases = [
   { key: 'admin', role: 'Administrator', modules: ['symbolika-orders', 'symbolika-management', 'symbolika-procurement', 'symbolika-admin', 'symbolika-production', 'symbolika-mail-module', 'symbolika-profile-module'] },
   { key: 'managerial', role: 'Управляющий', modules: ['symbolika-orders', 'symbolika-management', 'symbolika-procurement'] },
   { key: 'manager', role: 'Менеджер', modules: ['symbolika-orders', 'symbolika-procurement'] },
-  { key: 'office', role: 'Офис-менеджер', modules: ['symbolika-orders', 'symbolika-procurement'] },
+  { key: 'office', role: 'Менеджер', modules: ['symbolika-orders', 'symbolika-procurement'] },
   { key: 'production', role: 'Производство', modules: ['symbolika-production', 'symbolika-procurement'] },
   { key: 'screen', role: 'Шелкография', modules: ['symbolika-production', 'symbolika-procurement'] },
   { key: 'designer', role: 'Дизайнер', modules: ['symbolika-tasks', 'symbolika-procurement'] },

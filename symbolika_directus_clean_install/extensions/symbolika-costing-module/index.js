@@ -465,22 +465,22 @@ const moduleSections = {
   notifications: {
     title: 'Уведомления',
     tabs: ['notification_center'],
-    roles: ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер', 'Производство', 'Шелкография', 'Дизайнер', 'Контрагент'],
+    roles: ['Administrator', 'Управляющий', 'Менеджер', 'Производство', 'Шелкография', 'Дизайнер', 'Контрагент'],
   },
   profile: {
     title: 'Личный кабинет',
     tabs: ['profile'],
-    roles: ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер', 'Производство', 'Шелкография', 'Дизайнер', 'Контрагент'],
+    roles: ['Administrator', 'Управляющий', 'Менеджер', 'Производство', 'Шелкография', 'Дизайнер', 'Контрагент'],
   },
   orders: {
     title: 'Заказы',
     tabs: ['dashboard', 'events', 'problems', 'search', 'all_orders', 'my_orders', 'estimates', 'clients', 'companies', 'finance', 'client_operations', 'gift_certificates', 'office'],
-    roles: ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
+    roles: ['Administrator', 'Управляющий', 'Менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
   },
   tasks: {
     title: 'Задачи',
     tabs: ['tasks', 'tasks_archive', 'events'],
-    roles: ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
+    roles: ['Administrator', 'Управляющий', 'Менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
   },
   production: {
     title: 'Производство',
@@ -500,17 +500,17 @@ const moduleSections = {
   procurement: {
     title: 'Закупки',
     tabs: ['admin_procurement'],
-    roles: ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
+    roles: ['Administrator', 'Управляющий', 'Менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
   },
   finance: {
     title: 'Финансы',
     tabs: ['finance', 'client_operations', 'gift_certificates'],
-    roles: ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер'],
+    roles: ['Administrator', 'Управляющий', 'Менеджер'],
   },
   clients: {
     title: 'Клиенты',
     tabs: ['clients', 'companies'],
-    roles: ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер'],
+    roles: ['Administrator', 'Управляющий', 'Менеджер'],
   },
   admin: {
     title: 'Админка',
@@ -1319,7 +1319,6 @@ export const CostingModule = {
       else if (this.currentRoleName === 'Шелкография') roleTabs = withWorkTabs(['my_orders', 'screen', 'labels', 'admin_inventory', 'admin_procurement']);
       else if (this.currentRoleName === 'Контрагент') roleTabs = tabs.filter((tab) => tab.id === 'contractor_work');
       else if (this.currentRoleName === 'Менеджер') roleTabs = withWorkTabs(['my_orders', 'estimates', 'office', 'finance', 'client_operations', 'gift_certificates', 'clients', 'companies', 'admin_procurement']);
-      else if (this.currentRoleName === 'Офис-менеджер') roleTabs = withWorkTabs(['my_orders', 'estimates', 'office', 'finance', 'client_operations', 'clients', 'companies', 'admin_procurement']);
       else if (this.currentRoleName === 'Дизайнер') roleTabs = tabs.filter((tab) => ['my_orders', 'tasks', 'tasks_archive', 'events', 'admin_procurement'].includes(tab.id));
       else roleTabs = [];
 
@@ -1473,7 +1472,7 @@ export const CostingModule = {
 
     canCreateOrders() {
       if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) return true;
-      return ['Менеджер', 'Офис-менеджер', 'Производство', 'Шелкография', 'Дизайнер'].includes(this.currentRoleName)
+      return ['Менеджер', 'Производство', 'Шелкография', 'Дизайнер'].includes(this.currentRoleName)
         && !!this.currentEmployeeId;
     },
 
@@ -1484,7 +1483,7 @@ export const CostingModule = {
     canCreateDirectoryEntity() {
       if (!['clients', 'companies'].includes(this.activeTab)) return false;
       if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) return true;
-      return ['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName) && !!this.currentEmployeeId;
+      return this.currentRoleName === 'Менеджер' && !!this.currentEmployeeId;
     },
 
     canCreateEstimateHere() {
@@ -2824,7 +2823,7 @@ export const CostingModule = {
     },
 
     eventIsVisibleToCurrentUser(event) {
-      if (!['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) return true;
+      if (this.currentRoleName !== 'Менеджер') return true;
       const currentUser = String(this.currentUserId || '');
       if (!currentUser) return false;
       if (String(this.entityId(event.access_manager_user) || '') === currentUser) return true;
@@ -3437,18 +3436,18 @@ export const CostingModule = {
     async findLinkedOrder(orderId) {
       const fromLoadedRows = this.linkedOrderSources().find((row) => {
         if (Number(this.entityId(this.orderId(row)) || 0) !== Number(orderId)) return false;
-        if (!['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) return true;
+        if (this.currentRoleName !== 'Менеджер') return true;
         return Number(this.entityId(row.manager_employee) || 0) === Number(this.currentEmployeeId || 0);
       });
       if (fromLoadedRows) return this.detailOrderContext(fromLoadedRows);
 
-      if (!['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) return null;
+      if (!['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName)) return null;
       try {
         const params = new URLSearchParams();
         params.set('fields', overviewFields.join(','));
         params.set('filter[id][_eq]', String(orderId));
         params.set('limit', '1');
-        if (['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) {
+        if (this.currentRoleName === 'Менеджер') {
           if (!this.currentEmployeeId) return null;
           params.set('filter[manager_employee][_eq]', String(this.currentEmployeeId));
         }
@@ -3486,7 +3485,7 @@ export const CostingModule = {
         const loaded = source.rows.find((row) => Number(row.id) === Number(itemId));
         if (loaded) return { type: source.type, row: loaded };
       }
-      if (['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) {
+      if (this.currentRoleName === 'Менеджер') {
         try {
           const params = new URLSearchParams();
           params.set('fields', 'id,order,product_name,quantity,price_per_unit,order_sum,deadline,item_status,office_status,shipping_method,blank_source,product_category,product_subcategory,application_method,contractor_1,contractor_1_cost,technical_task_text,url,layout_revision_url_snapshot,layout_disk_path,layout_disk_name,layout_disk_size,layout_disk_mime_type,layout_disk_uploaded_at,needs_designer_help,designer_comment,designer_source_url,production_status,production_comment');
@@ -4513,7 +4512,7 @@ export const CostingModule = {
       if (allowed.has('costing') || allowed.has('purchasing') || allowed.has('items_archive') || canReadAllItemRowsForLabels) {
         tasks.push(this.loadRows(), this.loadContractors());
       } else if (
-        !['Офис-менеджер', 'Производство', 'Шелкография', 'Дизайнер'].includes(this.currentRoleName)
+        !['Производство', 'Шелкография', 'Дизайнер'].includes(this.currentRoleName)
         && (allowed.has('all_orders') || allowed.has('orders_archive') || allowed.has('my_orders'))
       ) {
         tasks.push(this.loadRows({ silent: true }), this.loadContractors());
@@ -4970,7 +4969,7 @@ export const CostingModule = {
           'production_status',
           'production_comment',
         ];
-        const fields = ['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)
+        const fields = this.currentRoleName === 'Менеджер'
           ? managerFields.join(',')
           : 'id,internal_route_production,internal_route_screen';
         const payload = await this.request(`/items/orders_items/${itemId}?fields=${encodeURIComponent(fields)}`);
@@ -5108,7 +5107,7 @@ export const CostingModule = {
           'contractor_2.name',
           'contractor_2_cost',
         ];
-        params.set('fields', (['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName) ? managerFields : privilegedFields).join(','));
+        params.set('fields', (this.currentRoleName === 'Менеджер' ? managerFields : privilegedFields).join(','));
         params.set('filter[order][_eq]', String(orderId));
         params.set('sort', 'id');
         params.set('limit', '-1');
@@ -5342,7 +5341,7 @@ export const CostingModule = {
     },
 
     canIssueOrder(row) {
-      if (!row || !['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) return false;
+      if (!row || !['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName)) return false;
       return String(this.detailOrderStatus(row) || '').trim().toLowerCase() === 'готов';
     },
 
@@ -7194,7 +7193,7 @@ export const CostingModule = {
         const params = new URLSearchParams();
         params.set('fields', financeFields.join(','));
         params.set('sort', '-date,order_number,id');
-        if (['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) {
+        if (this.currentRoleName === 'Менеджер') {
           if (!this.currentEmployeeId) {
             this.financeRows = [];
             return;
@@ -7214,7 +7213,7 @@ export const CostingModule = {
         const params = new URLSearchParams();
         params.set('fields', financeItemFields.join(','));
         params.set('sort', '-date,order_number,product_name,id');
-        if (['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)) {
+        if (this.currentRoleName === 'Менеджер') {
           if (!this.currentEmployeeId) {
             this.financeItemRows = [];
             return;
@@ -10206,7 +10205,7 @@ export const CostingModule = {
         date: this.formatDate(new Date()),
         customer: selectedCustomer?.name || (!this.financeCompanyFilter ? firstRow.customer_name : '') || 'Все клиенты',
         company: selectedCompany?.name || firstRow.customer_company_name || 'Все компании',
-        manager: ['Менеджер', 'Офис-менеджер'].includes(this.currentRoleName) ? (this.managerFinanceStats.employee_name || firstRow.manager_name || '-') : (firstRow.manager_name || 'Все менеджеры'),
+        manager: this.currentRoleName === 'Менеджер' ? (this.managerFinanceStats.employee_name || firstRow.manager_name || '-') : (firstRow.manager_name || 'Все менеджеры'),
         period: `${this.financeDateFrom ? this.formatDate(this.financeDateFrom) : 'с начала'} - ${this.financeDateTo ? this.formatDate(this.financeDateTo) : 'по сегодня'}`,
       };
     },
@@ -11249,7 +11248,7 @@ export const CostingModule = {
     },
 
     canEditEntityOpeningBalance() {
-      return ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)
+      return ['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName)
         && ['customer', 'company'].includes(this.entityDetail?.type);
     },
 
@@ -11289,7 +11288,7 @@ export const CostingModule = {
     },
 
     canEditCustomerNotifications() {
-      return ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер'].includes(this.currentRoleName)
+      return ['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName)
         && ['customer', 'company'].includes(this.entityDetail?.type);
     },
 
@@ -24927,7 +24926,7 @@ export const CostingModule = {
         </div>
 
         <div v-if="activeTab === 'finance' && moduleSection !== 'clients'" class="symbolika-costing-reconciliation">
-          <div v-if="['Менеджер', 'Офис-менеджер'].includes(currentRoleName)" class="symbolika-costing-dashboard symbolika-costing-dashboard-tight">
+          <div v-if="currentRoleName === 'Менеджер'" class="symbolika-costing-dashboard symbolika-costing-dashboard-tight">
             <div class="symbolika-costing-card blue">
               <div class="symbolika-costing-card-title">Моя выручка</div>
               <div class="symbolika-costing-card-value">{{ formatMoney(managerFinanceStats.orders_sum) }}</div>

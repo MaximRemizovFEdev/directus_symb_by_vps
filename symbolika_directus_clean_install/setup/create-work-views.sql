@@ -12302,7 +12302,7 @@ WHERE policy = '00000000-0000-4000-8000-000000000209';
 INSERT INTO directus_access (id, role, "user", policy, sort)
 SELECT gen_random_uuid(), r.id, NULL, '00000000-0000-4000-8000-000000000209', 100
 FROM directus_roles r
-WHERE r.name IN ('Управляющий', 'Менеджер', 'Офис-менеджер', 'Производство', 'Шелкография', 'Дизайнер', 'Контрагент');
+WHERE r.name IN ('Управляющий', 'Менеджер', 'Производство', 'Шелкография', 'Дизайнер', 'Контрагент');
 
 DELETE FROM directus_permissions
 WHERE policy = '00000000-0000-4000-8000-000000000209';
@@ -13594,6 +13594,64 @@ WHERE action = 'read'
     '00000000-0000-4000-8000-000000000201',
     '00000000-0000-4000-8000-000000000202'
   );
+
+-- Manager role consolidation.
+-- "Офис-менеджер" remains an employee position, but is no longer a Directus role.
+-- Existing office-manager accounts are moved to the regular manager role. Managers
+-- receive the shared office policy so every manager can accept payments and issue
+-- any order that is ready for pickup in the office.
+DO $$
+DECLARE
+  manager_role_id uuid;
+  office_manager_role_id uuid;
+  office_policy_id uuid := '00000000-0000-4000-8000-000000000203'::uuid;
+BEGIN
+  SELECT id INTO manager_role_id
+  FROM directus_roles
+  WHERE name = 'Менеджер'
+  ORDER BY id
+  LIMIT 1;
+
+  SELECT id INTO office_manager_role_id
+  FROM directus_roles
+  WHERE name = 'Офис-менеджер'
+  ORDER BY id
+  LIMIT 1;
+
+  IF manager_role_id IS NULL THEN
+    RAISE EXCEPTION 'Cannot consolidate roles: Directus role "Менеджер" was not found';
+  END IF;
+
+  IF office_manager_role_id IS NOT NULL THEN
+    UPDATE directus_users
+    SET role = manager_role_id
+    WHERE role = office_manager_role_id;
+
+    UPDATE directus_roles
+    SET parent = manager_role_id
+    WHERE parent = office_manager_role_id;
+
+    UPDATE directus_settings
+    SET public_registration_role = manager_role_id
+    WHERE public_registration_role = office_manager_role_id;
+
+    DELETE FROM directus_roles
+    WHERE id = office_manager_role_id;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM directus_policies WHERE id = office_policy_id)
+     AND NOT EXISTS (
+       SELECT 1
+       FROM directus_access
+       WHERE role = manager_role_id
+         AND policy = office_policy_id
+         AND "user" IS NULL
+     ) THEN
+    INSERT INTO directus_access (id, role, "user", policy, sort)
+    VALUES (gen_random_uuid(), manager_role_id, NULL, office_policy_id, 2);
+  END IF;
+END;
+$$;
 
 COMMIT;
 
