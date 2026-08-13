@@ -471,7 +471,7 @@ const moduleSections = {
   },
   orders: {
     title: 'Заказы',
-    tabs: ['dashboard', 'events', 'problems', 'search', 'all_orders', 'deadlines', 'my_orders', 'estimates', 'clients', 'companies', 'finance', 'client_operations', 'gift_certificates', 'office'],
+    tabs: ['dashboard', 'events', 'problems', 'search', 'all_orders', 'my_orders', 'estimates', 'clients', 'companies', 'finance', 'client_operations', 'gift_certificates', 'office'],
     roles: ['Administrator', 'Управляющий', 'Менеджер', 'Офис-менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
   },
   tasks: {
@@ -1307,7 +1307,7 @@ export const CostingModule = {
     },
 
     availableTabs() {
-      const workTabs = ['profile', 'dashboard', 'queue', 'tasks', 'tasks_archive', 'events', 'problems', 'search', 'deadlines'];
+      const workTabs = ['profile', 'dashboard', 'queue', 'tasks', 'tasks_archive', 'events', 'problems', 'search'];
       const withWorkTabs = (ids) => tabs.filter((tab) => workTabs.includes(tab.id) || ids.includes(tab.id));
       let roleTabs = [];
       if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) roleTabs = tabs;
@@ -1694,7 +1694,7 @@ export const CostingModule = {
       const groups = [
         { title: 'Личный кабинет', tabs: ['profile'] },
         { title: 'Работа', tabs: ['dashboard', 'queue', 'tasks', 'tasks_archive', 'events', 'problems', 'search'] },
-        { title: 'Заказы', tabs: ['all_orders', 'deadlines', 'my_orders', 'estimates'] },
+        { title: 'Заказы', tabs: ['all_orders', 'my_orders', 'estimates'] },
         { title: 'Клиенты и расчёты', tabs: ['clients', 'companies', 'finance', 'client_operations', 'gift_certificates'] },
         { title: 'Работа контрагента', tabs: ['contractor_work'] },
         { title: 'Производство', tabs: ['production', 'screen', 'labels'] },
