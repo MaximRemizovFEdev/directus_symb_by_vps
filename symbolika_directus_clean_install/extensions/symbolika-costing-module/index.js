@@ -736,15 +736,15 @@ const adminConfigs = {
         { value: 'merch', text: 'Сувенирка' },
         { value: 'general', text: 'Общее' },
       ] },
-      { key: 'supplier', label: 'Поставщик из справочника', type: 'relation', options: 'contractors' },
-      { key: 'purchase_source_type', label: 'Где покупаем', type: 'select', choices: [
+      { key: 'supplier', label: 'Поставщик', type: 'relation', options: 'contractors', allowOther: true },
+      { key: 'purchase_source_type', label: 'Где покупаем', type: 'select', formHidden: true, choices: [
         { value: 'supplier', text: 'Поставщик' },
         { value: 'marketplace', text: 'Маркетплейс' },
         { value: 'online_store', text: 'Интернет-магазин' },
         { value: 'retail_store', text: 'Розничный магазин' },
         { value: 'other', text: 'Другое' },
       ] },
-      { key: 'purchase_place', label: 'Название магазина / площадки', type: 'text', wide: true },
+      { key: 'purchase_place', label: 'Название поставщика', type: 'text', wide: true, showWhen: { field: 'supplier', value: '__other__' } },
       { key: 'product_url', label: 'Ссылка на товар (необязательно)', type: 'text', wide: true },
       { key: 'quantity', label: 'Кол-во', type: 'number' },
       { key: 'unit', label: 'Ед.', type: 'text' },
@@ -1357,7 +1357,12 @@ export const CostingModule = {
     activeAdminFormColumns() {
       if (!this.activeAdminConfig) return [];
       const isNew = this.adminEditing === 'new';
-      return this.activeAdminConfig.columns.filter((column) => isNew || !column.createOnly);
+      return this.activeAdminConfig.columns.filter((column) => {
+        if (column.formHidden) return false;
+        if (!isNew && column.createOnly) return false;
+        if (column.showWhen && String(this.adminForm[column.showWhen.field] ?? '') !== String(column.showWhen.value)) return false;
+        return true;
+      });
     },
 
     activeAdminRows() {
@@ -6606,7 +6611,7 @@ export const CostingModule = {
         return {
           request_type: 'consumable',
           request_source: 'employee_request',
-          purchase_source_type: 'marketplace',
+          purchase_source_type: 'supplier',
           section: section || 'general',
           status: 'need_order',
           unit: 'шт.',
@@ -6642,6 +6647,12 @@ export const CostingModule = {
       const config = this.activeAdminConfig;
       return Object.fromEntries(config.columns.map((column) => {
         const value = row?.[column.key];
+        if (
+          config.collection === 'procurement_requests'
+          && column.key === 'supplier'
+          && !this.entityId(value)
+          && String(row?.purchase_place || '').trim()
+        ) return [column.key, '__other__'];
         if (column.type === 'relation') return [column.key, this.entityId(value)];
         if (column.type === 'boolean') return [column.key, value !== false];
         if (['number', 'money'].includes(column.type)) return [column.key, value ?? ''];
@@ -6658,7 +6669,7 @@ export const CostingModule = {
         if (column.createOnly && this.adminEditing !== 'new') return;
         if (config.collection === 'procurement_requests' && column.key === 'status' && !this.canManageProcurementStatus) return;
         let value = this.adminForm[column.key];
-        if (column.type === 'relation') value = value ? value : null;
+        if (column.type === 'relation') value = value && value !== '__other__' ? value : null;
         if (['number', 'money'].includes(column.type)) value = value === '' || value === null ? null : Number(value);
         if (column.type === 'boolean') value = !!value;
         payload[column.key] = value;
@@ -6722,19 +6733,28 @@ export const CostingModule = {
         this.error = 'Выберите клиента или компанию.';
         return;
       }
-      if (config.collection === 'procurement_requests' && !payload.supplier && !String(payload.purchase_place || '').trim()) {
-        this.error = 'Выберите поставщика или укажите магазин / маркетплейс.';
-        return;
-      }
       if (config.collection === 'procurement_requests') {
+        const usesOtherSupplier = this.adminForm.supplier === '__other__';
+        if (!payload.supplier && !usesOtherSupplier) {
+          this.error = 'Выберите поставщика.';
+          return;
+        }
+        if (usesOtherSupplier && !String(payload.purchase_place || '').trim()) {
+          this.error = 'Укажите название поставщика.';
+          return;
+        }
         payload.purchase_place = String(payload.purchase_place || '').trim() || null;
         payload.product_url = String(payload.product_url || '').trim() || null;
         payload.comment = String(payload.comment || '').trim() || null;
         if (payload.product_url && !/^https?:\/\//i.test(payload.product_url)) {
           payload.product_url = `https://${payload.product_url}`;
         }
-        if (payload.supplier && !payload.purchase_place) payload.purchase_source_type = 'supplier';
-        if (!payload.supplier && payload.purchase_source_type === 'supplier') payload.purchase_source_type = 'other';
+        if (payload.supplier) {
+          payload.purchase_source_type = 'supplier';
+          payload.purchase_place = null;
+        } else {
+          payload.purchase_source_type = 'other';
+        }
       }
       if (config.collection === 'contractors') {
         const rawWebsite = String(payload.website_url || '').trim();
@@ -24980,6 +25000,7 @@ export const CostingModule = {
                 <option v-for="option in adminOptions(column.options)" :key="option.id" :value="option.id">
                   {{ adminOptionLabel(option) }}
                 </option>
+                <option v-if="column.allowOther" value="__other__">Другой</option>
               </select>
               <select
                 v-else-if="column.type === 'select'"
