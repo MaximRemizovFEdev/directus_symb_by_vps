@@ -332,7 +332,15 @@ export default ({ filter, action }, { database, logger, env }) => {
   async function sendVkMessage(channel, message) {
     const token = env?.SYMBOLIKA_VK_TOKEN;
     const peerId = getVkPeerId(channel);
-    if (!token || !peerId || !message) return;
+    if (!token || !peerId || !message) {
+      logger.warn({
+        channel,
+        tokenConfigured: Boolean(token),
+        peerConfigured: Boolean(peerId),
+        messageConfigured: Boolean(message),
+      }, '[Symbolika VK] send skipped: incomplete configuration');
+      return false;
+    }
 
     try {
       const body = new URLSearchParams({
@@ -355,9 +363,13 @@ export default ({ filter, action }, { database, logger, env }) => {
           channel,
           error: payload?.error || response.statusText,
         }, '[Symbolika VK] send failed');
+        return false;
       }
+
+      return true;
     } catch (error) {
-      logger.warn(error);
+      logger.warn({ channel, error: error?.message || error }, '[Symbolika VK] send failed');
+      return false;
     }
   }
 
@@ -909,6 +921,27 @@ export default ({ filter, action }, { database, logger, env }) => {
     );
   }
 
+  async function notifyManagerItemSentToWork(item, prevItem = null) {
+    if (!item?.id || !isItemVisibleForWork(item) || isItemVisibleForWork(prevItem)) return;
+
+    const order = item.order
+      ? await database('orders').where({ id: item.order }).select('id', 'order_number', 'manager_employee').first()
+      : null;
+    const managerEmployee = item.manager_employee || order?.manager_employee;
+    if (!managerEmployee) return;
+
+    const orderLabel = order?.order_number || (order?.id ? `#${order.id}` : await getOrderLabel(item.order));
+    const productName = item.product_name || `#${item.id}`;
+    await notifyManager(
+      managerEmployee,
+      `\u041f\u043e\u0437\u0438\u0446\u0438\u044f \u0437\u0430\u043f\u0443\u0449\u0435\u043d\u0430 \u0432 \u0440\u0430\u0431\u043e\u0442\u0443: ${orderLabel}`,
+      `\u041f\u043e\u0437\u0438\u0446\u0438\u044f \u00ab${productName}\u00bb \u043f\u0435\u0440\u0435\u0434\u0430\u043d\u0430 \u0432 \u0440\u0430\u0431\u043e\u0442\u0443.`,
+      'orders_items',
+      item.id,
+      'item_status'
+    );
+  }
+
   function contractorMatches(contractorName, pattern) {
     return String(contractorName || '').toLowerCase().includes(pattern);
   }
@@ -1017,10 +1050,18 @@ export default ({ filter, action }, { database, logger, env }) => {
       'production'
     );
 
-    await sendVkMessage(
+    const vkSent = await sendVkMessage(
       target.vkChannel,
       `${subject}\n\n${message}`
     );
+
+    // The marker is a delivery lock. If VK rejected the message, remove it so
+    // the next synchronization can retry instead of silently losing the task.
+    if (!vkSent) {
+      await database('symbolika_work_assignment_notifications')
+        .where({ item: item.id, channel: target.vkChannel })
+        .delete();
+    }
   }
 
   async function notifyNewProductionAssignments(item, prevItem = null) {
@@ -1834,10 +1875,19 @@ export default ({ filter, action }, { database, logger, env }) => {
 
       const orderId = await recalcItem(key);
       const item = await database('orders_items').where({ id: key }).first();
+      const orderBeforeRecalc = orderId
+        ? await database('orders').where({ id: orderId }).first()
+        : null;
       await syncDesignerTask(item);
       await notifyNewProductionAssignments(item);
       await notifyLayoutRevisionIfNeeded(item);
       await recalcOrder(orderId);
+      const orderAfterRecalc = orderId
+        ? await database('orders').where({ id: orderId }).first()
+        : null;
+      const orderStatusChanged = String(orderBeforeRecalc?.order_status || '') !== String(orderAfterRecalc?.order_status || '');
+      await notifyOrderStatusChanged(orderAfterRecalc, orderBeforeRecalc);
+      if (!orderStatusChanged) await notifyManagerItemSentToWork(item);
       await notifyCustomerOrderReady(orderId);
     } catch (error) {
       logger.error(error);
@@ -1858,10 +1908,19 @@ export default ({ filter, action }, { database, logger, env }) => {
 
         const orderId = await recalcItem(key, prevItem);
         const item = await database('orders_items').where({ id: key }).first();
+        const orderBeforeRecalc = orderId
+          ? await database('orders').where({ id: orderId }).first()
+          : null;
         await syncDesignerTask(item, prevItem);
         await notifyNewProductionAssignments(item, prevItem);
         await notifyLayoutRevisionIfNeeded(item, prevItem);
         await recalcOrder(orderId);
+        const orderAfterRecalc = orderId
+          ? await database('orders').where({ id: orderId }).first()
+          : null;
+        const orderStatusChanged = String(orderBeforeRecalc?.order_status || '') !== String(orderAfterRecalc?.order_status || '');
+        await notifyOrderStatusChanged(orderAfterRecalc, orderBeforeRecalc);
+        if (!orderStatusChanged) await notifyManagerItemSentToWork(item, prevItem);
         await notifyCustomerOrderReady(orderId);
       }
     } catch (error) {
