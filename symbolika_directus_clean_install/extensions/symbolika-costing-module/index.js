@@ -13866,13 +13866,13 @@ export const CostingModule = {
         .symbolika-costing-position-row {
           display: grid;
           grid-template-columns:
-            minmax(260px, 1.65fr)
+            minmax(160px, .9fr)
+            72px
+            146px
             78px
-            168px
-            92px
-            92px
-            112px
-            repeat(3, minmax(0, 1fr));
+            90px
+            104px
+            repeat(3, minmax(118px, 1fr));
           gap: 8px;
           align-items: center;
           border: 1px solid color-mix(in srgb, var(--theme--border-color) 72%, transparent);
@@ -13883,14 +13883,14 @@ export const CostingModule = {
 
         .symbolika-costing-position-row.has-send-work {
           grid-template-columns:
-            minmax(240px, 1.55fr)
+            minmax(140px, .75fr)
+            72px
+            146px
             78px
-            168px
-            92px
-            92px
-            112px
-            repeat(3, minmax(0, 1fr))
-            minmax(132px, 152px);
+            90px
+            104px
+            repeat(3, minmax(112px, 1fr))
+            minmax(158px, 176px);
         }
 
         .symbolika-costing-position-row-clickable {
@@ -14067,11 +14067,20 @@ export const CostingModule = {
         .symbolika-costing-position-status-select {
           inline-size: 100%;
           min-inline-size: 0;
-          block-size: 30px !important;
-          border-radius: 8px !important;
-          padding-inline: 9px 25px !important;
-          font-size: 10.5px !important;
-          line-height: 30px !important;
+          block-size: 32px !important;
+          border-radius: 9px !important;
+          padding-inline: 10px 28px !important;
+          box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 14%, transparent);
+          font-size: 11px !important;
+          font-weight: 850 !important;
+          line-height: 32px !important;
+          transition: border-color .15s ease, background .15s ease, box-shadow .15s ease;
+        }
+
+        .symbolika-costing-position-status-select:hover,
+        .symbolika-costing-position-status-select:focus-visible {
+          border-color: color-mix(in srgb, currentColor 62%, var(--theme--border-color)) !important;
+          box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 24%, transparent);
         }
 
         .symbolika-costing-table-items-archive .symbolika-costing-archive-position-main {
@@ -14625,14 +14634,14 @@ export const CostingModule = {
           display: inline-flex;
           inline-size: 100%;
           min-inline-size: 0;
-          block-size: 30px;
+          block-size: 32px;
           align-items: center;
           justify-content: center;
           gap: 4px;
           overflow: hidden;
           padding: 0 8px;
-          border-radius: 8px;
-          font-size: 10.5px;
+          border-radius: 9px;
+          font-size: 11px;
           line-height: 1;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -17003,13 +17012,13 @@ export const CostingModule = {
           gap: 8px;
         }
 
-        @media (max-width: 1100px) {
+        @media (max-width: 1380px) {
           .symbolika-costing-position-row {
-            grid-template-columns: minmax(180px, 1fr) 78px 168px 92px 92px 112px;
+            grid-template-columns: minmax(140px, 1fr) 72px 146px 78px 90px 104px;
           }
 
           .symbolika-costing-position-row.has-send-work {
-            grid-template-columns: minmax(180px, 1fr) 78px 168px 92px 92px 112px;
+            grid-template-columns: minmax(140px, 1fr) 72px 146px 78px 90px 104px;
           }
 
           .symbolika-costing-position-statuses {
