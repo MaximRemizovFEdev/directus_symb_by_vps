@@ -13836,5 +13836,64 @@ SET options = jsonb_set(
 WHERE collection IN ('orders_items', 'production_work', 'screen_printing_work')
   AND field = 'item_status';
 
+-- Canonical permissions for employees who combine workshop work with their
+-- own sales. Directus combines permission rows from the same policy, so old
+-- overlapping rows could expose a foreign order through orders/orders_items.
+-- Own orders use the regular manager boundary. Foreign routed positions are
+-- available only through the narrow work collections below.
+DELETE FROM directus_permissions
+WHERE policy IN (
+    '00000000-0000-4000-8000-000000000204',
+    '00000000-0000-4000-8000-000000000206'
+  )
+  AND collection IN (
+    'orders', 'orders_items', 'production_work', 'screen_printing_work'
+  );
+
+WITH workshop_sales_policies(policy) AS (
+  VALUES
+    ('00000000-0000-4000-8000-000000000204'::uuid),
+    ('00000000-0000-4000-8000-000000000206'::uuid)
+), own_order_permissions(collection, action, permissions, validation, presets, fields) AS (
+  VALUES
+    ('orders', 'create', '{}'::json, NULL::json, NULL::json,
+      'date,deadline,customer,customer_company,order_status,comment,shipping_method,shipping_comment,payment_type,order_items,payment_on_receipt,office_status,order_number,manager_employee'),
+    ('orders', 'read', '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json, NULL::json, NULL::json,
+      'id,order_number,date,deadline,manager_employee,customer,customer_company,order_status,comment,shipping_method,shipping_comment,order_sum,paid_amount,payment_due,office_payment_due,payment_type,order_items,payments,payment_on_receipt,office_status'),
+    ('orders', 'update', '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json, NULL::json, NULL::json,
+      'date,deadline,customer,customer_company,order_status,comment,shipping_method,shipping_comment,payment_type,order_items,payment_on_receipt,office_status'),
+    ('orders_items', 'create', '{}'::json,
+      '{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}'::json,
+      '{"production_status":7}'::json,
+      'order,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url'),
+    ('orders_items', 'read', '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json, NULL::json, NULL::json,
+      'id,order,order_link,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,production_status,deadline,production_comment,technical_task_text,manager_employee,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url,layout_revision_url_snapshot,layout_disk_path,layout_disk_name,layout_disk_size,layout_disk_mime_type,layout_disk_uploaded_at,layout_preview_url,layout_preview_disk_path,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at'),
+    ('orders_items', 'update', '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,
+      '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json, NULL::json,
+      'product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url'),
+    ('orders_items', 'delete',
+      '{"_and":[{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}},{"item_status":{"_in":["new","approval"]}}]}'::json,
+      NULL::json, NULL::json, '*')
+)
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+SELECT permission.collection, permission.action, permission.permissions,
+       permission.validation, permission.presets, permission.fields, policy.policy
+FROM workshop_sales_policies policy
+CROSS JOIN own_order_permissions permission;
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy) VALUES
+  ('production_work', 'read', '{}'::json, NULL, NULL,
+    'id,order,order_link,manager_employee,product_name,quantity,date,deadline,item_status,office_status,technical_task_text,production_comment,url,production_status',
+    '00000000-0000-4000-8000-000000000204'),
+  ('production_work', 'update', '{}'::json, NULL, NULL,
+    'production_status,production_comment',
+    '00000000-0000-4000-8000-000000000204'),
+  ('screen_printing_work', 'read', '{}'::json, NULL, NULL,
+    'id,order,order_link,manager_employee,product_name,quantity,date,deadline,item_status,office_status,technical_task_text,production_comment,url,production_status',
+    '00000000-0000-4000-8000-000000000206'),
+  ('screen_printing_work', 'update', '{}'::json, NULL, NULL,
+    'production_status,production_comment',
+    '00000000-0000-4000-8000-000000000206');
+
 COMMIT;
 

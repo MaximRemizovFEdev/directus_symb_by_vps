@@ -99,6 +99,28 @@ export default {
       return null;
     };
 
+    const assertCanReadOrderItem = async (itemId, accountability, schema) => {
+      const itemService = new services.ItemsService('orders_items', { schema, accountability });
+      try {
+        await itemService.readOne(itemId, { fields: ['id'] });
+        return;
+      } catch (directError) {
+        // Production roles intentionally have no direct access to a foreign
+        // orders_items row. The dedicated work collection is their scoped,
+        // read-only proof that this routed position belongs to their workshop.
+        for (const collection of ['production_work', 'screen_printing_work']) {
+          try {
+            const workService = new services.ItemsService(collection, { schema, accountability });
+            await workService.readOne(itemId, { fields: ['id'] });
+            return;
+          } catch {
+            // Try the other workshop view before returning the original error.
+          }
+        }
+        throw directError;
+      }
+    };
+
     const requestYandex = async (path, options = {}) => {
       if (!token) throw apiError('Интеграция с Яндекс Диском не настроена.', 503);
       const url = new URL(`${API_ROOT}${path}`);
@@ -160,8 +182,7 @@ export default {
         const itemId = Number(req.params.id);
         if (!Number.isInteger(itemId) || itemId <= 0) throw apiError('Некорректная позиция заказа.', 400);
         const schema = await getSchema();
-        const itemService = new services.ItemsService('orders_items', { schema, accountability: req.accountability });
-        await itemService.readOne(itemId, { fields: ['id'] });
+        await assertCanReadOrderItem(itemId, req.accountability, schema);
         const rows = await database('order_item_attachments')
           .where('order_item', itemId)
           .select('id', 'order_item', 'attachment_type', 'title', 'url', 'disk_path', 'file_name', 'file_size', 'mime_type', 'uploaded_by', 'date_created')

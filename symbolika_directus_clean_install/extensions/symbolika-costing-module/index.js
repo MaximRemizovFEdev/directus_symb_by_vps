@@ -6,6 +6,7 @@
   'date',
   'customer.name',
   'customer_company.name',
+  'manager_employee.id',
   'manager_employee.full_name',
   'product_name',
   'quantity',
@@ -45,6 +46,7 @@ const workFields = [
   'deadline',
   'customer.name',
   'customer_company.name',
+  'manager_employee.id',
   'manager_employee.full_name',
   'product_name',
   'quantity',
@@ -60,6 +62,28 @@ const workFields = [
   'contractor_1.supplies_textile_blanks',
   'contractor_1.supplies_merch_blanks',
   'contractor_1_cost',
+  'item_status',
+  'office_status',
+  'technical_task_text',
+  'url',
+  'production_status.id',
+  'production_status.name',
+  'production_comment',
+];
+
+// Foreign workshop assignments are intentionally loaded from the dedicated
+// work collections. Never request commercial, contractor or routing fields for
+// them: a production employee only needs the assignment and their own status.
+const limitedWorkFields = [
+  'id',
+  'order',
+  'order_link',
+  'date',
+  'deadline',
+  'manager_employee.id',
+  'manager_employee.full_name',
+  'product_name',
+  'quantity',
   'item_status',
   'office_status',
   'technical_task_text',
@@ -5283,6 +5307,10 @@ export const CostingModule = {
     async hydrateOrderItemDetailRow(row) {
       const itemId = this.entityId(row?.order_item) || row?.id;
       if (!itemId) return row;
+      // The work row is the complete security boundary for somebody else's
+      // order. A direct orders_items request would either leak manager fields
+      // or fail because the role correctly has no access to that source row.
+      if (this.isLimitedProductionItem(row)) return row;
       try {
         const managerFields = [
           'id',
@@ -5345,6 +5373,20 @@ export const CostingModule = {
     },
 
     async openDetail(type, row, options = {}) {
+      if (this.isProductionWorkerRole() && this.detailIsOrder(row) && !this.orderBelongsToCurrentEmployee(row)) {
+        this.error = 'Чужой заказ целиком недоступен. Откройте назначенную вашему участку позицию.';
+        return;
+      }
+      if (this.isProductionWorkerRole() && type === 'orders_items' && !this.orderBelongsToCurrentEmployee(row)) {
+        const source = this.currentRoleName === 'Шелкография' ? this.screenRows : this.productionRows;
+        const itemId = Number(this.entityId(row?.order_item) || row?.id || 0);
+        const assignedRow = source.find((item) => Number(item.id) === itemId);
+        if (!assignedRow) {
+          this.error = 'Эта позиция не назначена вашему участку.';
+          return;
+        }
+        row = assignedRow;
+      }
       if (this.detailIsOrder(row) && this.currentRoleName === 'Менеджер') {
         const orderId = Number(this.entityId(this.orderId(row)) || 0);
         const allowedOrder = orderId ? await this.findLinkedOrder(orderId) : null;
@@ -5422,6 +5464,14 @@ export const CostingModule = {
     async loadDetailOrderItems(row) {
       const orderId = this.entityId(this.orderId(row));
       if (!orderId) return;
+
+      // A foreign routed item may be opened, but the parent order and its other
+      // positions must not be enumerated from the production interface.
+      if (this.isLimitedProductionItem(row)) {
+        this.detailOrderItems = row?.product_name ? [row] : [];
+        this.detailOrderItemsOrderId = orderId;
+        return;
+      }
 
       this.detailItemsLoading = true;
       try {
@@ -7676,7 +7726,7 @@ export const CostingModule = {
     async loadWorkRows(collection) {
       try {
         const params = new URLSearchParams();
-        params.set('fields', workFields.join(','));
+        params.set('fields', (this.isProductionWorkerRole() ? limitedWorkFields : workFields).join(','));
         params.set('sort', 'deadline,date,order,product_name,id');
         await this.loadPagedCollection(collection, `/items/${collection}`, params, (rows, append) => {
           if (collection === 'production_work') this.productionRows = append ? this.mergePagedRows(this.productionRows, rows) : rows;
@@ -30752,8 +30802,6 @@ export default {
     },
   ],
 };
-
-
 
 
 
