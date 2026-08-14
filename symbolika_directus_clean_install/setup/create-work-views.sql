@@ -13915,5 +13915,99 @@ INSERT INTO directus_permissions (collection, action, permissions, validation, p
     'production_status,production_comment',
     '00000000-0000-4000-8000-000000000206');
 
+-- Counterparty proposals. Operational users may submit a compact counterparty
+-- card, but only an administrator can approve it for regular dictionaries,
+-- routing and procurement supplier pickers.
+ALTER TABLE contractors ADD COLUMN IF NOT EXISTS approval_status varchar(32) NOT NULL DEFAULT 'approved';
+ALTER TABLE contractors ADD COLUMN IF NOT EXISTS proposed_by_employee integer REFERENCES employees(id) ON DELETE SET NULL;
+ALTER TABLE contractors ADD COLUMN IF NOT EXISTS proposed_by_user uuid REFERENCES directus_users(id) ON DELETE SET NULL;
+ALTER TABLE contractors ADD COLUMN IF NOT EXISTS approved_by_employee integer REFERENCES employees(id) ON DELETE SET NULL;
+ALTER TABLE contractors ADD COLUMN IF NOT EXISTS approved_at timestamptz;
+ALTER TABLE contractors ADD COLUMN IF NOT EXISTS approval_comment text;
+
+UPDATE contractors
+SET approval_status = 'approved'
+WHERE approval_status IS NULL
+   OR approval_status NOT IN ('pending', 'approved', 'rejected');
+
+UPDATE contractors
+SET supplier_kind = 'contractor'
+WHERE supplier_kind IS NULL
+   OR supplier_kind NOT IN ('contractor', 'blank_supplier', 'consumables_supplier', 'both');
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'contractors_approval_status_valid'
+  ) THEN
+    ALTER TABLE contractors
+      ADD CONSTRAINT contractors_approval_status_valid
+      CHECK (approval_status IN ('pending', 'approved', 'rejected'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'contractors_supplier_kind_valid'
+  ) THEN
+    ALTER TABLE contractors
+      ADD CONSTRAINT contractors_supplier_kind_valid
+      CHECK (supplier_kind IN ('contractor', 'blank_supplier', 'consumables_supplier', 'both'));
+  END IF;
+END $$;
+
+DELETE FROM directus_fields
+WHERE collection = 'contractors'
+  AND field IN ('approval_status', 'proposed_by_employee', 'proposed_by_user', 'approved_by_employee', 'approved_at', 'approval_comment');
+
+INSERT INTO directus_fields (
+  collection, field, special, interface, display, readonly, hidden, width, translations
+) VALUES
+  ('contractors', 'approval_status', NULL, 'select-dropdown', 'labels', false, false, 'half',
+    json_build_array(json_build_object('language','ru-RU','translation','Статус согласования'))::json),
+  ('contractors', 'proposed_by_employee', 'm2o', 'select-dropdown-m2o', 'related-values', true, false, 'half',
+    json_build_array(json_build_object('language','ru-RU','translation','Предложил сотрудник'))::json),
+  ('contractors', 'proposed_by_user', 'm2o', 'select-dropdown-m2o', 'related-values', true, true, 'half',
+    json_build_array(json_build_object('language','ru-RU','translation','Предложил пользователь'))::json),
+  ('contractors', 'approved_by_employee', 'm2o', 'select-dropdown-m2o', 'related-values', true, false, 'half',
+    json_build_array(json_build_object('language','ru-RU','translation','Согласовал сотрудник'))::json),
+  ('contractors', 'approved_at', NULL, 'datetime', 'datetime', true, false, 'half',
+    json_build_array(json_build_object('language','ru-RU','translation','Дата согласования'))::json),
+  ('contractors', 'approval_comment', NULL, 'input-multiline', 'formatted-value', false, false, 'full',
+    json_build_array(json_build_object('language','ru-RU','translation','Комментарий согласования'))::json);
+
+UPDATE directus_fields
+SET options = '{"choices":[{"text":"На согласовании","value":"pending"},{"text":"Одобрен","value":"approved"},{"text":"Отклонён","value":"rejected"}]}'::json
+WHERE collection = 'contractors' AND field = 'approval_status';
+
+DELETE FROM directus_relations
+WHERE many_collection = 'contractors'
+  AND many_field IN ('proposed_by_employee', 'proposed_by_user', 'approved_by_employee');
+
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_deselect_action) VALUES
+  ('contractors', 'proposed_by_employee', 'employees', 'nullify'),
+  ('contractors', 'proposed_by_user', 'directus_users', 'nullify'),
+  ('contractors', 'approved_by_employee', 'employees', 'nullify');
+
+DELETE FROM directus_permissions
+WHERE policy = '00000000-0000-4000-8000-000000000209'
+  AND collection = 'contractors';
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy) VALUES
+  ('contractors', 'read', '{}'::json, NULL, NULL,
+    'id,name,contact_name,phone,email,website_url,city,supplier_kind,supplies_textile_blanks,supplies_merch_blanks,approval_status,proposed_by_employee,comment',
+    '00000000-0000-4000-8000-000000000209'),
+  ('contractors', 'create', '{}'::json,
+    '{"_and":[{"approval_status":{"_eq":"pending"}},{"proposed_by_user":{"_eq":"$CURRENT_USER"}}]}'::json,
+    '{"approval_status":"pending","proposed_by_user":"$CURRENT_USER"}'::json,
+    'name,contact_name,phone,email,website_url,city,supplier_kind,supplies_textile_blanks,supplies_merch_blanks,comment,approval_status,proposed_by_employee,proposed_by_user',
+    '00000000-0000-4000-8000-000000000209');
+
+-- Existing narrow role grants must include the classification and approval
+-- fields used by the shared procurement form.
+UPDATE directus_permissions
+SET fields = fields || ',supplier_kind,approval_status,proposed_by_employee'
+WHERE collection = 'contractors'
+  AND action = 'read'
+  AND fields <> '*'
+  AND position('supplier_kind' in fields) = 0;
+
 COMMIT;
 

@@ -245,6 +245,9 @@ const contractorFields = [
   'debt_to_contractor',
   'contractor_debt_to_us',
   'has_own_view',
+  'supplier_kind',
+  'approval_status',
+  'proposed_by_employee',
 ];
 
 const expenseFields = [
@@ -676,7 +679,7 @@ const adminConfigs = {
     endpoint: '/items/contractors',
     title: 'Контрагенты',
     sort: 'name',
-    fields: 'id,name,contact_name,phone,email,website_url,city,pickup_address,default_delivery_method,default_transport_company,default_pickup_days,pickup_notes,supplier_kind,default_product_category,default_product_subcategory,supplies_textile_blanks,supplies_merch_blanks,is_internal_production,has_own_view,directus_user,comment',
+    fields: 'id,name,contact_name,phone,email,website_url,city,pickup_address,default_delivery_method,default_transport_company,default_pickup_days,pickup_notes,supplier_kind,default_product_category,default_product_subcategory,supplies_textile_blanks,supplies_merch_blanks,is_internal_production,has_own_view,directus_user,comment,approval_status,proposed_by_employee,approved_by_employee,approved_at,approval_comment',
     tableColumns: [
       { key: 'name', label: 'Название', type: 'text' },
       { key: 'contact_name', label: 'Контакт', type: 'text' },
@@ -688,6 +691,12 @@ const adminConfigs = {
         { value: 'consumables_supplier', text: 'Расходка' },
         { value: 'both', text: 'Подрядчик + поставщик' },
       ] },
+      { key: 'approval_status', label: 'Согласование', type: 'select', choices: [
+        { value: 'pending', text: 'На согласовании' },
+        { value: 'approved', text: 'Одобрен' },
+        { value: 'rejected', text: 'Отклонён' },
+      ] },
+      { key: 'proposed_by_employee', label: 'Предложил', type: 'relation', options: 'employees' },
       { key: 'supplies_textile_blanks', label: 'Текстиль', type: 'boolean' },
       { key: 'supplies_merch_blanks', label: 'Сувенирка', type: 'boolean' },
       { key: 'is_internal_production', label: 'Собственное производство', type: 'boolean' },
@@ -705,6 +714,12 @@ const adminConfigs = {
         { value: 'consumables_supplier', text: 'Расходка' },
         { value: 'both', text: 'Подрядчик + поставщик' },
       ] },
+      { key: 'approval_status', label: 'Статус согласования', type: 'select', choices: [
+        { value: 'pending', text: 'На согласовании' },
+        { value: 'approved', text: 'Одобрен' },
+        { value: 'rejected', text: 'Отклонён' },
+      ] },
+      { key: 'approval_comment', label: 'Комментарий согласования', type: 'textarea', wide: true },
       { key: 'city', label: 'Город', type: 'text' },
       { key: 'pickup_address', label: 'Адрес / ПВЗ', type: 'text', wide: true },
       { key: 'default_delivery_method', label: 'Получение', type: 'select', choices: [
@@ -797,7 +812,7 @@ const adminConfigs = {
         { value: 'merch', text: 'Сувенирка' },
         { value: 'general', text: 'Общее' },
       ] },
-      { key: 'supplier', label: 'Поставщик', type: 'relation', options: 'contractors', allowOther: true },
+      { key: 'supplier', label: 'Поставщик', type: 'relation', options: 'procurementSuppliers', allowOther: true, allowProposal: true },
       { key: 'purchase_source_type', label: 'Где покупаем', type: 'select', formHidden: true, choices: [
         { value: 'supplier', text: 'Поставщик' },
         { value: 'marketplace', text: 'Маркетплейс' },
@@ -1203,6 +1218,19 @@ export const CostingModule = {
       procurementShowClosed: false,
       adminForm: {},
       adminSaving: false,
+      contractorProposalOpen: false,
+      contractorProposalContext: '',
+      contractorProposalSaving: false,
+      contractorProposalForm: {
+        name: '',
+        supplier_kind: 'contractor',
+        contact_name: '',
+        phone: '',
+        email: '',
+        website_url: '',
+        city: '',
+        comment: '',
+      },
       directusUsers: [],
       directusRoles: [],
       employeePositions: [],
@@ -1466,6 +1494,13 @@ export const CostingModule = {
         : rows;
       if (this.activeTab === 'admin_procurement' && !this.procurementShowClosed) {
         scopedRows = scopedRows.filter((row) => !['received', 'cancelled'].includes(row.status));
+      }
+      if (this.activeTab === 'contractors') {
+        const approvalOrder = { pending: 0, approved: 1, rejected: 2 };
+        scopedRows = [...scopedRows].sort((left, right) => {
+          const statusDiff = (approvalOrder[left.approval_status] ?? 1) - (approvalOrder[right.approval_status] ?? 1);
+          return statusDiff || String(left.name || '').localeCompare(String(right.name || ''), 'ru');
+        });
       }
       if (!query || !['admin', 'production', 'procurement', 'management'].includes(this.moduleSection)) return scopedRows;
       return scopedRows.filter((row) => this.adminRowSearchText(row).includes(query));
@@ -7148,7 +7183,19 @@ export const CostingModule = {
     },
 
     adminOptions(name, row = null) {
-      if (name === 'contractors') return this.contractors;
+      if (name === 'procurementSuppliers') {
+        const selectedId = String(this.entityId(this.adminForm.supplier) || '');
+        return this.contractors.filter((contractor) => {
+          const approved = (contractor.approval_status || 'approved') === 'approved';
+          const supplier = ['blank_supplier', 'consumables_supplier', 'both'].includes(contractor.supplier_kind)
+            || Boolean(contractor.supplies_textile_blanks)
+            || Boolean(contractor.supplies_merch_blanks);
+          return (approved && supplier) || (selectedId && String(contractor.id) === selectedId);
+        });
+      }
+      if (name === 'contractors') {
+        return this.contractors.filter((contractor) => (contractor.approval_status || 'approved') === 'approved');
+      }
       if (name === 'employees') return this.employees;
       if (name === 'customers') return this.customers;
       if (name === 'companies') return this.companies;
@@ -7170,7 +7217,8 @@ export const CostingModule = {
     },
 
     adminOptionLabel(item) {
-      return item?.name || item?.full_name || item?.email || [item?.first_name, item?.last_name].filter(Boolean).join(' ') || item?.id || '-';
+      const label = item?.name || item?.full_name || item?.email || [item?.first_name, item?.last_name].filter(Boolean).join(' ') || item?.id || '-';
+      return item?.approval_status === 'pending' ? `${label} · на согласовании` : label;
     },
 
     adminDisplayValue(row, column) {
@@ -7195,7 +7243,8 @@ export const CostingModule = {
 
     adminRelatedLabel(optionsName, value) {
       const id = this.entityId(value);
-      const option = this.adminOptions(optionsName).find((item) => String(item.id) === String(id));
+      const options = optionsName === 'contractors' ? this.contractors : this.adminOptions(optionsName);
+      const option = options.find((item) => String(item.id) === String(id));
       return this.adminOptionLabel(option) || '-';
     },
 
@@ -7281,6 +7330,114 @@ export const CostingModule = {
       return '';
     },
 
+    openContractorProposal(context = '') {
+      if (!this.currentEmployeeId) {
+        this.error = 'Для предложения контрагента нужна связанная карточка сотрудника.';
+        return;
+      }
+      const requestType = String(this.adminForm.request_type || '');
+      const supplierKind = context === 'procurement'
+        ? (requestType === 'blank' ? 'blank_supplier' : 'consumables_supplier')
+        : 'contractor';
+      this.contractorProposalContext = context;
+      this.contractorProposalForm = {
+        name: '',
+        supplier_kind: supplierKind,
+        contact_name: '',
+        phone: '',
+        email: '',
+        website_url: '',
+        city: '',
+        comment: '',
+      };
+      this.contractorProposalOpen = true;
+    },
+
+    closeContractorProposal() {
+      if (this.contractorProposalSaving) return;
+      this.contractorProposalOpen = false;
+      this.contractorProposalContext = '';
+    },
+
+    async saveContractorProposal() {
+      if (this.contractorProposalSaving) return;
+      const form = this.contractorProposalForm || {};
+      const name = String(form.name || '').trim();
+      if (!name) {
+        this.error = 'Укажите название контрагента.';
+        return;
+      }
+      if (!['contractor', 'blank_supplier', 'consumables_supplier', 'both'].includes(form.supplier_kind)) {
+        this.error = 'Выберите тип контрагента.';
+        return;
+      }
+      const rawWebsite = String(form.website_url || '').trim();
+      const websiteUrl = this.contractorWebsiteUrl(rawWebsite);
+      if (rawWebsite && !websiteUrl) {
+        this.error = 'Укажите корректный адрес сайта.';
+        return;
+      }
+
+      this.contractorProposalSaving = true;
+      this.error = '';
+      try {
+        const response = await this.request('/items/contractors', {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            supplier_kind: form.supplier_kind,
+            contact_name: String(form.contact_name || '').trim() || null,
+            phone: String(form.phone || '').trim() || null,
+            email: String(form.email || '').trim() || null,
+            website_url: websiteUrl || null,
+            city: String(form.city || '').trim() || null,
+            comment: String(form.comment || '').trim() || null,
+            approval_status: 'pending',
+            proposed_by_employee: Number(this.currentEmployeeId),
+            proposed_by_user: this.currentUserId,
+          }),
+        });
+        const created = {
+          ...(response?.data || {}),
+          name,
+          supplier_kind: form.supplier_kind,
+          approval_status: 'pending',
+          proposed_by_employee: Number(this.currentEmployeeId),
+        };
+        if (created.id) {
+          this.contractors = [...this.contractors.filter((item) => Number(item.id) !== Number(created.id)), created];
+          if (this.contractorProposalContext === 'procurement') this.adminForm.supplier = created.id;
+        }
+        this.contractorProposalOpen = false;
+        this.contractorProposalContext = '';
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.contractorProposalSaving = false;
+      }
+    },
+
+    async reviewContractorProposal(row, approvalStatus) {
+      if (!row?.id || !['approved', 'rejected'].includes(approvalStatus) || this.adminSaving) return;
+      this.adminSaving = true;
+      this.error = '';
+      try {
+        await this.request(`/items/contractors/${row.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            approval_status: approvalStatus,
+            approved_by_employee: this.currentEmployeeId ? Number(this.currentEmployeeId) : null,
+            approved_at: new Date().toISOString(),
+          }),
+        });
+        await Promise.all([this.loadAdminData(), this.loadContractors()]);
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.adminSaving = false;
+      }
+    },
+
     adminDefaultValues(config) {
       const section = this.roleWarehouseSection();
       if (config.collection === 'inventory_items' && section) {
@@ -7301,6 +7458,12 @@ export const CostingModule = {
           unit: 'шт.',
           delivery_method: 'unknown',
           responsible_employee: this.currentEmployeeId || '',
+        };
+      }
+      if (config.collection === 'contractors') {
+        return {
+          supplier_kind: 'contractor',
+          approval_status: 'approved',
         };
       }
       if (config.collection === 'customer_operations') {
@@ -7723,7 +7886,7 @@ export const CostingModule = {
 
     async loadContractors() {
       try {
-        const payload = await this.request('/items/contractors?fields=id,name,supplies_textile_blanks,supplies_merch_blanks&sort=name&limit=-1');
+        const payload = await this.request('/items/contractors?fields=id,name,supplier_kind,approval_status,proposed_by_employee,supplies_textile_blanks,supplies_merch_blanks&sort=name&limit=-1');
         this.contractors = payload.data || [];
       } catch (error) {
         this.error = error.message;
@@ -8868,6 +9031,7 @@ export const CostingModule = {
 
     blankSupplierOptions(item) {
       return this.contractors.filter((contractor) => {
+        if ((contractor.approval_status || 'approved') !== 'approved') return false;
         if (this.isTextileBlankItem(item)) return Boolean(contractor.supplies_textile_blanks);
         if (this.isMerchBlankItem(item)) return Boolean(contractor.supplies_merch_blanks);
         return false;
@@ -27240,6 +27404,14 @@ export const CostingModule = {
             <span v-if="procurementCounts.closed" class="symbolika-costing-subtle">
               Завершённых: {{ procurementCounts.closed }}
             </span>
+            <button
+              type="button"
+              class="symbolika-costing-mini-button"
+              @click="openContractorProposal('')"
+            >
+              <v-icon name="person_add" small />
+              Предложить контрагента
+            </button>
           </div>
 
           <div v-if="adminEditing" class="symbolika-costing-admin-form">
@@ -27278,6 +27450,15 @@ export const CostingModule = {
                 </option>
                 <option v-if="column.allowOther" value="__other__">Другой</option>
               </select>
+              <button
+                v-if="column.type === 'relation' && column.allowProposal"
+                type="button"
+                class="symbolika-costing-mini-button"
+                @click.prevent="openContractorProposal('procurement')"
+              >
+                <v-icon name="add_business" small />
+                Новый контрагент
+              </button>
               <select
                 v-else-if="column.type === 'select'"
                 v-model="adminForm[column.key]"
@@ -27482,6 +27663,26 @@ export const CostingModule = {
                         <v-icon name="language" small />
                         Сайт
                       </a>
+                      <button
+                        v-if="activeTab === 'contractors' && row.approval_status === 'pending'"
+                        type="button"
+                        class="symbolika-costing-mini-button"
+                        :disabled="adminSaving"
+                        @click="reviewContractorProposal(row, 'approved')"
+                      >
+                        <v-icon name="check_circle" small />
+                        Одобрить
+                      </button>
+                      <button
+                        v-if="activeTab === 'contractors' && row.approval_status === 'pending'"
+                        type="button"
+                        class="symbolika-costing-mini-button muted"
+                        :disabled="adminSaving"
+                        @click="reviewContractorProposal(row, 'rejected')"
+                      >
+                        <v-icon name="cancel" small />
+                        Отклонить
+                      </button>
                       <button type="button" class="symbolika-costing-mini-button" @click="startAdminEdit(row)">
                         <v-icon name="edit" small />
                         {{ activeTab === 'contractors' ? 'Подробнее' : 'Изменить' }}
@@ -28020,6 +28221,67 @@ export const CostingModule = {
           </table>
 
           <div v-if="!visibleOfficeIssueRows.length" class="symbolika-costing-empty">Нет заказов в выбранном разделе</div>
+        </div>
+
+        <div v-if="contractorProposalOpen" class="symbolika-costing-modal-backdrop" @click.self="closeContractorProposal">
+          <div class="symbolika-costing-modal">
+            <div class="symbolika-costing-modal-head">
+              <div>
+                <div class="symbolika-costing-subtle">Новый контрагент</div>
+                <h2>Отправить на согласование</h2>
+                <p>До одобрения администратором контрагент не появится в рабочих справочниках и маршрутизации.</p>
+              </div>
+              <button type="button" class="symbolika-costing-close" :disabled="contractorProposalSaving" @click="closeContractorProposal">
+                <v-icon name="close" />
+              </button>
+            </div>
+            <div class="symbolika-costing-modal-grid">
+              <label class="symbolika-costing-label symbolika-costing-label-wide">
+                Название *
+                <input v-model="contractorProposalForm.name" class="symbolika-costing-input" type="text" autocomplete="off" />
+              </label>
+              <label class="symbolika-costing-label">
+                Тип контрагента *
+                <select v-model="contractorProposalForm.supplier_kind" class="symbolika-costing-select">
+                  <option value="contractor">Подрядчик</option>
+                  <option value="blank_supplier">Поставщик заготовок</option>
+                  <option value="consumables_supplier">Поставщик расходки</option>
+                  <option value="both">Подрядчик + поставщик</option>
+                </select>
+              </label>
+              <label class="symbolika-costing-label">
+                Контактное лицо
+                <input v-model="contractorProposalForm.contact_name" class="symbolika-costing-input" type="text" autocomplete="off" />
+              </label>
+              <label class="symbolika-costing-label">
+                Телефон
+                <input v-model="contractorProposalForm.phone" class="symbolika-costing-input" type="text" autocomplete="off" />
+              </label>
+              <label class="symbolika-costing-label">
+                Email
+                <input v-model="contractorProposalForm.email" class="symbolika-costing-input" type="email" autocomplete="off" />
+              </label>
+              <label class="symbolika-costing-label">
+                Сайт
+                <input v-model="contractorProposalForm.website_url" class="symbolika-costing-input" type="text" autocomplete="off" />
+              </label>
+              <label class="symbolika-costing-label">
+                Город
+                <input v-model="contractorProposalForm.city" class="symbolika-costing-input" type="text" autocomplete="off" />
+              </label>
+              <label class="symbolika-costing-label symbolika-costing-label-wide">
+                Комментарий для администратора
+                <textarea v-model="contractorProposalForm.comment" class="symbolika-costing-input" rows="3"></textarea>
+              </label>
+            </div>
+            <div class="symbolika-costing-modal-actions">
+              <button type="button" class="symbolika-costing-mini-button" :disabled="contractorProposalSaving" @click="closeContractorProposal">Отмена</button>
+              <button type="button" class="symbolika-costing-button" :disabled="contractorProposalSaving" @click="saveContractorProposal">
+                <v-icon name="send" small />
+                {{ contractorProposalSaving ? 'Отправляю...' : 'Отправить на согласование' }}
+              </button>
+            </div>
+          </div>
         </div>
 
         <div v-if="payslipDialog" class="symbolika-costing-modal-backdrop" @click.self="closePayslipDialog">
