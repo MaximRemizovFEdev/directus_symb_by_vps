@@ -3068,23 +3068,6 @@ export const CostingModule = {
       });
     },
 
-    eventIsVisibleToCurrentUser(event) {
-      if (this.currentRoleName !== 'Менеджер') return true;
-      const currentUser = String(this.currentUserId || '');
-      if (!currentUser) return false;
-      if (String(this.entityId(event.access_manager_user) || '') === currentUser) return true;
-      if (event.order_id) return false;
-      return String(this.entityId(event.task_assigned_user) || '') === currentUser
-        || String(this.entityId(event.task_created_user) || '') === currentUser;
-    },
-
-    // Compatibility for a cached admin bundle that used the earlier plural
-    // method name. Keeping the alias prevents a mixed client/server update from
-    // breaking order and task history until the browser cache is refreshed.
-    eventsVisibleToCurrentUser(event) {
-      return this.eventIsVisibleToCurrentUser(event);
-    },
-
     visibleEventGroups() {
       const groups = new Map();
       this.visibleEventRows.forEach((event) => {
@@ -3277,6 +3260,22 @@ export const CostingModule = {
   },
 
   methods: {
+    eventIsVisibleToCurrentUser(event) {
+      if (this.currentRoleName !== 'Менеджер') return true;
+      const currentUser = String(this.currentUserId || '');
+      if (!currentUser) return false;
+      if (String(this.entityId(event?.access_manager_user) || '') === currentUser) return true;
+      if (event?.order_id) return false;
+      return String(this.entityId(event?.task_assigned_user) || '') === currentUser
+        || String(this.entityId(event?.task_created_user) || '') === currentUser;
+    },
+
+    // Compatibility with clients that still have the earlier plural method
+    // name cached while the updated extension bundle is being activated.
+    eventsVisibleToCurrentUser(event) {
+      return this.eventIsVisibleToCurrentUser(event);
+    },
+
     scheduleSavedMessageClear(field, value) {
       if (this.savedMessageTimers[field]) clearTimeout(this.savedMessageTimers[field]);
       if (!value) {
