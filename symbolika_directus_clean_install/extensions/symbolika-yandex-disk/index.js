@@ -50,6 +50,15 @@ function buildLayoutFileName({ orderDate, customerName, productName, quantity, o
   return cleanSegment(`${date}, ${customer}, ${product} - ${amount}шт`, 'Макет').slice(0, 220 - extension.length) + extension;
 }
 
+function buildAttachmentFileName(context, originalName) {
+  const primaryName = buildLayoutFileName({ ...context, originalName });
+  const extension = fileExtension(primaryName);
+  const stem = primaryName.slice(0, Math.max(0, primaryName.length - extension.length));
+  const originalStem = cleanSegment(String(originalName || '').replace(/\.[^.]+$/, ''), 'Файл').slice(0, 48);
+  const uniquePart = Date.now().toString(36);
+  return cleanSegment(`${stem} - ${originalStem}-${uniquePart}`, 'Материал').slice(0, 220 - extension.length) + extension;
+}
+
 function isManagedOldPath(oldPath, { root, orderFolder, itemFolder }) {
   const value = String(oldPath || '').trim();
   if (!value) return false;
@@ -145,6 +154,174 @@ export default {
       }
     });
 
+    router.get('/orders-items/:id/attachments', async (req, res) => {
+      try {
+        if (!requireUser(req, res)) return;
+        const itemId = Number(req.params.id);
+        if (!Number.isInteger(itemId) || itemId <= 0) throw apiError('Некорректная позиция заказа.', 400);
+        const schema = await getSchema();
+        const itemService = new services.ItemsService('orders_items', { schema, accountability: req.accountability });
+        await itemService.readOne(itemId, { fields: ['id'] });
+        const rows = await database('order_item_attachments')
+          .where('order_item', itemId)
+          .select('id', 'order_item', 'attachment_type', 'title', 'url', 'disk_path', 'file_name', 'file_size', 'mime_type', 'uploaded_by', 'date_created')
+          .orderBy('date_created', 'asc')
+          .orderBy('id', 'asc');
+        return res.json({ data: rows });
+      } catch (error) {
+        logger.error(`[Symbolika Yandex Disk] attachments list: ${error.message}`);
+        return res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось загрузить материалы позиции.' }] });
+      }
+    });
+
+    router.post('/orders-items/:id/attachments/link', async (req, res) => {
+      try {
+        const userId = requireUser(req, res);
+        if (!userId) return;
+        const itemId = Number(req.params.id);
+        if (!Number.isInteger(itemId) || itemId <= 0) throw apiError('Некорректная позиция заказа.', 400);
+        const rawUrl = String(req.body?.url || '').trim();
+        const candidate = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+        let externalUrl = '';
+        try {
+          const parsed = new URL(candidate);
+          if (['http:', 'https:'].includes(parsed.protocol) && parsed.hostname) externalUrl = parsed.href;
+        } catch {
+          externalUrl = '';
+        }
+        if (!externalUrl) throw apiError('Укажите корректную ссылку.', 400);
+
+        const schema = await getSchema();
+        const itemService = new services.ItemsService('orders_items', { schema, accountability: req.accountability });
+        const accessibleItem = await itemService.readOne(itemId, { fields: ['id', 'url'] });
+        // updateOne also enforces edit permissions for the current user.
+        await itemService.updateOne(itemId, { url: accessibleItem.url || externalUrl });
+        const [row] = await database('order_item_attachments').insert({
+          order_item: itemId,
+          attachment_type: 'link',
+          title: String(req.body?.title || '').trim() || null,
+          url: externalUrl,
+          uploaded_by: userId,
+        }).returning(['id', 'order_item', 'attachment_type', 'title', 'url', 'disk_path', 'file_name', 'file_size', 'mime_type', 'uploaded_by', 'date_created']);
+        return res.json({ data: row });
+      } catch (error) {
+        logger.error(`[Symbolika Yandex Disk] attachment link: ${error.message}`);
+        return res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось добавить ссылку.' }] });
+      }
+    });
+
+    router.post('/orders-items/:id/attachments/upload', async (req, res) => {
+      try {
+        const userId = requireUser(req, res);
+        if (!userId) return;
+        if (!token) throw apiError('Интеграция с Яндекс Диском не настроена.', 503);
+        const itemId = Number(req.params.id);
+        if (!Number.isInteger(itemId) || itemId <= 0) throw apiError('Некорректная позиция заказа.', 400);
+        const encodedName = String(req.headers['x-file-name'] || '');
+        let originalName;
+        try { originalName = decodeURIComponent(encodedName); } catch { originalName = encodedName; }
+        const declaredSize = Number(req.headers['x-file-size'] || 0);
+        if (!declaredSize || declaredSize < 0) throw apiError('Не удалось определить размер файла.', 400);
+        if (declaredSize > MAX_FILE_SIZE) throw apiError('Файл больше 2 ГБ. Добавьте ссылку на него.', 413);
+
+        const schema = await getSchema();
+        const itemService = new services.ItemsService('orders_items', { schema, accountability: req.accountability });
+        const accessibleItem = await itemService.readOne(itemId, { fields: ['id', 'url'] });
+        // This is deliberately performed before accepting the stream so a user
+        // with read-only access cannot append files to the position.
+        await itemService.updateOne(itemId, { url: accessibleItem.url || null });
+        const item = await database('orders_items')
+          .where('orders_items.id', itemId)
+          .leftJoin('orders as o', 'o.id', 'orders_items.order')
+          .leftJoin('customers as customer', 'customer.id', 'o.customer')
+          .leftJoin('customer_companies as company', 'company.id', 'o.customer_company')
+          .select(
+            'orders_items.id', 'orders_items.product_name', 'orders_items.quantity',
+            'o.id as order_id', 'o.order_number', 'o.date as order_date',
+            'customer.name as customer_name', 'company.name as company_name',
+          )
+          .first();
+        if (!item) throw apiError('Позиция заказа не найдена.', 404);
+
+        const fileName = buildAttachmentFileName({
+          orderDate: item.order_date,
+          customerName: item.company_name || item.customer_name,
+          productName: item.product_name,
+          quantity: item.quantity,
+        }, originalName);
+        const orderFolder = cleanSegment(item.order_number || `Заказ-${item.order_id}`, `Заказ-${item.order_id}`);
+        const itemFolder = `Позиция-${itemId}`;
+        const folderPath = `${root}/${orderFolder}/${itemFolder}/Материалы`;
+        await ensureFolderTree(folderPath);
+        const diskPath = `${folderPath}/${fileName}`;
+        const upload = await requestYandex('/resources/upload', { query: { path: diskPath, overwrite: false } });
+        if (!upload?.href) throw apiError('Яндекс Диск не вернул адрес загрузки.', 502);
+        const uploadResponse = await fetch(upload.href, {
+          method: upload.method || 'PUT',
+          headers: { 'Content-Type': req.headers['content-type'] || 'application/octet-stream' },
+          body: req,
+          duplex: 'half',
+        });
+        if (!uploadResponse.ok) throw apiError(`Не удалось загрузить файл на Яндекс Диск: HTTP ${uploadResponse.status}.`, 502);
+        if (publishFiles) await requestYandex('/resources/publish', { method: 'PUT', query: { path: diskPath } });
+        const meta = await requestYandex('/resources', {
+          query: { path: diskPath, fields: 'name,path,size,mime_type,public_url,created,modified' },
+        });
+        const link = meta.public_url || '';
+        if (publishFiles && !link) throw apiError('Файл загружен, но публичная ссылка не создана.', 502);
+        if (!accessibleItem.url && link) await itemService.updateOne(itemId, { url: link });
+        const [row] = await database('order_item_attachments').insert({
+          order_item: itemId,
+          attachment_type: 'file',
+          title: originalName || meta.name || fileName,
+          url: link,
+          disk_path: diskPath,
+          file_name: meta.name || fileName,
+          file_size: Number(meta.size || declaredSize),
+          mime_type: meta.mime_type || req.headers['content-type'] || null,
+          uploaded_by: userId,
+        }).returning(['id', 'order_item', 'attachment_type', 'title', 'url', 'disk_path', 'file_name', 'file_size', 'mime_type', 'uploaded_by', 'date_created']);
+        return res.json({ data: row });
+      } catch (error) {
+        logger.error(`[Symbolika Yandex Disk] attachment upload: ${error.message}`);
+        return res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось загрузить материал.' }] });
+      }
+    });
+
+    router.delete('/orders-items/:itemId/attachments/:attachmentId', async (req, res) => {
+      try {
+        if (!requireUser(req, res)) return;
+        const itemId = Number(req.params.itemId);
+        const attachmentId = Number(req.params.attachmentId);
+        if (!Number.isInteger(itemId) || itemId <= 0 || !Number.isInteger(attachmentId) || attachmentId <= 0) {
+          throw apiError('Некорректный материал позиции.', 400);
+        }
+        const schema = await getSchema();
+        const itemService = new services.ItemsService('orders_items', { schema, accountability: req.accountability });
+        const accessibleItem = await itemService.readOne(itemId, { fields: ['id', 'url'] });
+        await itemService.updateOne(itemId, { url: accessibleItem.url || null });
+        const attachment = await database('order_item_attachments').where({ id: attachmentId, order_item: itemId }).first();
+        if (!attachment) throw apiError('Материал не найден.', 404);
+        await database('order_item_attachments').where({ id: attachmentId, order_item: itemId }).delete();
+        if (attachment.url && attachment.url === accessibleItem.url) {
+          const replacement = await database('order_item_attachments').where('order_item', itemId).orderBy('date_created', 'asc').orderBy('id', 'asc').first();
+          await itemService.updateOne(itemId, { url: replacement?.url || null });
+        }
+        const diskPath = String(attachment.disk_path || '').trim();
+        if (token && deleteReplacedFiles && diskPath && (diskPath === root || diskPath.startsWith(`${root}/`))) {
+          try {
+            await requestYandex('/resources', { method: 'DELETE', query: { path: diskPath, permanently: true } });
+          } catch (cleanupError) {
+            logger.warn(`[Symbolika Yandex Disk] attachment cleanup (${diskPath}): ${cleanupError.message}`);
+          }
+        }
+        return res.json({ data: { id: attachmentId, deleted: true } });
+      } catch (error) {
+        logger.error(`[Symbolika Yandex Disk] attachment delete: ${error.message}`);
+        return res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось удалить материал.' }] });
+      }
+    });
+
     router.delete('/orders-items/:id', async (req, res) => {
       try {
         if (!requireUser(req, res)) return;
@@ -158,6 +335,10 @@ export default {
           .where('id', itemId)
           .select('layout_disk_path', 'layout_preview_disk_path')
           .first();
+        const attachmentDiskPaths = await database('order_item_attachments')
+          .where('order_item', itemId)
+          .whereNotNull('disk_path')
+          .pluck('disk_path');
         const item = { ...accessibleItem, ...(diskMeta || {}) };
         const status = String(item?.item_status || 'new').trim().toLowerCase();
         if (!['new', 'approval'].includes(status)) {
@@ -176,7 +357,7 @@ export default {
         if (relatedTaskIds.length) await database('symbolika_tasks').whereIn('id', relatedTaskIds).delete();
 
         if (token && deleteReplacedFiles) {
-          const paths = [...new Set([item.layout_disk_path, item.layout_preview_disk_path]
+          const paths = [...new Set([item.layout_disk_path, item.layout_preview_disk_path, ...attachmentDiskPaths]
             .map((value) => String(value || '').trim())
             .filter((value) => value && (value === root || value.startsWith(`${root}/`))))];
           for (const path of paths) {

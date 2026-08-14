@@ -1335,6 +1335,9 @@ export const CostingModule = {
       itemPublicLinkErrors: {},
       copiedPublicItemId: null,
       copiedLayoutLinkId: null,
+      copiedAttachmentId: null,
+      itemAttachments: {},
+      itemAttachmentLoading: {},
       layoutUploading: {},
       layoutUploadProgress: {},
       layoutUploadDialog: null,
@@ -5333,7 +5336,10 @@ export const CostingModule = {
         ]);
       } else if (detailRow?.product_name && detailRow?.id) this.updateDeepLinkUrl('item', detailRow.id);
       else if (this.detailParentOrder) this.updateOrderLinkUrl(this.detailParentOrder);
-      if (!this.detailIsOrder(detailRow) && detailRow?.id) this.loadItemPublicLink(detailRow);
+      if (!this.detailIsOrder(detailRow) && detailRow?.id) {
+        this.loadItemPublicLink(detailRow);
+        await this.loadItemAttachments(detailRow);
+      }
     },
 
     async closeDetail() {
@@ -10218,6 +10224,73 @@ export const CostingModule = {
       }
     },
 
+    itemAttachmentRows(row) {
+      const itemId = Number(this.entityId(row?.order_item) || row?.id || 0);
+      return itemId ? (this.itemAttachments[itemId] || []) : [];
+    },
+
+    async loadItemAttachments(row) {
+      const itemId = Number(this.entityId(row?.order_item) || row?.id || 0);
+      if (!itemId || this.itemAttachmentLoading[itemId]) return;
+      this.itemAttachmentLoading = { ...this.itemAttachmentLoading, [itemId]: true };
+      try {
+        const payload = await this.request(`/symbolika-yandex-disk/orders-items/${itemId}/attachments`);
+        this.itemAttachments = { ...this.itemAttachments, [itemId]: payload?.data || [] };
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        const next = { ...this.itemAttachmentLoading };
+        delete next[itemId];
+        this.itemAttachmentLoading = next;
+      }
+    },
+
+    openItemAttachmentsDialog(row) {
+      const itemId = this.entityId(row?.order_item) || row?.id;
+      if (!row || !itemId || this.layoutUploading[itemId]) return;
+      this.layoutUploadDialog = {
+        row,
+        file: null,
+        files: [],
+        files: [],
+        url: '',
+        title: '',
+        mode: 'file',
+        dragging: false,
+        error: '',
+        draft: false,
+        additive: true,
+      };
+    },
+
+    async copyAttachmentLink(attachment) {
+      if (!attachment?.url) return;
+      try {
+        await navigator.clipboard.writeText(attachment.url);
+        this.copiedAttachmentId = Number(attachment.id);
+        window.setTimeout(() => {
+          if (this.copiedAttachmentId === Number(attachment.id)) this.copiedAttachmentId = null;
+        }, 1800);
+      } catch (error) {
+        this.error = error.message || 'Не удалось скопировать ссылку.';
+      }
+    },
+
+    async deleteItemAttachment(row, attachment) {
+      const itemId = Number(this.entityId(row?.order_item) || row?.id || 0);
+      if (!itemId || !attachment?.id) return;
+      if (!window.confirm(`Удалить «${attachment.title || attachment.file_name || 'материал'}»?`)) return;
+      try {
+        await this.request(`/symbolika-yandex-disk/orders-items/${itemId}/attachments/${attachment.id}`, { method: 'DELETE' });
+        await this.loadItemAttachments(row);
+        if (this.detail?.row && Number(this.detail.row.id) === itemId) {
+          this.detail.row = await this.hydrateOrderItemDetailRow(this.detail.row);
+        }
+      } catch (error) {
+        this.error = error.message;
+      }
+    },
+
     openLayoutUploadDialog(row) {
       const itemId = this.entityId(row?.order_item) || row?.id;
       if (!row || (itemId && this.layoutUploading[itemId])) return;
@@ -10230,6 +10303,7 @@ export const CostingModule = {
         dragging: false,
         error: '',
         draft: false,
+        additive: false,
       };
     },
 
@@ -10238,11 +10312,13 @@ export const CostingModule = {
       this.layoutUploadDialog = {
         row,
         file: row._layout_file || null,
+        files: [],
         url: row.url || '',
         mode: row._layout_file ? 'file' : (row.url ? 'link' : 'file'),
         dragging: false,
         error: '',
         draft: true,
+        additive: false,
       };
     },
 
@@ -10276,13 +10352,39 @@ export const CostingModule = {
       };
     },
 
+    setLayoutUploadFiles(files) {
+      if (!this.layoutUploadDialog) return;
+      const valid = [];
+      let error = '';
+      for (const file of Array.from(files || [])) {
+        if (!Number(file.size)) {
+          error = `Файл «${file.name}» пустой.`;
+          break;
+        }
+        if (Number(file.size) > 2 * 1024 * 1024 * 1024) {
+          error = `Файл «${file.name}» больше 2 ГБ. Добавьте ссылку на него.`;
+          break;
+        }
+        valid.push(file);
+      }
+      this.layoutUploadDialog = {
+        ...this.layoutUploadDialog,
+        files: error ? [] : valid,
+        file: error ? null : (valid[0] || null),
+        dragging: false,
+        error,
+      };
+    },
+
     selectLayoutUploadFile(event) {
-      this.setLayoutUploadFile(event?.target?.files?.[0] || null);
+      if (this.layoutUploadDialog?.additive) this.setLayoutUploadFiles(event?.target?.files || []);
+      else this.setLayoutUploadFile(event?.target?.files?.[0] || null);
       if (event?.target) event.target.value = '';
     },
 
     handleLayoutFileDrop(event) {
-      this.setLayoutUploadFile(event?.dataTransfer?.files?.[0] || null);
+      if (this.layoutUploadDialog?.additive) this.setLayoutUploadFiles(event?.dataTransfer?.files || []);
+      else this.setLayoutUploadFile(event?.dataTransfer?.files?.[0] || null);
     },
 
     setLayoutUploadDragging(value) {
@@ -10293,6 +10395,36 @@ export const CostingModule = {
     async confirmLayoutUpload() {
       const dialog = this.layoutUploadDialog;
       if (!dialog?.row) return;
+      if (dialog.additive) {
+        const itemId = Number(this.entityId(dialog.row?.order_item) || dialog.row?.id || 0);
+        if (!itemId) return;
+        if (dialog.mode === 'link') {
+          const url = this.layoutExternalUrl(dialog.url);
+          if (!url) {
+            this.layoutUploadDialog = { ...dialog, error: 'Укажите корректную ссылку.' };
+            return;
+          }
+          try {
+            await this.request(`/symbolika-yandex-disk/orders-items/${itemId}/attachments/link`, {
+              method: 'POST',
+              body: JSON.stringify({ url, title: dialog.title || '' }),
+            });
+            await this.loadItemAttachments(dialog.row);
+            if (!dialog.row.url) dialog.row.url = url;
+            this.layoutUploadDialog = null;
+          } catch (error) {
+            this.layoutUploadDialog = { ...dialog, error: error.message };
+          }
+          return;
+        }
+        if (!dialog.files?.length) {
+          this.layoutUploadDialog = { ...dialog, error: 'Выберите хотя бы один файл.' };
+          return;
+        }
+        const uploaded = await this.uploadOrderItemAttachments(dialog.row, dialog.files);
+        if (uploaded) this.layoutUploadDialog = null;
+        return;
+      }
       if (dialog.mode === 'link') {
         const url = this.layoutExternalUrl(dialog.url);
         if (!url) {
@@ -10424,6 +10556,64 @@ export const CostingModule = {
         xhr.addEventListener('abort', () => reject(new Error('Загрузка макета была отменена.')));
         xhr.send(file);
       });
+    },
+
+    uploadAttachmentFileRequest(itemId, file, onProgress) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `/symbolika-yandex-disk/orders-items/${itemId}/attachments/upload`, true);
+        xhr.withCredentials = true;
+        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+        xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
+        xhr.setRequestHeader('X-File-Size', String(file.size));
+        xhr.upload.addEventListener('progress', (event) => {
+          if (event.lengthComputable) onProgress?.(event.loaded, event.total);
+        });
+        xhr.addEventListener('load', () => {
+          let payload = {};
+          try { payload = JSON.parse(xhr.responseText || '{}'); } catch { payload = {}; }
+          if (xhr.status < 200 || xhr.status >= 300) {
+            reject(new Error(payload?.errors?.[0]?.message || 'Не удалось загрузить материал.'));
+            return;
+          }
+          resolve(payload?.data || {});
+        });
+        xhr.addEventListener('error', () => reject(new Error('Соединение прервалось во время загрузки.')));
+        xhr.send(file);
+      });
+    },
+
+    async uploadOrderItemAttachments(row, files) {
+      const itemId = Number(this.entityId(row?.order_item) || row?.id || 0);
+      if (!itemId || this.layoutUploading[itemId]) return false;
+      const list = Array.from(files || []);
+      const totalBytes = list.reduce((sum, file) => sum + Number(file.size || 0), 0);
+      let completedBytes = 0;
+      this.layoutUploading = { ...this.layoutUploading, [itemId]: true };
+      this.setLayoutUploadProgress(itemId, { percent: 0, loaded: 0, total: totalBytes, status: 'uploading' });
+      try {
+        for (let index = 0; index < list.length; index += 1) {
+          const file = list[index];
+          const uploaded = await this.uploadAttachmentFileRequest(itemId, file, (loaded) => {
+            const percent = totalBytes ? Math.min(99, Math.round(((completedBytes + loaded) / totalBytes) * 100)) : 0;
+            this.setLayoutUploadProgress(itemId, { percent, loaded: completedBytes + loaded, total: totalBytes, status: 'uploading', name: `${index + 1}/${list.length} · ${file.name}` });
+          });
+          completedBytes += Number(file.size || 0);
+          if (!row.url && uploaded?.url) row.url = uploaded.url;
+        }
+        this.setLayoutUploadProgress(itemId, { percent: 100, loaded: totalBytes, total: totalBytes, status: 'done' });
+        await this.loadItemAttachments(row);
+        return true;
+      } catch (error) {
+        this.error = error.message;
+        this.setLayoutUploadProgress(itemId, { status: 'error', error: error.message });
+        if (this.layoutUploadDialog) this.layoutUploadDialog = { ...this.layoutUploadDialog, error: error.message };
+        return false;
+      } finally {
+        const next = { ...this.layoutUploading };
+        delete next[itemId];
+        this.layoutUploading = next;
+      }
     },
 
     async uploadOrderItemLayout(row, source, options = {}) {
@@ -19985,6 +20175,67 @@ export const CostingModule = {
         .symbolika-layout-upload-button.is-loading { cursor: progress; opacity: .72; }
         .symbolika-layout-upload-meta { color: var(--theme--foreground-subdued); font-size: 10px; }
 
+        .symbolika-item-attachments {
+          display: grid;
+          gap: 9px;
+          margin-block-start: 4px;
+          padding: 12px;
+          border: 1px solid var(--theme--border-color);
+          border-radius: 12px;
+          background: color-mix(in srgb, var(--theme--background-subdued) 88%, transparent);
+        }
+
+        .symbolika-item-attachments-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+        }
+
+        .symbolika-item-attachments-head > div { display: grid; gap: 2px; min-inline-size: 0; }
+        .symbolika-item-attachments-head strong { color: var(--theme--foreground); font-size: 12px; }
+        .symbolika-item-attachments-head span,
+        .symbolika-item-attachments-empty { color: var(--theme--foreground-subdued); font-size: 10px; }
+        .symbolika-item-attachments-list { display: grid; gap: 7px; }
+
+        .symbolika-item-attachment {
+          display: grid;
+          grid-template-columns: 34px minmax(0, 1fr) auto;
+          align-items: center;
+          gap: 9px;
+          min-block-size: 50px;
+          padding: 7px 8px;
+          border: 1px solid color-mix(in srgb, var(--theme--border-color) 82%, transparent);
+          border-radius: 10px;
+          background: var(--theme--background-page);
+        }
+
+        .symbolika-item-attachment-icon {
+          display: grid;
+          place-items: center;
+          inline-size: 34px;
+          block-size: 34px;
+          border-radius: 9px;
+          background: color-mix(in srgb, var(--symbolika-orange) 14%, var(--theme--background-subdued));
+          color: var(--symbolika-orange);
+        }
+
+        .symbolika-item-attachment-copy { display: grid; gap: 3px; min-inline-size: 0; }
+        .symbolika-item-attachment-copy strong,
+        .symbolika-item-attachment-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .symbolika-item-attachment-copy strong { color: var(--theme--foreground); font-size: 11px; }
+        .symbolika-item-attachment-copy span { color: var(--theme--foreground-subdued); font-size: 9px; }
+        .symbolika-item-attachment-actions { display: flex; align-items: center; gap: 5px; }
+        .symbolika-item-attachment-actions .symbolika-costing-icon-button { inline-size: 32px; block-size: 32px; min-inline-size: 32px; }
+        .symbolika-item-attachment-actions .is-danger { color: var(--theme--danger); }
+        .symbolika-layout-selected-files-copy { max-block-size: 180px; overflow: auto; }
+
+        @media (max-width: 640px) {
+          .symbolika-item-attachments-head { align-items: stretch; flex-direction: column; }
+          .symbolika-item-attachment { grid-template-columns: 34px minmax(0, 1fr); }
+          .symbolika-item-attachment-actions { grid-column: 1 / -1; justify-content: flex-end; }
+        }
+
         .symbolika-layout-progress {
           display: grid;
           gap: 7px;
@@ -27810,8 +28061,8 @@ export const CostingModule = {
           <div class="symbolika-costing-modal symbolika-layout-upload-modal">
             <div class="symbolika-costing-modal-head">
               <div>
-                <div class="symbolika-costing-subtle">Макет позиции</div>
-                <h2>{{ layoutUploadDialog.row.url || layoutUploadDialog.file ? 'Изменить макет' : 'Добавить макет' }}</h2>
+                <div class="symbolika-costing-subtle">{{ layoutUploadDialog.additive ? 'Материалы позиции' : 'Макет позиции' }}</div>
+                <h2>{{ layoutUploadDialog.additive ? 'Добавить файлы или ссылки' : (layoutUploadDialog.row.url || layoutUploadDialog.file ? 'Изменить макет' : 'Добавить макет') }}</h2>
               </div>
               <button
                 type="button"
@@ -27820,7 +28071,7 @@ export const CostingModule = {
                 @click="closeLayoutUploadDialog"
               >×</button>
             </div>
-            <p class="symbolika-layout-upload-subtitle">Выберите файл для загрузки на Яндекс Диск или вставьте готовую ссылку, которую прислал заказчик.</p>
+            <p class="symbolika-layout-upload-subtitle">{{ layoutUploadDialog.additive ? 'Можно выбрать сразу несколько файлов или добавить отдельную внешнюю ссылку.' : 'Выберите файл для загрузки на Яндекс Диск или вставьте готовую ссылку, которую прислал заказчик.' }}</p>
 
             <div class="symbolika-layout-source-tabs">
               <button type="button" :class="{ 'is-active': layoutUploadDialog.mode === 'file' }" @click="setLayoutUploadMode('file')">
@@ -27832,7 +28083,7 @@ export const CostingModule = {
             </div>
 
             <label
-              v-if="layoutUploadDialog.mode === 'file' && !layoutUploadDialog.file"
+              v-if="layoutUploadDialog.mode === 'file' && !(layoutUploadDialog.additive ? layoutUploadDialog.files?.length : layoutUploadDialog.file)"
               class="symbolika-layout-dropzone"
               :class="{ 'is-dragging': layoutUploadDialog.dragging }"
               @dragenter.prevent="setLayoutUploadDragging(true)"
@@ -27842,17 +28093,22 @@ export const CostingModule = {
             >
               <input
                 type="file"
+                :multiple="!!layoutUploadDialog.additive"
                 accept=".pdf,.cdr,.ai,.eps,.svg,.png,.jpg,.jpeg,.webp,.tif,.tiff,.psd,.zip,.rar,.7z,application/pdf,image/*"
                 @change="selectLayoutUploadFile"
               />
               <span class="symbolika-layout-dropzone-icon"><v-icon name="cloud_upload" large /></span>
-              <strong>{{ layoutUploadDialog.dragging ? 'Отпустите файл здесь' : 'Перетащите макет сюда' }}</strong>
-              <span>или нажмите, чтобы выбрать файл · PDF, CDR, изображения и архивы · до 2 ГБ</span>
+              <strong>{{ layoutUploadDialog.dragging ? 'Отпустите файлы здесь' : (layoutUploadDialog.additive ? 'Перетащите материалы сюда' : 'Перетащите макет сюда') }}</strong>
+              <span>или нажмите, чтобы выбрать {{ layoutUploadDialog.additive ? 'несколько файлов' : 'файл' }} · PDF, CDR, изображения и архивы · до 2 ГБ каждый</span>
             </label>
 
-            <div v-else-if="layoutUploadDialog.mode === 'file'" class="symbolika-layout-selected-file">
+            <div v-else-if="layoutUploadDialog.mode === 'file'" class="symbolika-layout-selected-file" :class="{ 'is-multiple': layoutUploadDialog.additive }">
               <v-icon name="draft" large />
-              <div class="symbolika-layout-selected-file-copy">
+              <div v-if="layoutUploadDialog.additive" class="symbolika-layout-selected-file-copy symbolika-layout-selected-files-copy">
+                <strong>{{ layoutUploadDialog.files.length }} файл(а/ов) готово к загрузке</strong>
+                <span v-for="(file, fileIndex) in layoutUploadDialog.files" :key="file.name + file.size + fileIndex">{{ file.name }} · {{ formatFileSize(file.size) }}</span>
+              </div>
+              <div v-else class="symbolika-layout-selected-file-copy">
                 <strong>{{ layoutUploadDialog.file.name }}</strong>
                 <span>{{ formatFileSize(layoutUploadDialog.file.size) }} · готов к загрузке</span>
               </div>
@@ -27861,12 +28117,14 @@ export const CostingModule = {
                 class="symbolika-costing-icon-button"
                 title="Выбрать другой файл"
                 :disabled="!layoutUploadDialog.draft && !!layoutUploading[entityId(layoutUploadDialog.row.order_item) || layoutUploadDialog.row.id]"
-                @click="setLayoutUploadFile(null)"
+                @click="layoutUploadDialog.additive ? setLayoutUploadFiles([]) : setLayoutUploadFile(null)"
               ><v-icon name="close" small /></button>
             </div>
 
             <label v-else class="symbolika-layout-link-field">
-              Ссылка на макет
+              {{ layoutUploadDialog.additive ? 'Название ссылки (необязательно)' : 'Ссылка на макет' }}
+              <input v-if="layoutUploadDialog.additive" v-model.trim="layoutUploadDialog.title" class="symbolika-costing-input" placeholder="Например, исходники заказчика" />
+              {{ layoutUploadDialog.additive ? 'Адрес ссылки' : '' }}
               <input v-model.trim="layoutUploadDialog.url" class="symbolika-costing-input" inputmode="url" placeholder="https://disk.yandex.ru/..." @keydown.enter.prevent="confirmLayoutUpload" />
               <small>Подойдут ссылки на Яндекс Диск, Google Drive, облако заказчика или другой доступный сайт.</small>
             </label>
@@ -27894,13 +28152,13 @@ export const CostingModule = {
               <button
                 type="button"
                 class="symbolika-costing-button"
-                :disabled="(layoutUploadDialog.mode === 'file' ? !layoutUploadDialog.file : !layoutUploadDialog.url) || (!layoutUploadDialog.draft && !!layoutUploading[entityId(layoutUploadDialog.row.order_item) || layoutUploadDialog.row.id])"
+                :disabled="(layoutUploadDialog.mode === 'file' ? !(layoutUploadDialog.additive ? layoutUploadDialog.files?.length : layoutUploadDialog.file) : !layoutUploadDialog.url) || (!layoutUploadDialog.draft && !!layoutUploading[entityId(layoutUploadDialog.row.order_item) || layoutUploadDialog.row.id])"
                 @click="confirmLayoutUpload"
               >
                 <v-icon :name="layoutUploading[entityId(layoutUploadDialog.row.order_item) || layoutUploadDialog.row.id] ? 'progress_activity' : (layoutUploadDialog.mode === 'link' ? 'link' : (layoutUploadDialog.draft ? 'attach_file' : 'cloud_upload'))" small />
                 {{ layoutUploading[entityId(layoutUploadDialog.row.order_item) || layoutUploadDialog.row.id]
                   ? 'Сохраняем…'
-                  : (layoutUploadDialog.mode === 'link' ? 'Сохранить ссылку' : (layoutUploadDialog.draft ? 'Прикрепить файл' : 'Загрузить на Диск')) }}
+                  : (layoutUploadDialog.mode === 'link' ? 'Сохранить ссылку' : (layoutUploadDialog.draft ? 'Прикрепить файл' : (layoutUploadDialog.additive ? 'Загрузить файлы' : 'Загрузить на Диск'))) }}
               </button>
             </div>
           </div>
@@ -29891,6 +30149,40 @@ export const CostingModule = {
                 <small v-if="detail.row.layout_disk_name" class="symbolika-layout-upload-meta">
                   {{ detail.row.layout_disk_name }} · {{ formatFileSize(detail.row.layout_disk_size) }} · Яндекс Диск
                 </small>
+                <div class="symbolika-item-attachments">
+                  <div class="symbolika-item-attachments-head">
+                    <div>
+                      <strong>Файлы и ссылки</strong>
+                      <span>Все дополнительные материалы по этой позиции</span>
+                    </div>
+                    <button
+                      type="button"
+                      class="symbolika-costing-mini-button"
+                      :disabled="!!layoutUploading[detail.row.id]"
+                      @click="openItemAttachmentsDialog(detail.row)"
+                    >
+                      <v-icon name="add_link" small /> Добавить
+                    </button>
+                  </div>
+                  <div v-if="itemAttachmentLoading[detail.row.id]" class="symbolika-item-attachments-empty">Загружаем список…</div>
+                  <div v-else-if="!itemAttachmentRows(detail.row).length" class="symbolika-item-attachments-empty">Дополнительных материалов пока нет</div>
+                  <div v-else class="symbolika-item-attachments-list">
+                    <article v-for="attachment in itemAttachmentRows(detail.row)" :key="attachment.id" class="symbolika-item-attachment">
+                      <span class="symbolika-item-attachment-icon"><v-icon :name="attachment.attachment_type === 'file' ? 'draft' : 'link'" small /></span>
+                      <div class="symbolika-item-attachment-copy">
+                        <strong>{{ attachment.title || attachment.file_name || attachment.url }}</strong>
+                        <span>{{ attachment.attachment_type === 'file' ? ((attachment.file_name || 'Файл') + (attachment.file_size ? ' · ' + formatFileSize(attachment.file_size) : '')) : attachment.url }}</span>
+                      </div>
+                      <div class="symbolika-item-attachment-actions">
+                        <a :href="attachment.url" target="_blank" rel="noreferrer" class="symbolika-costing-icon-button" title="Открыть"><v-icon name="open_in_new" small /></a>
+                        <button type="button" class="symbolika-costing-icon-button" title="Скопировать ссылку" @click="copyAttachmentLink(attachment)">
+                          <v-icon :name="copiedAttachmentId === Number(attachment.id) ? 'check' : 'content_copy'" small />
+                        </button>
+                        <button type="button" class="symbolika-costing-icon-button is-danger" title="Удалить" @click="deleteItemAttachment(detail.row, attachment)"><v-icon name="delete" small /></button>
+                      </div>
+                    </article>
+                  </div>
+                </div>
                 <div class="symbolika-layout-preview-card" :class="{ 'has-preview': !!detail.row.layout_preview_url }">
                   <button
                     v-if="detail.row.layout_preview_url"

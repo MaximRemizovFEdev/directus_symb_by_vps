@@ -258,6 +258,27 @@ ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS layout_preview_uploaded_by uui
 ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS layout_preview_uploaded_at timestamptz;
 ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS internal_route_production boolean NOT NULL DEFAULT false;
 ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS internal_route_screen boolean NOT NULL DEFAULT false;
+
+-- Additional files and external references attached to an order item. The
+-- legacy orders_items.url remains the primary layout used by readiness and
+-- automation rules; this table stores any number of supporting materials.
+CREATE TABLE IF NOT EXISTS order_item_attachments (
+  id bigserial PRIMARY KEY,
+  order_item integer NOT NULL REFERENCES orders_items(id) ON DELETE CASCADE,
+  attachment_type character varying(20) NOT NULL DEFAULT 'file',
+  title text,
+  url text NOT NULL,
+  disk_path text,
+  file_name text,
+  file_size bigint,
+  mime_type character varying(255),
+  uploaded_by uuid REFERENCES directus_users(id) ON DELETE SET NULL,
+  date_created timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT order_item_attachments_type_check CHECK (attachment_type IN ('file', 'link'))
+);
+
+CREATE INDEX IF NOT EXISTS order_item_attachments_item_idx
+  ON order_item_attachments (order_item, date_created, id);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS commission_manager_employee integer REFERENCES employees(id) ON DELETE SET NULL;
 ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS commission_manager_employee integer REFERENCES employees(id) ON DELETE SET NULL;
 
