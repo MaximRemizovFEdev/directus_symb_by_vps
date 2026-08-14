@@ -1341,6 +1341,7 @@ export const CostingModule = {
       profileSavedMessage: '',
       expandedOfficeOrders: {},
       expandedOrderRows: {},
+      expandedOrderItems: {},
       expandedClientRows: {},
       paymentDialog: null,
       orderIssueDialog: null,
@@ -5484,6 +5485,10 @@ export const CostingModule = {
       if (this.isLimitedProductionItem(row)) {
         this.detailOrderItems = row?.product_name ? [row] : [];
         this.detailOrderItemsOrderId = orderId;
+        this.expandedOrderItems = {
+          ...this.expandedOrderItems,
+          [String(orderId)]: this.detailOrderItems,
+        };
         return;
       }
 
@@ -5566,6 +5571,10 @@ export const CostingModule = {
         const payload = await this.request(`/items/orders_items?${params.toString()}`);
         this.detailOrderItems = payload.data || [];
         this.detailOrderItemsOrderId = orderId;
+        this.expandedOrderItems = {
+          ...this.expandedOrderItems,
+          [String(orderId)]: this.detailOrderItems,
+        };
       } catch (error) {
         this.detailOrderItems = [];
         this.detailOrderItemsOrderId = null;
@@ -5658,7 +5667,9 @@ export const CostingModule = {
         ...this.expandedOrderRows,
         [key]: willOpen,
       };
-      if (willOpen && this.entityId(this.orderId(row)) && this.detailOrderItemsOrderId !== this.entityId(this.orderId(row))) {
+      const orderId = this.entityId(this.orderId(row));
+      const hasCachedItems = Object.prototype.hasOwnProperty.call(this.expandedOrderItems, String(orderId));
+      if (willOpen && orderId && !hasCachedItems) {
         await this.loadDetailOrderItems(row);
       }
     },
@@ -11054,6 +11065,7 @@ export const CostingModule = {
         this.officeArchiveItems,
         this.financeItemRows,
         this.detailOrderItems,
+        ...Object.values(this.expandedOrderItems || {}),
       ];
 
       groups.forEach((rows) => {
@@ -12753,6 +12765,12 @@ export const CostingModule = {
       try {
         await this.request(`/symbolika-yandex-disk/orders-items/${itemId}`, { method: 'DELETE' });
         this.detailOrderItems = this.detailOrderItems.filter((row) => this.entityId(row?.id) !== itemId);
+        this.expandedOrderItems = Object.fromEntries(
+          Object.entries(this.expandedOrderItems || {}).map(([orderKey, items]) => [
+            orderKey,
+            (items || []).filter((row) => (this.entityId(row?.order_item) || this.entityId(row?.id)) !== itemId),
+          ]),
+        );
         await this.loadAllowedData();
         if (this.detail?.row && !this.detailIsOrder(this.detail.row)) await this.closeDetail();
         this.feedbackSavedMessage = `Позиция «${productName}» удалена.`;
@@ -12947,6 +12965,8 @@ export const CostingModule = {
       const orderId = this.entityId(this.orderId(row));
       const orderNumber = this.orderNumber(row);
       if (orderId && this.detailOrderItemsOrderId === orderId) return this.detailOrderItems;
+      const cachedItems = orderId ? this.expandedOrderItems[String(orderId)] : null;
+      if (Array.isArray(cachedItems)) return cachedItems;
 
       const sources = [
         ...this.rows,
@@ -30824,5 +30844,3 @@ export default {
     },
   ],
 };
-
-
