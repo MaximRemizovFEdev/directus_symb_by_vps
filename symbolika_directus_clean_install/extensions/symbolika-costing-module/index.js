@@ -3819,6 +3819,24 @@ export const CostingModule = {
       return id ? this.itemPublicLinkErrors[String(id)] || '' : '';
     },
 
+    normalizePublicItemLink(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      try {
+        const target = new URL(raw, window.location.origin);
+        const current = new URL(window.location.origin);
+        const localHosts = new Set(['localhost', '127.0.0.1', '::1']);
+        if (localHosts.has(target.hostname.toLowerCase()) && !localHosts.has(current.hostname.toLowerCase())) {
+          target.protocol = current.protocol;
+          target.hostname = current.hostname;
+          target.port = current.port;
+        }
+        return target.toString();
+      } catch {
+        return raw;
+      }
+    },
+
     async loadItemPublicLink(row) {
       const id = this.publicItemId(row);
       if (!id || this.itemPublicLinks[String(id)] || this.itemPublicLinkLoading[String(id)]) return;
@@ -3831,7 +3849,7 @@ export const CostingModule = {
           method: 'POST',
           body: JSON.stringify({ ids: [id] }),
         });
-        const link = payload?.data?.[0]?.url || '';
+        const link = this.normalizePublicItemLink(payload?.data?.[0]?.url || '');
         if (!link) throw new Error('Публичная ссылка недоступна для этой позиции.');
         this.itemPublicLinks = { ...this.itemPublicLinks, [String(id)]: link };
       } catch (error) {
@@ -5243,6 +5261,25 @@ export const CostingModule = {
       return hydrated;
     },
 
+    orderBelongsToCurrentEmployee(row) {
+      if (!this.currentEmployeeId) return false;
+      const context = this.detailOrderContext(row);
+      const managerId = this.entityId(
+        row?.manager_employee
+        || context?.manager_employee
+        || this.detailParentOrder?.manager_employee,
+      );
+      return Number(managerId || 0) === Number(this.currentEmployeeId || 0);
+    },
+
+    isProductionWorkerRole() {
+      return ['Производство', 'Шелкография'].includes(this.currentRoleName);
+    },
+
+    isLimitedProductionItem(row) {
+      return this.isProductionWorkerRole() && !this.orderBelongsToCurrentEmployee(row);
+    },
+
     async hydrateOrderItemDetailRow(row) {
       const itemId = this.entityId(row?.order_item) || row?.id;
       if (!itemId) return row;
@@ -5288,11 +5325,12 @@ export const CostingModule = {
           'production_status',
           'production_comment',
         ];
-        const fields = ['Менеджер', 'Administrator', 'Управляющий'].includes(this.currentRoleName)
+        const ownsOrder = this.orderBelongsToCurrentEmployee(row);
+        const fields = (['Менеджер', 'Administrator', 'Управляющий'].includes(this.currentRoleName) || ownsOrder)
           ? managerFields.join(',')
           : (this.currentRoleName === 'Дизайнер'
             ? 'id,order,product_name,quantity,deadline,technical_task_text,url,needs_designer_help,designer_comment,designer_source_url,layout_preview_url,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at'
-            : 'id,internal_route_production,internal_route_screen');
+            : 'id,order,product_name,quantity,deadline,item_status,technical_task_text,url,production_status,production_comment');
         const payload = await this.request(`/items/orders_items/${itemId}?fields=${encodeURIComponent(fields)}`);
         if (!payload?.data) return row;
         const hydrated = { ...row, ...payload.data };
@@ -5437,7 +5475,26 @@ export const CostingModule = {
           'contractor_2.name',
           'contractor_2_cost',
         ];
-        params.set('fields', (this.currentRoleName === 'Менеджер' ? managerFields : privilegedFields).join(','));
+        const workerFields = [
+          'id',
+          'order',
+          'order.order_number',
+          'product_name',
+          'quantity',
+          'deadline',
+          'item_status',
+          'production_status',
+          'production_comment',
+          'technical_task_text',
+          'shipping_method',
+          'office_status',
+          'url',
+        ];
+        const ownsOrder = this.orderBelongsToCurrentEmployee(row);
+        const requestedFields = ['Administrator', 'Управляющий'].includes(this.currentRoleName)
+          ? privilegedFields
+          : (this.currentRoleName === 'Менеджер' || ownsOrder ? managerFields : workerFields);
+        params.set('fields', requestedFields.join(','));
         params.set('filter[order][_eq]', String(orderId));
         params.set('sort', 'id');
         params.set('limit', '-1');
@@ -10031,6 +10088,17 @@ export const CostingModule = {
       }
     },
 
+    async saveLimitedProductionField(row, field, value) {
+      if (!this.isLimitedProductionItem(row) || !['production_status', 'production_comment'].includes(field)) return;
+      const collection = this.currentRoleName === 'Шелкография' ? 'screen_printing_work' : 'production_work';
+      const normalized = field === 'production_status' ? (value || null) : (String(value || '').trim() || null);
+      Object.assign(row, { [field]: normalized });
+      await this.saveWorkField(collection, row, field, normalized);
+      const source = collection === 'screen_printing_work' ? this.screenRows : this.productionRows;
+      const refreshed = source.find((item) => Number(item.id) === Number(row.id));
+      if (refreshed) Object.assign(row, refreshed);
+    },
+
     async saveOfficeField(row, value) {
       const key = `office_items_in_office:${row.id}:office_status`;
       this.saving = { ...this.saving, [key]: true };
@@ -10149,6 +10217,11 @@ export const CostingModule = {
       const itemId = this.entityId(row?.order_item) || row?.id;
       if (!itemId) return;
 
+      if (this.isLimitedProductionItem(row) && !['production_status', 'production_comment'].includes(field)) {
+        this.error = 'В чужом заказе участок может менять только статус и комментарий производства.';
+        return;
+      }
+
       const key = `orders_items:${itemId}:${field}`;
       this.saving = { ...this.saving, [key]: true };
       this.error = '';
@@ -10203,16 +10276,26 @@ export const CostingModule = {
         // with the edited office status. Reload those values explicitly because
         // an opened item card keeps its own row object outside the reloaded lists.
         const refreshParams = new URLSearchParams();
-        refreshParams.set('fields', [
-          'id',
-          'item_status',
-          'office_status',
-          'production_status.id',
-          'production_status.name',
-          'order_sum',
-          'internal_route_production',
-          'internal_route_screen',
-        ].join(','));
+        const refreshFields = this.isLimitedProductionItem(row)
+          ? [
+            'id',
+            'item_status',
+            'office_status',
+            'production_status.id',
+            'production_status.name',
+            'production_comment',
+          ]
+          : [
+            'id',
+            'item_status',
+            'office_status',
+            'production_status.id',
+            'production_status.name',
+            'order_sum',
+            'internal_route_production',
+            'internal_route_screen',
+          ];
+        refreshParams.set('fields', refreshFields.join(','));
         const refreshedPayload = await this.request(`/items/orders_items/${itemId}?${refreshParams.toString()}`);
         if (refreshedPayload?.data) this.updateOrderItemCaches(itemId, refreshedPayload.data);
       } catch (error) {
@@ -11082,7 +11165,7 @@ export const CostingModule = {
           method: 'POST',
           body: JSON.stringify({ ids: rows.map((row) => Number(row.id)).filter(Number.isInteger) }),
         });
-        publicLinks = new Map((payload?.data || []).map((item) => [String(item.id), item.url]));
+        publicLinks = new Map((payload?.data || []).map((item) => [String(item.id), this.normalizePublicItemLink(item.url)]));
       } catch (error) {
         this.error = `Не удалось сформировать ссылки для этикеток: ${error.message}`;
         return;
@@ -12541,6 +12624,26 @@ export const CostingModule = {
     cancelledProductionStatusId() {
       const status = this.productionStatuses.find((row) => this.normalizeStatus(row?.name).includes('отмен'));
       return this.entityId(status);
+    },
+
+    inWorkProductionStatusId() {
+      const status = this.productionStatuses.find((row) => this.normalizeStatus(row?.name) === 'в работе');
+      return this.entityId(status);
+    },
+
+    canRestoreProductionArchiveRow(row) {
+      if (!['Administrator', 'Управляющий', 'Производство', 'Шелкография'].includes(this.currentRoleName)) return false;
+      if (['in_office', 'issued'].includes(String(row?.office_status || '').trim())) return false;
+      return this.normalizeStatus(this.statusName(row?.production_status) || row?.production_status_name).includes('готов')
+        && !!this.inWorkProductionStatusId();
+    },
+
+    async restoreProductionArchiveRow(row) {
+      if (!this.canRestoreProductionArchiveRow(row)) return;
+      const name = String(row?.product_name || 'Позиция').trim();
+      if (!window.confirm(`Вернуть позицию «${name}» в работу? Статусы позиции и заказа будут пересчитаны автоматически.`)) return;
+      const collection = row?.work_collection || (row?.work_tab === 'screen' ? 'screen_printing_work' : 'production_work');
+      await this.saveWorkField(collection, row, 'production_status', this.inWorkProductionStatusId());
     },
 
     itemProductionStatusOptions() {
@@ -18984,6 +19087,7 @@ export const CostingModule = {
           font-weight: 720;
           overflow-wrap: anywhere;
         }
+        .symbolika-costing-preline { white-space: pre-wrap; line-height: 1.55; }
 
         .symbolika-costing-detail-value .symbolika-costing-input,
         .symbolika-costing-detail-value .symbolika-costing-select,
@@ -27626,7 +27730,7 @@ export const CostingModule = {
               <col style="width: 260px" />
               <col style="width: 210px" />
               <col style="width: 230px" />
-              <col style="width: 170px" />
+              <col style="width: 230px" />
             </colgroup>
             <thead>
               <tr>
@@ -27664,6 +27768,15 @@ export const CostingModule = {
                 <td>
                   <span class="symbolika-costing-pill" :class="statusBadgeClass(statusName(row.production_status))">{{ statusName(row.production_status) || 'Завершено' }}</span>
                   <div class="symbolika-costing-subtle">{{ row.production_comment || '' }}</div>
+                  <button
+                    v-if="canRestoreProductionArchiveRow(row)"
+                    type="button"
+                    class="symbolika-costing-mini-button"
+                    :disabled="saving[row.work_collection + ':' + row.id + ':production_status']"
+                    @click.stop="restoreProductionArchiveRow(row)"
+                  >
+                    <v-icon name="restore" small />Вернуть в работу
+                  </button>
                 </td>
               </tr>
             </tbody>
@@ -29940,6 +30053,109 @@ export const CostingModule = {
                 </div>
               </div>
             </div>
+          </div>
+
+          <div v-else-if="isLimitedProductionItem(detail.row)" class="symbolika-costing-detail-grid symbolika-costing-detail-grid-item">
+            <section class="symbolika-costing-item-section symbolika-costing-detail-wide">
+              <header class="symbolika-costing-item-section-head">
+                <span class="symbolika-costing-item-section-icon"><v-icon name="sell" small /></span>
+                <div><strong>Задание производства</strong><small>Основная информация по переданной позиции</small></div>
+              </header>
+              <div class="symbolika-costing-item-section-grid is-main">
+                <div class="symbolika-costing-detail-field symbolika-costing-detail-wide is-primary">
+                  <div class="symbolika-costing-detail-label">Наименование позиции</div>
+                  <div class="symbolika-costing-detail-value">{{ detail.row.product_name || '-' }}</div>
+                </div>
+                <div class="symbolika-costing-detail-field is-muted">
+                  <div class="symbolika-costing-detail-label">Количество</div>
+                  <div class="symbolika-costing-detail-value">{{ formatQuantity(detail.row.quantity) }} шт.</div>
+                </div>
+                <div class="symbolika-costing-detail-field is-muted">
+                  <div class="symbolika-costing-detail-label">Срок позиции</div>
+                  <div class="symbolika-costing-detail-value">{{ formatDate(detail.row.deadline) }}</div>
+                </div>
+                <div class="symbolika-costing-detail-field is-muted">
+                  <div class="symbolika-costing-detail-label">Заказ</div>
+                  <div class="symbolika-costing-detail-value">{{ orderNumber(detail.row) }}</div>
+                </div>
+                <div class="symbolika-costing-detail-field is-muted">
+                  <div class="symbolika-costing-detail-label">Менеджер</div>
+                  <div class="symbolika-costing-detail-value">{{ detailManagerName(detail.row) }}</div>
+                </div>
+              </div>
+            </section>
+
+            <section class="symbolika-costing-item-section symbolika-costing-detail-wide is-production">
+              <header class="symbolika-costing-item-section-head">
+                <span class="symbolika-costing-item-section-icon"><v-icon name="precision_manufacturing" small /></span>
+                <div><strong>Работа участка</strong><small>Участок меняет только свой статус и комментарий</small></div>
+              </header>
+              <div class="symbolika-costing-item-section-grid is-statuses">
+                <div class="symbolika-costing-detail-field is-primary">
+                  <div class="symbolika-costing-detail-label">Статус производства</div>
+                  <div class="symbolika-costing-detail-value">
+                    <select
+                      class="symbolika-costing-table-select"
+                      :class="[savingWorkClass('orders_items', detail.row, 'production_status'), statusToneClass(detailProductionStatus(detail.row))]"
+                      :value="entityId(detail.row.production_status) || ''"
+                      @change="saveLimitedProductionField(detail.row, 'production_status', $event.target.value)"
+                    >
+                      <option value="">Не выбран</option>
+                      <option v-for="status in itemProductionStatusOptions()" :key="'limited-production-' + status.id" :value="status.id">{{ status.name }}</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="symbolika-costing-detail-field is-muted">
+                  <div class="symbolika-costing-detail-label">Статус позиции</div>
+                  <div class="symbolika-costing-detail-value"><span class="symbolika-costing-pill" :class="statusToneClass(itemStatusName(detail.row.item_status))">{{ itemStatusName(detail.row.item_status) }}</span></div>
+                </div>
+                <div class="symbolika-costing-detail-field symbolika-costing-detail-wide is-primary">
+                  <div class="symbolika-costing-detail-label">Комментарий производства</div>
+                  <textarea
+                    class="symbolika-costing-comment"
+                    :class="savingWorkClass('orders_items', detail.row, 'production_comment')"
+                    :value="detail.row.production_comment || ''"
+                    placeholder="Комментарий, уточнение или результат работы"
+                    @change="saveLimitedProductionField(detail.row, 'production_comment', $event.target.value)"
+                  ></textarea>
+                </div>
+              </div>
+            </section>
+
+            <section class="symbolika-costing-item-section symbolika-costing-detail-wide">
+              <header class="symbolika-costing-item-section-head">
+                <span class="symbolika-costing-item-section-icon"><v-icon name="description" small /></span>
+                <div><strong>ТЗ и макет</strong><small>Материалы доступны только для просмотра</small></div>
+              </header>
+              <div class="symbolika-costing-item-section-grid is-task">
+                <div class="symbolika-costing-detail-field symbolika-costing-detail-wide is-muted">
+                  <div class="symbolika-costing-detail-label">ТЗ</div>
+                  <div class="symbolika-costing-detail-value symbolika-costing-preline">{{ detail.row.technical_task_text || 'ТЗ не заполнено' }}</div>
+                </div>
+                <div class="symbolika-costing-detail-field symbolika-costing-detail-wide is-muted">
+                  <div class="symbolika-costing-detail-label">Макет</div>
+                  <div v-if="detail.row.url" class="symbolika-layout-current-actions">
+                    <a class="symbolika-layout-current-link" :href="detail.row.url" target="_blank" rel="noreferrer">
+                      <v-icon name="link" small /><span>{{ detail.row.layout_disk_name || 'Открыть макет' }}</span><v-icon name="open_in_new" small />
+                    </a>
+                    <button type="button" class="symbolika-costing-mini-button symbolika-layout-copy-button" @click="copyLayoutLink(detail.row)">
+                      <v-icon name="content_copy" small />Скопировать
+                    </button>
+                  </div>
+                  <div v-else class="symbolika-layout-current-empty">Макет пока не загружен</div>
+                </div>
+                <div v-if="itemAttachmentRows(detail.row).length" class="symbolika-costing-detail-field symbolika-costing-detail-wide is-muted">
+                  <div class="symbolika-costing-detail-label">Дополнительные материалы</div>
+                  <div class="symbolika-item-attachments-list">
+                    <article v-for="attachment in itemAttachmentRows(detail.row)" :key="'limited-attachment-' + attachment.id" class="symbolika-item-attachment">
+                      <span class="symbolika-item-attachment-icon"><v-icon :name="attachment.attachment_type === 'file' ? 'draft' : 'link'" small /></span>
+                      <div class="symbolika-item-attachment-copy"><strong>{{ attachment.title || attachment.file_name || attachment.url }}</strong></div>
+                      <div class="symbolika-item-attachment-actions"><a :href="attachment.url" target="_blank" rel="noreferrer" class="symbolika-costing-icon-button" title="Открыть"><v-icon name="open_in_new" small /></a></div>
+                    </article>
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
 
           <div v-else class="symbolika-costing-detail-grid symbolika-costing-detail-grid-item">

@@ -33,9 +33,25 @@ export default {
   handler: (router, { database, env, logger, services, getSchema }) => {
     const externalBaseUrl = (req) => {
       const configured = env?.SYMBOLIKA_PUBLIC_URL || env?.PUBLIC_URL || env?.DIRECTUS_PUBLIC_URL || '';
-      if (/^https?:\/\//i.test(configured)) return configured.replace(/\/$/, '');
       const protocol = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
-      return `${protocol}://${req.get('host')}`;
+      const forwardedHost = String(req.headers['x-forwarded-host'] || req.get('host') || '').split(',')[0].trim();
+      const requestBase = /^[a-z0-9.-]+(?::\d+)?$/i.test(forwardedHost)
+        ? `${protocol}://${forwardedHost}`
+        : '';
+      const isLocalHost = (value) => {
+        try {
+          return ['localhost', '127.0.0.1', '::1'].includes(new URL(value).hostname.toLowerCase());
+        } catch {
+          return false;
+        }
+      };
+
+      // A production proxy host must win over an accidentally copied local
+      // SYMBOLIKA_PUBLIC_URL. This keeps QR/public links usable after deploys
+      // while preserving localhost links during local development.
+      if (requestBase && !isLocalHost(requestBase) && isLocalHost(configured)) return requestBase;
+      if (/^https?:\/\//i.test(configured)) return configured.replace(/\/$/, '');
+      return requestBase || 'http://localhost:8057';
     };
 
     const itemLink = (req, token) => `${externalBaseUrl(req)}/symbolika-public-item/${token}`;

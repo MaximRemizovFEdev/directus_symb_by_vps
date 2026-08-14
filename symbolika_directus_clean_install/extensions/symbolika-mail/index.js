@@ -234,6 +234,26 @@ export default {
       actor.name = actor.employee_name
         || [actor.first_name, actor.last_name].filter(Boolean).join(' ')
         || actor.email;
+      const mainSender = cleanText(env?.SYMBOLIKA_EMAIL_FROM || env?.SYMBOLIKA_SMTP_USER, 255).toLowerCase();
+      const mainDomain = mainSender.includes('@') ? mainSender.split('@').pop() : '';
+      const actorEmail = cleanText(actor.email, 255).toLowerCase();
+      const employeeFolder = actor.employee_id
+        ? await database('symbolika_mail_folders')
+          .where('employee', actor.employee_id)
+          .where('is_active', true)
+          .whereNotNull('alias_email')
+          .whereNot('alias_email', '')
+          .orderBy('sort', 'asc')
+          .first('alias_email')
+        : null;
+      const corporateActorEmail = EMAIL_PATTERN.test(actorEmail)
+        && (!mainDomain || actorEmail.endsWith(`@${mainDomain}`))
+        ? actorEmail
+        : '';
+      actor.sender_alias = cleanText(employeeFolder?.alias_email, 255).toLowerCase()
+        || corporateActorEmail
+        || mainSender
+        || 'start@symb62.ru';
       return actor;
     };
 
@@ -496,6 +516,7 @@ export default {
               employee_id: actor.employee_id,
               name: actor.name,
               email: actor.email,
+              sender_alias: actor.sender_alias,
               role: actor.role_name,
               is_admin: actor.is_admin,
               signature: brandedSignatureHtml(actor, actor.email),
@@ -662,12 +683,13 @@ export default {
         const requestedFolderId = Number(req.body?.folder_id || replyThread?.folder_id || 0);
         const folder = await accessibleFolder(requestedFolderId, actor);
         if (!folder) return apiError(res, 400, 'Выберите доступную почтовую папку.');
-        const fromAlias = cleanText(req.body?.from_alias || folder.alias_email || env?.SYMBOLIKA_EMAIL_FROM || env?.SYMBOLIKA_SMTP_USER, 255).toLowerCase();
+        const fromAlias = cleanText(req.body?.from_alias || actor.sender_alias || folder.alias_email || env?.SYMBOLIKA_EMAIL_FROM || env?.SYMBOLIKA_SMTP_USER, 255).toLowerCase();
         if (!EMAIL_PATTERN.test(fromAlias)) return apiError(res, 400, 'Для папки не настроен адрес отправителя.');
         const configuredAliases = cleanText(env?.SYMBOLIKA_MAIL_ALLOWED_ALIASES, 10000)
           .split(/[;,]/).map((value) => value.trim().toLowerCase()).filter(Boolean);
         const allowedAliases = new Set([
           cleanText(folder.alias_email, 255).toLowerCase(),
+          cleanText(actor.sender_alias, 255).toLowerCase(),
           cleanText(env?.SYMBOLIKA_EMAIL_FROM || env?.SYMBOLIKA_SMTP_USER, 255).toLowerCase(),
           ...configuredAliases,
         ].filter(Boolean));

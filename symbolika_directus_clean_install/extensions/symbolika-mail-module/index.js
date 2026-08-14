@@ -1,3 +1,64 @@
+function escapeMailText(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function sanitizeMailMarkup(value) {
+  const source = String(value ?? '').trim();
+  if (!source || typeof DOMParser === 'undefined') return '';
+  const documentNode = new DOMParser().parseFromString(source, 'text/html');
+  documentNode.querySelectorAll('script, iframe, frame, frameset, object, embed, form, input, button, textarea, select, option, base, meta, link').forEach((node) => node.remove());
+  documentNode.querySelectorAll('*').forEach((node) => {
+    [...node.attributes].forEach((attribute) => {
+      const name = attribute.name.toLowerCase();
+      const valueText = String(attribute.value || '').trim();
+      if (name.startsWith('on') || name === 'srcdoc' || name === 'formaction') {
+        node.removeAttribute(attribute.name);
+        return;
+      }
+      if (['href', 'src', 'background', 'poster', 'action'].includes(name)
+        && /^(?:javascript|vbscript|data:text\/html)/i.test(valueText.replace(/\s+/g, ''))) {
+        node.removeAttribute(attribute.name);
+        return;
+      }
+      if (name === 'style' && /(?:expression\s*\(|javascript\s*:|vbscript\s*:|behavior\s*:|-moz-binding)/i.test(valueText)) {
+        node.removeAttribute(attribute.name);
+      }
+    });
+    if (node.tagName === 'A') {
+      node.setAttribute('target', '_blank');
+      node.setAttribute('rel', 'noopener noreferrer');
+    }
+    if (node.tagName === 'IMG') {
+      node.setAttribute('loading', 'lazy');
+      node.setAttribute('referrerpolicy', 'no-referrer');
+    }
+  });
+  const embeddedStyles = [...documentNode.querySelectorAll('style')]
+    .map((node) => String(node.textContent || '')
+      .replace(/@import\s+[^;]+;?/gi, '')
+      .replace(/(?:expression\s*\(|javascript\s*:|vbscript\s*:|behavior\s*:|-moz-binding)/gi, '')
+      .replace(/<\/style/gi, ''))
+    .filter(Boolean)
+    .map((css) => `<style>${css}</style>`)
+    .join('');
+  documentNode.querySelectorAll('style').forEach((node) => node.remove());
+  return `${embeddedStyles}${documentNode.body?.innerHTML || ''}`;
+}
+
+function mailBodyDocument(message) {
+  const html = sanitizeMailMarkup(message?.body_html);
+  const fallback = escapeMailText(message?.body_text || 'Письмо без текстовой части');
+  const content = html || `<div class="plain-text">${fallback}</div>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="color-scheme" content="light dark"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: cid: https: http:; style-src 'unsafe-inline'; font-src data: https:; form-action 'none'; base-uri 'none';"><base target="_blank"><style>
+    :root{color-scheme:light dark}html,body{margin:0;padding:0;background:transparent;color:#e9edf2;font:14px/1.58 Arial,sans-serif;overflow-wrap:anywhere}body{padding:1px}p{margin:.3em 0 1em}h1,h2,h3,h4,h5,h6{margin:1em 0 .45em;line-height:1.25}ul,ol{margin:.55em 0 1em;padding-left:1.65em}li{margin:.25em 0}blockquote{margin:1em 0;padding:.25em 0 .25em 1em;border-left:3px solid #f97316;color:#aeb7c2}a{color:#fb923c;text-decoration:underline}table{max-width:100%;border-collapse:collapse}td,th{vertical-align:top}img{max-width:100%;height:auto}.plain-text{white-space:pre-wrap}@media(prefers-color-scheme:light){html,body{color:#20242a}blockquote{color:#626b76}}
+  </style></head><body>${content}</body></html>`;
+}
+
 const MailWorkspace = {
   data() {
     return {
@@ -68,7 +129,15 @@ const MailWorkspace = {
       return this.folders.find((row) => Number(row.id) === Number(this.selectedFolderId)) || null;
     },
     currentSenderAlias() {
-      return this.composer.from_alias || this.selectedFolder?.alias_email || 'start@symb62.ru';
+      return this.composer.from_alias || this.defaultSenderAlias;
+    },
+    defaultSenderAlias() {
+      const personalFolder = this.folders.find((folder) => Number(folder.employee) === Number(this.actor?.employee_id) && folder.alias_email);
+      return this.actor?.sender_alias
+        || personalFolder?.alias_email
+        || (/^[^\s@]+@symb62\.ru$/i.test(this.actor?.email || '') ? this.actor.email : '')
+        || this.selectedFolder?.alias_email
+        || 'start@symb62.ru';
     },
     totalUnread() {
       return this.folders.reduce((sum, row) => sum + Number(row.unread || 0), 0);
@@ -131,6 +200,34 @@ const MailWorkspace = {
   },
 
   methods: {
+    mailBodyDocument,
+    resizeMailBody(event) {
+      const frame = event?.target;
+      if (!frame) return;
+      const resize = () => {
+        try {
+          const documentNode = frame.contentDocument;
+          const contentHeight = Math.max(
+            Number(documentNode?.body?.scrollHeight || 0),
+            Number(documentNode?.documentElement?.scrollHeight || 0),
+            96,
+          );
+          frame.style.height = `${Math.min(contentHeight + 4, 900)}px`;
+          frame.scrolling = contentHeight > 900 ? 'yes' : 'no';
+          documentNode?.querySelectorAll('img').forEach((image) => {
+            if (!image.dataset.symbolikaResizeBound) {
+              image.dataset.symbolikaResizeBound = '1';
+              image.addEventListener('load', resize, { once: true });
+            }
+          });
+        } catch {
+          frame.style.height = '320px';
+        }
+      };
+      resize();
+      window.setTimeout(resize, 180);
+      window.setTimeout(resize, 900);
+    },
     async request(path, options = {}) {
       const response = await fetch(path, {
         credentials: 'include',
@@ -318,7 +415,7 @@ const MailWorkspace = {
       this.composer = {
         thread_id: null,
         folder_id: thread?.folder_id || this.selectedFolderId,
-        from_alias: thread?.alias_email || this.selectedFolder?.alias_email || 'start@symb62.ru',
+        from_alias: this.defaultSenderAlias,
         to: '',
         subject: /^fwd:/i.test(thread?.subject || '') ? thread.subject : `Fwd: ${thread?.subject || ''}`,
         body: `\n\n---------- Пересланное письмо ----------\nОт: ${lastMessage.from_name || lastMessage.from_email || ''}\nДата: ${this.formatDate(lastMessage.sent_at, true)}\nТема: ${lastMessage.subject || thread?.subject || ''}${attachmentNote}\n\n${lastMessage.body_text || ''}`,
@@ -469,7 +566,7 @@ const MailWorkspace = {
       this.composer = {
         thread_id: thread?.id || null,
         folder_id: thread?.folder_id || this.selectedFolderId,
-        from_alias: thread?.alias_email || this.selectedFolder?.alias_email || 'start@symb62.ru',
+        from_alias: this.defaultSenderAlias,
         to: participant.email || '',
         subject: thread ? (/^re:/i.test(thread.subject) ? thread.subject : `Re: ${thread.subject}`) : '',
         body: '',
@@ -830,7 +927,8 @@ const MailWorkspace = {
         .symbolika-mail-message-from strong, .symbolika-mail-message-from small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .symbolika-mail-message-from strong { font-size: 13px; }
         .symbolika-mail-message-from small, .symbolika-mail-message time { color: var(--theme--foreground-subdued); font-size: 10px; }
-        .symbolika-mail-message-body { margin-block-start: 15px; color: var(--theme--foreground); font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .symbolika-mail-message-body { margin-block-start: 15px; color: var(--theme--foreground); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+        .symbolika-mail-message-body-frame { display: block; inline-size: 100%; min-block-size: 100px; border: 0; background: transparent; color-scheme: light dark; }
         .symbolika-mail-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-block-start: 14px; }
         .symbolika-mail-attachment { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-inline-size: 220px; max-inline-size: 380px; padding: 8px 10px; border: 1px solid var(--theme--border-color); border-radius: 10px; background: var(--theme--background-normal); }
         .symbolika-mail-attachment .v-icon { color: #FB923C; }
@@ -1180,7 +1278,9 @@ const MailWorkspace = {
                       </div>
                       <time>{{ formatDate(message.sent_at, true) }}</time>
                     </header>
-                    <div class="symbolika-mail-message-body">{{ message.body_text || 'Письмо без текстовой части' }}</div>
+                    <div class="symbolika-mail-message-body">
+                      <iframe class="symbolika-mail-message-body-frame" :srcdoc="mailBodyDocument(message)" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" title="Содержимое письма" @load="resizeMailBody"></iframe>
+                    </div>
                     <div v-if="message.attachments?.length" class="symbolika-mail-attachments">
                       <div v-for="(file, index) in message.attachments" :key="index" class="symbolika-mail-attachment">
                         <v-icon name="attach_file" small />
