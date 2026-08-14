@@ -145,6 +145,56 @@ export default {
       }
     });
 
+    router.delete('/orders-items/:id', async (req, res) => {
+      try {
+        if (!requireUser(req, res)) return;
+        const itemId = Number(req.params.id);
+        if (!Number.isInteger(itemId) || itemId <= 0) throw apiError('Некорректная позиция заказа.', 400);
+
+        const schema = await getSchema();
+        const itemService = new services.ItemsService('orders_items', { schema, accountability: req.accountability });
+        const accessibleItem = await itemService.readOne(itemId, { fields: ['id', 'item_status'] });
+        const diskMeta = await database('orders_items')
+          .where('id', itemId)
+          .select('layout_disk_path', 'layout_preview_disk_path')
+          .first();
+        const item = { ...accessibleItem, ...(diskMeta || {}) };
+        const status = String(item?.item_status || 'new').trim().toLowerCase();
+        if (!['new', 'approval'].includes(status)) {
+          throw apiError('Удалить позицию можно только до её запуска в работу.', 409);
+        }
+
+        const relatedTaskIds = (await database('symbolika_tasks')
+          .where('related_order_item', itemId)
+          .pluck('id'))
+          .map((value) => Number(value))
+          .filter(Number.isInteger);
+        await itemService.deleteOne(itemId);
+
+        // Unlaunched design/production tasks have no meaning without their item.
+        // Their checklist, comments and attachments are removed by task cascades.
+        if (relatedTaskIds.length) await database('symbolika_tasks').whereIn('id', relatedTaskIds).delete();
+
+        if (token && deleteReplacedFiles) {
+          const paths = [...new Set([item.layout_disk_path, item.layout_preview_disk_path]
+            .map((value) => String(value || '').trim())
+            .filter((value) => value && (value === root || value.startsWith(`${root}/`))))];
+          for (const path of paths) {
+            try {
+              await requestYandex('/resources', { method: 'DELETE', query: { path, permanently: true } });
+            } catch (cleanupError) {
+              logger.warn(`[Symbolika Yandex Disk] deleted item file cleanup (${path}): ${cleanupError.message}`);
+            }
+          }
+        }
+
+        return res.json({ data: { id: itemId, deleted: true } });
+      } catch (error) {
+        logger.error(`[Symbolika Yandex Disk] delete item: ${error.message}`);
+        return res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось удалить позицию.' }] });
+      }
+    });
+
     router.post('/orders-items/:id/upload', async (req, res, next) => {
       try {
         const userId = requireUser(req, res);

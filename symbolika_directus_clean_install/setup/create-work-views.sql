@@ -2364,8 +2364,15 @@ DECLARE
   ready_production_status integer;
   parent_order_delivered boolean := false;
 BEGIN
-  IF TG_OP = 'INSERT'
-     OR NEW.production_status IS DISTINCT FROM OLD.production_status THEN
+  -- A position added to an already ready/delivered order starts its own
+  -- workflow and must never inherit the final state of the parent order.
+  IF TG_OP = 'INSERT' THEN
+    NEW.item_status := 'new';
+    NEW.office_status := 'not_in_office';
+  END IF;
+
+  IF TG_OP = 'UPDATE'
+     AND NEW.production_status IS DISTINCT FROM OLD.production_status THEN
     next_item_status := symbolika_item_status_from_production(NEW.production_status);
   ELSE
     next_item_status := NULL;
@@ -2416,7 +2423,7 @@ BEGIN
   ) INTO parent_order_delivered;
 
   -- A delivered order cannot contain an item that is merely waiting in the office.
-  IF parent_order_delivered THEN
+  IF parent_order_delivered AND TG_OP <> 'INSERT' THEN
     NEW.office_status := 'issued';
   END IF;
 
@@ -12628,7 +12635,28 @@ WHERE policy IN (
   AND (
     (collection = 'orders' AND action = 'create')
     OR (collection = 'orders_items' AND action = 'create')
+    OR (collection = 'orders_items' AND action = 'delete')
   );
+
+DELETE FROM directus_permissions
+WHERE collection = 'orders_items'
+  AND action = 'delete'
+  AND policy IN (
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202',
+    '00000000-0000-4000-8000-000000000204',
+    '00000000-0000-4000-8000-000000000205',
+    '00000000-0000-4000-8000-000000000206',
+    '00000000-0000-4000-8000-000000000208'
+  );
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy) VALUES
+  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000201'),
+  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000202'),
+  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000204'),
+  ('orders_items', 'delete', '{"item_status":{"_in":["new","approval"]}}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
+  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000206'),
+  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000208');
 
 WITH self_sales_policies(policy) AS (
   VALUES

@@ -9844,7 +9844,9 @@ export const CostingModule = {
             contractor_1_cost: this.itemNeedsBlank(form) && form.blank_source === 'supplier' ? this.parseMoney(form.contractor_1_cost) : 0,
             deadline: form.deadline || order.deadline || null,
             item_status: 'new',
-            office_status: this.detailOfficeStatus(order) || 'not_in_office',
+            // A new item never inherits the finished order's office state.
+            // Otherwise the status trigger promotes it to Ready immediately.
+            office_status: 'not_in_office',
             shipping_method: order.shipping_method || null,
             technical_task_text: form.technical_task_text || null,
             url: this.layoutExternalUrl(form.url) || null,
@@ -12328,6 +12330,38 @@ export const CostingModule = {
       await this.saveOrderItemField(item, 'item_status', 'in_work');
     },
 
+    canDeleteOrderItem(item) {
+      if (!this.canCreateOrders) return false;
+      const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
+      if (!itemId) return false;
+      const status = this.normalizedWorkflowStatus(item?.item_status || 'new');
+      return ['new', 'approval'].includes(status);
+    },
+
+    async deleteOrderItem(item) {
+      const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
+      if (!itemId || !this.canDeleteOrderItem(item)) return;
+      const productName = String(item?.product_name || `Позиция #${itemId}`).trim();
+      if (!window.confirm(`Удалить позицию «${productName}»? Это действие нельзя отменить.`)) return;
+
+      const key = `orders_items:${itemId}:delete`;
+      this.saving = { ...this.saving, [key]: true };
+      this.error = '';
+      try {
+        await this.request(`/symbolika-yandex-disk/orders-items/${itemId}`, { method: 'DELETE' });
+        this.detailOrderItems = this.detailOrderItems.filter((row) => this.entityId(row?.id) !== itemId);
+        await this.loadAllowedData();
+        if (this.detail?.row && !this.detailIsOrder(this.detail.row)) await this.closeDetail();
+        this.feedbackSavedMessage = `Позиция «${productName}» удалена.`;
+      } catch (error) {
+        this.error = error.message || 'Не удалось удалить позицию.';
+      } finally {
+        const next = { ...this.saving };
+        delete next[key];
+        this.saving = next;
+      }
+    },
+
     orderWorkReadinessMissing(row) {
       const orderId = this.entityId(this.orderId(row));
       let missing;
@@ -14080,8 +14114,50 @@ export const CostingModule = {
           gap: 6px;
         }
 
+        .symbolika-costing-table-order-items .symbolika-costing-position-statuses-cell {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 7px 8px;
+          align-items: end;
+        }
+
+        .symbolika-costing-position-status-field {
+          display: grid;
+          gap: 4px;
+          min-inline-size: 0;
+        }
+
+        .symbolika-costing-position-status-field.is-primary,
+        .symbolika-costing-position-statuses-cell.is-ready .symbolika-costing-position-status-field:not(.is-primary) {
+          grid-column: 1 / -1;
+        }
+
+        .symbolika-costing-position-status-label {
+          overflow: hidden;
+          color: var(--theme--foreground-subdued);
+          font-size: 9px;
+          font-weight: 800;
+          letter-spacing: .04em;
+          line-height: 1;
+          text-overflow: ellipsis;
+          text-transform: uppercase;
+          white-space: nowrap;
+        }
+
+        .symbolika-costing-table-order-items .symbolika-costing-position-status-select {
+          block-size: 36px !important;
+          border-radius: 10px !important;
+          padding-inline: 11px 30px !important;
+          font-size: 12px !important;
+          line-height: 36px !important;
+        }
+
         .symbolika-costing-position-statuses-cell .symbolika-costing-position-send-work {
           grid-column: 1 / -1;
+        }
+
+        .symbolika-costing-table-order-items .symbolika-costing-position-send-work {
+          min-block-size: 36px;
+          border-radius: 10px;
         }
 
         .symbolika-costing-position-statuses.is-ready > .symbolika-costing-position-status-select:last-child {
@@ -18826,6 +18902,15 @@ export const CostingModule = {
           display: flex;
           flex-wrap: wrap;
           gap: 8px;
+        }
+
+        .symbolika-costing-item-delete-button {
+          color: var(--symbolika-danger-strong, #ff6b7d);
+          border-color: color-mix(in srgb, var(--symbolika-danger-strong, #ff6b7d) 55%, transparent);
+        }
+
+        .symbolika-costing-item-delete-button:hover:not(:disabled) {
+          background: color-mix(in srgb, var(--symbolika-danger-strong, #ff6b7d) 14%, transparent);
         }
 
         .symbolika-costing-detail-action {
@@ -24035,11 +24120,11 @@ export const CostingModule = {
         <div v-if="hasOrderDisplayMode && orderDisplayMode === 'items'" class="symbolika-costing-table-wrap">
           <table class="symbolika-costing-table symbolika-costing-table-compact symbolika-costing-table-order-items">
             <colgroup>
-              <col style="width: 24%" />
-              <col style="width: 12%" />
               <col style="width: 18%" />
+              <col style="width: 10%" />
+              <col style="width: 16%" />
               <col style="width: 14%" />
-              <col style="width: 22%" />
+              <col style="width: 32%" />
               <col style="width: 10%" />
             </colgroup>
             <thead>
@@ -24085,16 +24170,25 @@ export const CostingModule = {
                 </td>
                 <td>
                   <div class="symbolika-costing-position-statuses symbolika-costing-position-statuses-cell" :class="{ 'is-ready': isItemReady(row) }">
-                    <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'item_status'), statusToneClass(itemStatusName(row.item_status))]" :value="row.item_status || ''" title="Статус позиции" @click.stop @change.stop="saveOrderItemField(row, 'item_status', $event.target.value)">
-                      <option v-for="status in itemWorkflowStatusOptions(row)" :key="'position-mode-item-' + status.value" :value="status.value">{{ status.text }}</option>
-                    </select>
-                    <select v-if="!isItemReady(row)" class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'production_status'), statusToneClass(detailProductionStatus(row))]" :value="entityId(row.production_status) || ''" title="Статус производства" @click.stop @change.stop="saveOrderItemField(row, 'production_status', $event.target.value)">
-                      <option value="">Без статуса производства</option>
-                      <option v-for="status in productionStatuses" :key="'position-mode-production-' + status.id" :value="status.id">{{ status.name }}</option>
-                    </select>
-                    <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'office_status'), officeSelectClass(row.office_status)]" :value="row.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(row, 'office_status', $event.target.value)">
-                      <option v-for="status in officeStatusChoices" :key="'position-mode-office-' + status.value" :value="status.value">{{ status.text }}</option>
-                    </select>
+                    <label class="symbolika-costing-position-status-field is-primary" @click.stop>
+                      <span class="symbolika-costing-position-status-label">Позиция</span>
+                      <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'item_status'), statusToneClass(itemStatusName(row.item_status))]" :value="row.item_status || ''" title="Статус позиции" @click.stop @change.stop="saveOrderItemField(row, 'item_status', $event.target.value)">
+                        <option v-for="status in itemWorkflowStatusOptions(row)" :key="'position-mode-item-' + status.value" :value="status.value">{{ status.text }}</option>
+                      </select>
+                    </label>
+                    <label v-if="!isItemReady(row)" class="symbolika-costing-position-status-field" @click.stop>
+                      <span class="symbolika-costing-position-status-label">Производство</span>
+                      <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'production_status'), statusToneClass(detailProductionStatus(row))]" :value="entityId(row.production_status) || ''" title="Статус производства" @click.stop @change.stop="saveOrderItemField(row, 'production_status', $event.target.value)">
+                        <option value="">Без статуса производства</option>
+                        <option v-for="status in productionStatuses" :key="'position-mode-production-' + status.id" :value="status.id">{{ status.name }}</option>
+                      </select>
+                    </label>
+                    <label class="symbolika-costing-position-status-field" @click.stop>
+                      <span class="symbolika-costing-position-status-label">Офис</span>
+                      <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'office_status'), officeSelectClass(row.office_status)]" :value="row.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(row, 'office_status', $event.target.value)">
+                        <option v-for="status in officeStatusChoices" :key="'position-mode-office-' + status.value" :value="status.value">{{ status.text }}</option>
+                      </select>
+                    </label>
                     <button v-if="showsSendItemToWorkButton(row)" type="button" class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work" :class="savingWorkClass('orders_items', row, 'item_status')" :disabled="itemSendToWorkBusy(row)" :title="itemSendToWorkTitle(row)" @click.stop="sendItemToWorkFromList(row)"><v-icon name="play_arrow" small />Запустить в работу</button>
                   </div>
                 </td>
@@ -29944,6 +30038,16 @@ export const CostingModule = {
                 </button>
                 <button v-if="currentRoleName !== 'Контрагент'" type="button" class="symbolika-costing-mini-button symbolika-costing-item-parent-button" @click="openParentOrderDetail(detail.row)">
                   <v-icon name="open_in_new" small />Показать заказ
+                </button>
+                <button
+                  v-if="canDeleteOrderItem(detail.row)"
+                  type="button"
+                  class="symbolika-costing-mini-button symbolika-costing-item-delete-button"
+                  :disabled="saving['orders_items:' + detail.row.id + ':delete']"
+                  @click="deleteOrderItem(detail.row)"
+                >
+                  <v-icon name="delete_outline" small />
+                  {{ saving['orders_items:' + detail.row.id + ':delete'] ? 'Удаляем…' : 'Удалить позицию' }}
                 </button>
               </div>
             </section>
