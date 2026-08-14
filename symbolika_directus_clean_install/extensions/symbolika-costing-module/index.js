@@ -340,7 +340,9 @@ const orderSummaryFields = [
   'order_status',
   'order_status_name',
   'office_status',
+  'shipping_method',
   'shipping_method_name',
+  'shipping_comment',
   'order_sum',
   'paid_amount',
   'payment_due',
@@ -366,6 +368,7 @@ const overviewFields = [
   'order_status',
   'order_status_name',
   'office_status',
+  'shipping_method',
   'shipping_method_name',
   'order_sum',
   'paid_amount',
@@ -10416,6 +10419,12 @@ export const CostingModule = {
       return this.detailIsOrder(row) && ['Administrator', 'Управляющий'].includes(this.currentRoleName);
     },
 
+    canEditOrderShipping(row) {
+      if (!this.detailIsOrder(row)) return false;
+      return ['Administrator', 'Управляющий'].includes(this.currentRoleName)
+        || this.orderBelongsToCurrentEmployee(row);
+    },
+
     canManageInternalRouting() {
       return ['Administrator', 'Управляющий'].includes(this.currentRoleName);
     },
@@ -11730,6 +11739,7 @@ export const CostingModule = {
           "Менеджер": row.manager_name,
           "Статус": row.order_status_name,
           "Офис": this.officeStatusName(row.office_status),
+          "Отгрузка": this.shippingTitle(row),
           "Сумма": this.formatMoney(row.order_sum),
           "Оплачено": this.formatMoney(row.paid_amount),
           "Остаток": this.formatMoney(row.payment_due),
@@ -12254,14 +12264,16 @@ export const CostingModule = {
     },
 
     shippingIcon(row) {
-      const name = String(row?.shipping_method_name || '').toLowerCase();
+      const name = String(this.shippingTitle(row) || '').toLowerCase();
       if (name.includes('офис') || name.includes('самовывоз')) return 'storefront';
       if (name.includes('достав') || name.includes('курьер') || name.includes('транспорт')) return 'local_shipping';
       return 'inventory_2';
     },
 
     shippingTitle(row) {
-      return row?.shipping_method_name || 'Способ отгрузки не указан';
+      return row?.shipping_method_name
+        || shippingMethodChoices.find((choice) => choice.value === row?.shipping_method)?.text
+        || 'Способ отгрузки не указан';
     },
 
     paymentBadgeClass(value) {
@@ -12294,16 +12306,25 @@ export const CostingModule = {
       return this.entityId(entity?.manager || entity) || '';
     },
 
-    orderManagerEmployees() {
+    orderManagerEmployees(row = null) {
       const allowedPositions = new Set([
         '\u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440',
         '\u0430\u0434\u043c\u0438\u043d',
         '\u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440',
         '\u0443\u043f\u0440\u0430\u0432\u043b\u044f\u044e\u0449\u0438\u0439',
       ]);
-      return this.employees.filter((employee) => allowedPositions.has(
+      const employees = this.employees.filter((employee) => allowedPositions.has(
         String(this.relatedName(employee.position) || '').trim().toLowerCase(),
       ));
+      const managerId = this.entityId(row?.manager_employee);
+      if (managerId && !employees.some((employee) => String(employee.id) === String(managerId))) {
+        employees.push({
+          id: managerId,
+          full_name: this.detailManagerName(row),
+          position: null,
+        });
+      }
+      return employees;
     },
 
     transferManagerEmployees() {
@@ -24899,11 +24920,12 @@ export const CostingModule = {
           <table class="symbolika-costing-table symbolika-costing-table-order-list symbolika-costing-table-my-orders">
             <colgroup>
               <col style="width: 28px" />
-              <col style="width: 16%" />
-              <col style="width: 18%" />
-              <col style="width: 15%" />
-              <col style="width: 27%" />
-              <col style="width: 20%" />
+              <col style="width: 13%" />
+              <col style="width: 17%" />
+              <col style="width: 14%" />
+              <col style="width: 28%" />
+              <col style="width: 5%" />
+              <col style="width: 17%" />
             </colgroup>
             <thead>
               <tr>
@@ -24912,6 +24934,7 @@ export const CostingModule = {
                 <th>Заказчик</th>
                 <th>Менеджер</th>
                 <th>Статусы</th>
+                <th>Отгрузка</th>
                 <th class="symbolika-costing-num">Деньги</th>
               </tr>
             </thead>
@@ -24983,6 +25006,11 @@ export const CostingModule = {
                     </button>
                   </div>
                 </td>
+                <td class="symbolika-costing-shipping-cell">
+                  <span class="symbolika-costing-shipping-icon" :title="shippingTitle(row)" :aria-label="shippingTitle(row)">
+                    <v-icon :name="shippingIcon(row)" small />
+                  </span>
+                </td>
                 <td class="symbolika-costing-num">
                   <div class="symbolika-costing-cell-money">
                     <span>Сумма <strong>{{ formatMoney(row.order_sum) }}</strong></span>
@@ -24992,7 +25020,7 @@ export const CostingModule = {
                 </td>
               </tr>
               <tr v-if="isOrderRowExpanded(row)" class="symbolika-costing-expanded-row">
-                <td colspan="6" class="symbolika-costing-position-panel">
+                <td colspan="7" class="symbolika-costing-position-panel">
                   <div class="symbolika-costing-position-list">
                     <div
                       v-for="item in detailPositions(row)"
@@ -30103,7 +30131,7 @@ export const CostingModule = {
                   @change="saveOrderManager(detail.row, $event.target.value)"
                 >
                   <option value="">Не выбран</option>
-                  <option v-for="employee in orderManagerEmployees()" :key="'order-manager-' + employee.id" :value="employee.id">
+                  <option v-for="employee in orderManagerEmployees(detail.row)" :key="'order-manager-' + employee.id" :value="employee.id">
                     {{ employee.full_name }}{{ relatedName(employee.position) ? ' · ' + relatedName(employee.position) : '' }}
                   </option>
                 </select>
@@ -30161,6 +30189,39 @@ export const CostingModule = {
                   :value="dateInput(detail.row.deadline)"
                   @change="saveOrderField(detail.row, 'deadline', $event.target.value)"
                 />
+              </div>
+            </div>
+
+            <div class="symbolika-costing-detail-section-title">Отгрузка</div>
+            <div class="symbolika-costing-detail-field is-primary">
+              <div class="symbolika-costing-detail-label">Способ отгрузки</div>
+              <div class="symbolika-costing-detail-value">
+                <select
+                  v-if="canEditOrderShipping(detail.row)"
+                  class="symbolika-costing-table-select"
+                  :class="savingWorkClass('orders', detail.row, 'shipping_method')"
+                  :value="detail.row.shipping_method || 'office_pickup'"
+                  @change="saveOrderField(detail.row, 'shipping_method', $event.target.value)"
+                >
+                  <option v-for="method in shippingMethodChoices" :key="'detail-shipping-' + method.value" :value="method.value">
+                    {{ method.text }}
+                  </option>
+                </select>
+                <span v-else>{{ shippingTitle(detail.row) }}</span>
+              </div>
+            </div>
+            <div v-if="detail.row.shipping_method && detail.row.shipping_method !== 'office_pickup'" class="symbolika-costing-detail-field symbolika-costing-detail-wide">
+              <div class="symbolika-costing-detail-label">Комментарий по отгрузке</div>
+              <div class="symbolika-costing-detail-value">
+                <textarea
+                  v-if="canEditOrderShipping(detail.row)"
+                  class="symbolika-costing-textarea"
+                  :class="savingWorkClass('orders', detail.row, 'shipping_comment')"
+                  :value="detail.row.shipping_comment || ''"
+                  placeholder="Адрес, получатель, телефон, транспортная компания или другие детали"
+                  @change="saveOrderField(detail.row, 'shipping_comment', $event.target.value)"
+                ></textarea>
+                <span v-else>{{ detail.row.shipping_comment || 'Комментарий не указан' }}</span>
               </div>
             </div>
 

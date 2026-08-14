@@ -5936,6 +5936,7 @@ CREATE TABLE IF NOT EXISTS my_orders_in_work (
   office_status character varying(255),
   shipping_method character varying(255),
   shipping_method_name character varying(255),
+  shipping_comment text,
   order_sum numeric(10,2),
   paid_amount numeric(10,2),
   payment_due numeric(10,2)
@@ -5943,6 +5944,10 @@ CREATE TABLE IF NOT EXISTS my_orders_in_work (
 
 CREATE TABLE IF NOT EXISTS my_orders_completed (LIKE my_orders_in_work INCLUDING ALL);
 CREATE TABLE IF NOT EXISTS my_orders_unpaid (LIKE my_orders_in_work INCLUDING ALL);
+
+ALTER TABLE my_orders_in_work ADD COLUMN IF NOT EXISTS shipping_comment text;
+ALTER TABLE my_orders_completed ADD COLUMN IF NOT EXISTS shipping_comment text;
+ALTER TABLE my_orders_unpaid ADD COLUMN IF NOT EXISTS shipping_comment text;
 
 CREATE TABLE IF NOT EXISTS my_orders_in_work_items (
   id integer PRIMARY KEY,
@@ -6589,7 +6594,7 @@ BEGIN
   IF is_completed THEN
     INSERT INTO my_orders_completed (
       id, order_number, date, deadline, customer, customer_company, customer_display, manager_employee, manager_name,
-      order_status, order_status_name, office_status, shipping_method, shipping_method_name,
+      order_status, order_status_name, office_status, shipping_method, shipping_method_name, shipping_comment,
       order_sum, paid_amount, payment_due, completion_percent, completion_missing_count, completion_missing,
       work_completion_percent, work_completion_missing_count, work_completion_missing
     )
@@ -6598,7 +6603,7 @@ BEGIN
       order_row.customer, order_row.customer_company,
       order_row.customer_display, order_row.manager_employee, order_row.manager_name,
       order_row.order_status, order_row.order_status_name, order_row.office_status,
-      order_row.shipping_method, order_row.shipping_method_name,
+      order_row.shipping_method, order_row.shipping_method_name, order_row.shipping_comment,
       order_row.order_sum, order_row.paid_amount, order_row.payment_due,
       order_row.completion_percent, order_row.completion_missing_count, order_row.completion_missing,
       order_row.work_completion_percent, order_row.work_completion_missing_count, order_row.work_completion_missing
@@ -6606,7 +6611,7 @@ BEGIN
   ELSE
     INSERT INTO my_orders_in_work (
       id, order_number, date, deadline, customer, customer_company, customer_display, manager_employee, manager_name,
-      order_status, order_status_name, office_status, shipping_method, shipping_method_name,
+      order_status, order_status_name, office_status, shipping_method, shipping_method_name, shipping_comment,
       order_sum, paid_amount, payment_due, completion_percent, completion_missing_count, completion_missing,
       work_completion_percent, work_completion_missing_count, work_completion_missing
     )
@@ -6615,7 +6620,7 @@ BEGIN
       order_row.customer, order_row.customer_company,
       order_row.customer_display, order_row.manager_employee, order_row.manager_name,
       order_row.order_status, order_row.order_status_name, order_row.office_status,
-      order_row.shipping_method, order_row.shipping_method_name,
+      order_row.shipping_method, order_row.shipping_method_name, order_row.shipping_comment,
       order_row.order_sum, order_row.paid_amount, order_row.payment_due,
       order_row.completion_percent, order_row.completion_missing_count, order_row.completion_missing,
       order_row.work_completion_percent, order_row.work_completion_missing_count, order_row.work_completion_missing
@@ -6625,7 +6630,7 @@ BEGIN
   IF is_unpaid THEN
     INSERT INTO my_orders_unpaid (
       id, order_number, date, deadline, customer, customer_company, customer_display, manager_employee, manager_name,
-      order_status, order_status_name, office_status, shipping_method, shipping_method_name,
+      order_status, order_status_name, office_status, shipping_method, shipping_method_name, shipping_comment,
       order_sum, paid_amount, payment_due, completion_percent, completion_missing_count, completion_missing,
       work_completion_percent, work_completion_missing_count, work_completion_missing
     )
@@ -6634,7 +6639,7 @@ BEGIN
       order_row.customer, order_row.customer_company,
       order_row.customer_display, order_row.manager_employee, order_row.manager_name,
       order_row.order_status, order_row.order_status_name, order_row.office_status,
-      order_row.shipping_method, order_row.shipping_method_name,
+      order_row.shipping_method, order_row.shipping_method_name, order_row.shipping_comment,
       order_row.order_sum, order_row.paid_amount, order_row.payment_due,
       order_row.completion_percent, order_row.completion_missing_count, order_row.completion_missing,
       order_row.work_completion_percent, order_row.work_completion_missing_count, order_row.work_completion_missing
