@@ -15,6 +15,7 @@
     "test:notifications": "node notifications.js"
     ,"test:error-toast": "node error-toast.js"
     ,"test:layout-upload-progress": "node layout-upload-progress.js"
+    ,"test:layout-external-link": "node layout-external-link.js"
   },
   "dependencies": {
     "playwright": "1.61.1"

@@ -287,10 +287,9 @@ export default {
       const payouts = await database('business_expenses as be')
         .leftJoin('payment_types as pt', 'pt.id', 'be.payment_type')
         .where('be.employee', employeeId)
-        .where('be.expense_date', '>=', period.start)
-        .where('be.expense_date', '<', period.end)
+        .whereRaw("COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = ?::date", [period.start])
         .whereIn('be.expense_type', ['salary_payment', 'employee_advance', 'employee_bonus'])
-        .select('be.id', 'be.expense_date', 'be.expense_type', 'be.amount', 'be.comment', 'pt.name as payment_type_name')
+        .select('be.id', 'be.expense_date', 'be.accounting_month', 'be.expense_type', 'be.amount', 'be.comment', 'pt.name as payment_type_name')
         .orderBy('be.expense_date', 'asc')
         .orderBy('be.id', 'asc');
 

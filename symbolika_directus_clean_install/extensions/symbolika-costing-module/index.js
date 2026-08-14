@@ -30,6 +30,8 @@
   'contractor_2_cost',
   'unit_cost',
   'total_cost',
+  'manager_commission_sum',
+  'tax_sum',
   'profit_sum',
   'margin_percent',
 ];
@@ -218,6 +220,7 @@ const contractorFields = [
 const expenseFields = [
   'id',
   'expense_date',
+  'accounting_month',
   'expense_type',
   'amount',
   'employee.id',
@@ -342,6 +345,29 @@ const overviewFields = [
   'work_completion_missing',
 ];
 
+const orderEconomicsFields = [
+  'id',
+  'order_number',
+  'date',
+  'deadline',
+  'customer.id',
+  'customer.name',
+  'customer_company.id',
+  'customer_company.name',
+  'manager_employee.id',
+  'manager_employee.full_name',
+  'order_status.id',
+  'order_status.name',
+  'order_sum',
+  'paid_amount',
+  'payment_due',
+  'items_total_cost',
+  'items_tax_sum',
+  'items_manager_commission_sum',
+  'profit_sum',
+  'margin_percent',
+];
+
 const tabs = [
   { id: 'notification_center', title: 'Центр уведомлений', collection: '' },
   { id: 'profile', title: 'Личный кабинет', collection: '' },
@@ -359,6 +385,7 @@ const tabs = [
   { id: 'estimates', title: 'Расчеты', collection: 'order_estimates' },
   { id: 'orders_archive', title: 'Архив заказов', collection: 'orders_overview' },
   { id: 'items_archive', title: 'Архив позиций', collection: 'contractor_costing' },
+  { id: 'order_economics', title: 'Экономика заказов', collection: 'orders' },
   { id: 'costing', title: 'Себестоимость', collection: 'contractor_costing' },
   // Историческая витрина purchasing оставлена в коде для совместимости старых
   // ссылок, но больше не выводится в меню. Рабочий источник закупок —
@@ -494,7 +521,7 @@ const moduleSections = {
   },
   management: {
     title: 'Управление',
-    tabs: ['costing', 'automation_control', 'admin_customer_notifications'],
+    tabs: ['order_economics', 'costing', 'automation_control', 'admin_customer_notifications'],
     roles: ['Administrator', 'Управляющий'],
   },
   procurement: {
@@ -1040,6 +1067,7 @@ export const CostingModule = {
       rows: [],
       contractors: [],
       loading: true,
+      areaRefreshing: false,
       saving: {},
       error: '',
       errorToast: '',
@@ -1149,13 +1177,31 @@ export const CostingModule = {
       expenseRows: [],
       contractorPaymentRows: [],
       contractorSettlementView: 'contractors',
+      orderEconomicsView: 'orders',
+      orderEconomicsArchiveMode: 'all',
+      orderEconomicsDateFrom: '',
+      orderEconomicsDateTo: '',
+      orderEconomicsManagerFilter: '',
+      orderEconomicsContractorFilter: '',
+      orderEconomicsSort: 'date_desc',
       salaryRows: [],
+      payrollSalaryRows: [],
       payrollMonth: new Date().toISOString().slice(0, 7),
+      financeSettings: {
+        id: 1,
+        monthly_rent: 160000,
+        rent_due_day_from: 26,
+        rent_due_day_to: 30,
+        advance_day: 28,
+        salary_day: 12,
+      },
+      financeSettingsSaving: false,
       profilePayslipMonth: new Date().toISOString().slice(0, 7),
       managerSummaryRows: [],
       managerSummaryLoading: false,
       payslipDialog: null,
       managerFinanceSummary: null,
+      orderEconomicsRows: [],
       myOrderRows: [],
       allOrderRows: [],
       urgentRows: [],
@@ -1288,6 +1334,7 @@ export const CostingModule = {
       itemPublicLinkLoading: {},
       itemPublicLinkErrors: {},
       copiedPublicItemId: null,
+      copiedLayoutLinkId: null,
       layoutUploading: {},
       layoutUploadProgress: {},
       layoutUploadDialog: null,
@@ -1314,7 +1361,8 @@ export const CostingModule = {
       const workTabs = ['profile', 'dashboard', 'queue', 'tasks', 'tasks_archive', 'events', 'problems', 'search'];
       const withWorkTabs = (ids) => tabs.filter((tab) => workTabs.includes(tab.id) || ids.includes(tab.id));
       let roleTabs = [];
-      if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) roleTabs = tabs;
+      if (this.currentRoleName === 'Administrator') roleTabs = tabs;
+      else if (this.currentRoleName === 'Управляющий') roleTabs = tabs.filter((tab) => tab.id !== 'order_economics');
       else if (this.currentRoleName === 'Производство') roleTabs = withWorkTabs(['my_orders', 'production', 'labels', 'admin_inventory', 'admin_procurement']);
       else if (this.currentRoleName === 'Шелкография') roleTabs = withWorkTabs(['my_orders', 'screen', 'labels', 'admin_inventory', 'admin_procurement']);
       else if (this.currentRoleName === 'Контрагент') roleTabs = tabs.filter((tab) => tab.id === 'contractor_work');
@@ -1709,7 +1757,7 @@ export const CostingModule = {
         { title: 'Производство', tabs: ['production', 'screen', 'labels'] },
         { title: 'Склад', tabs: ['admin_inventory'] },
         { title: 'Закупки', tabs: ['admin_procurement'] },
-        { title: 'Управление', tabs: ['costing', 'automation_control'] },
+        { title: 'Управление', tabs: ['order_economics', 'costing', 'automation_control'] },
         { title: 'Офис', tabs: ['office'] },
         { title: 'Админка', tabs: ['admin_employees', 'admin_users', 'admin_positions', 'contractors', 'admin_categories', 'admin_subcategories', 'admin_methods', 'admin_routing', 'admin_order_statuses', 'admin_production_statuses'] },
         { title: 'Финансы админки', tabs: ['admin_finance_dashboard', 'payroll', 'expenses', 'contractor_settlements', 'monthly_results'] },
@@ -2034,6 +2082,87 @@ export const CostingModule = {
         this.relatedName(row.customer_company),
         this.relatedName(row.manager_employee, 'full_name'),
       ], (row) => this.matchesCostingFilters(row) && !this.isItemArchived(row));
+    },
+
+    visibleOrderEconomicsRows() {
+      const rows = this.applySearchAndFilter(this.orderEconomicsRows, (row) => [
+        row.order_number,
+        row.date,
+        row.deadline,
+        this.relatedName(row.customer),
+        this.relatedName(row.customer_company),
+        this.relatedName(row.manager_employee, 'full_name'),
+        this.relatedName(row.order_status),
+        this.orderEconomicsContractors(row),
+        this.orderEconomicsPositions(row),
+      ], (row) => {
+        if (this.orderEconomicsArchiveMode === 'active' && this.isOrderArchived(row)) return false;
+        if (this.orderEconomicsArchiveMode === 'archive' && !this.isOrderArchived(row)) return false;
+        if (!this.matchesDateRange(row.date, this.orderEconomicsDateFrom, this.orderEconomicsDateTo)) return false;
+        if (this.orderEconomicsManagerFilter && String(this.entityId(row.manager_employee)) !== String(this.orderEconomicsManagerFilter)) return false;
+        if (this.orderEconomicsContractorFilter) {
+          const matches = this.orderEconomicsItems(row).some((item) => [item.contractor_1, item.contractor_2]
+            .some((contractor) => String(this.entityId(contractor)) === String(this.orderEconomicsContractorFilter)));
+          if (!matches) return false;
+        }
+        return true;
+      });
+      return this.sortOrderEconomicsRows(rows);
+    },
+
+    visibleOrderEconomicsItemRows() {
+      const query = String(this.search || '').trim().toLowerCase();
+      const rows = (this.rows || []).filter((row) => {
+        if (this.orderEconomicsArchiveMode === 'active' && this.isItemArchived(row)) return false;
+        if (this.orderEconomicsArchiveMode === 'archive' && !this.isItemArchived(row)) return false;
+        if (!this.matchesDateRange(row.date, this.orderEconomicsDateFrom, this.orderEconomicsDateTo)) return false;
+        if (this.orderEconomicsManagerFilter && String(this.entityId(row.manager_employee)) !== String(this.orderEconomicsManagerFilter)) return false;
+        if (this.orderEconomicsContractorFilter && ![row.contractor_1, row.contractor_2]
+          .some((contractor) => String(this.entityId(contractor)) === String(this.orderEconomicsContractorFilter))) return false;
+        if (!query) return true;
+        return [
+          row.order_number,
+          row.product_name,
+          this.relatedName(row.customer),
+          this.relatedName(row.customer_company),
+          this.relatedName(row.manager_employee, 'full_name'),
+          this.relatedName(row.contractor_1),
+          this.relatedName(row.contractor_2),
+        ].some((value) => String(value || '').toLowerCase().includes(query));
+      });
+      return this.sortOrderEconomicsRows(rows);
+    },
+
+    orderEconomicsManagerOptions() {
+      const options = new Map();
+      (this.orderEconomicsRows || []).forEach((row) => {
+        const id = this.entityId(row.manager_employee);
+        const name = this.relatedName(row.manager_employee, 'full_name');
+        if (id && name) options.set(String(id), name);
+      });
+      return [...options.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    },
+
+    orderEconomicsContractorOptions() {
+      return (this.contractors || []).map((row) => ({ id: row.id, name: row.name })).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    },
+
+    orderEconomicsSummary() {
+      const itemView = this.orderEconomicsView === 'items';
+      const rows = itemView ? this.visibleOrderEconomicsItemRows : this.visibleOrderEconomicsRows;
+      const orderIds = new Set();
+      return rows.reduce((summary, row) => {
+        const orderId = itemView ? (this.entityId(row.order) || this.entityId(row.order_link)) : this.entityId(row.id);
+        if (orderId) orderIds.add(String(orderId));
+        summary.orders = orderIds.size;
+        summary.items += itemView ? 1 : this.orderEconomicsItems(row).length;
+        summary.revenue += this.parseMoney(row.order_sum);
+        summary.cost += this.parseMoney(itemView ? row.total_cost : row.items_total_cost);
+        summary.tax += this.parseMoney(itemView ? row.tax_sum : row.items_tax_sum);
+        summary.commission += this.parseMoney(itemView ? row.manager_commission_sum : row.items_manager_commission_sum);
+        summary.profit += this.parseMoney(row.profit_sum);
+        return summary;
+      }, { orders: 0, items: 0, revenue: 0, cost: 0, tax: 0, commission: 0, profit: 0 });
     },
 
     visiblePurchaseRows() {
@@ -2464,20 +2593,24 @@ export const CostingModule = {
     contractorOrderSettlementRows() {
       const groups = new Map();
       const itemOrders = new Map();
-      const ensureGroup = (orderId, contractorId, source = {}) => {
-        const key = `${orderId}:${contractorId}`;
+      const itemSources = new Map();
+      const legacyOrderPayments = [];
+      const ensureGroup = (itemId, contractorId, source = {}) => {
+        const key = `${itemId}:${contractorId}`;
         if (!groups.has(key)) {
           groups.set(key, {
             key,
-            order_id: orderId,
-            order_number: source.order_number || this.orderNumber(source) || `#${orderId}`,
+            item_id: itemId,
+            order_id: this.entityId(this.orderId(source)) || source.order_id || null,
+            order_number: source.order_number || this.orderNumber(source) || '-',
             order_date: source.date || '',
             customer_name: source.customer_name || source.customer_display || this.relatedName(source.customer) || this.relatedName(source.customer_company) || '-',
             contractor_id: contractorId,
             contractor_name: source.contractor_name || '-',
+            product_name: source.product_name || this.relatedName(source.related_order_item, 'product_name') || 'Позиция',
+            quantity: this.parseMoney(source.quantity),
             accrued: 0,
             paid: 0,
-            positions: [],
           });
         }
         return groups.get(key);
@@ -2487,19 +2620,16 @@ export const CostingModule = {
         const orderId = this.entityId(this.orderId(row));
         const itemId = this.entityId(row.order_item) || this.entityId(row.id);
         if (itemId && orderId) itemOrders.set(Number(itemId), Number(orderId));
-        if (!orderId) return;
+        if (itemId) itemSources.set(Number(itemId), row);
+        if (!itemId || !orderId) return;
         const quantity = this.parseMoney(row.quantity);
         const addContractorCost = (contractor, unitCost) => {
           const contractorId = this.entityId(contractor);
           const amount = this.parseMoney(unitCost) * quantity;
           if (!contractorId || amount <= 0) return;
-          const group = ensureGroup(Number(orderId), Number(contractorId), row);
+          const group = ensureGroup(Number(itemId), Number(contractorId), row);
           group.contractor_name = this.relatedName(contractor) || group.contractor_name;
           group.accrued += amount;
-          const positionId = itemId || `${row.product_name}:${group.positions.length}`;
-          if (!group.positions.some((position) => String(position.id) === String(positionId))) {
-            group.positions.push({ id: positionId, name: row.product_name || 'Позиция', amount });
-          }
         };
         addContractorCost(row.contractor_1, row.contractor_1_cost);
         addContractorCost(row.contractor_2, row.contractor_2_cost);
@@ -2508,14 +2638,40 @@ export const CostingModule = {
       (this.contractorPaymentRows || []).forEach((payment) => {
         const contractorId = this.entityId(payment.contractor);
         const itemId = this.entityId(payment.related_order_item);
+        if (!contractorId) return;
+        if (!itemId) {
+          if (this.entityId(payment.related_order)) legacyOrderPayments.push(payment);
+          return;
+        }
+        const source = itemSources.get(Number(itemId)) || {};
         const orderId = this.entityId(payment.related_order) || itemOrders.get(Number(itemId));
-        if (!contractorId || !orderId) return;
-        const group = ensureGroup(Number(orderId), Number(contractorId), {
-          order_number: this.orderNumber(payment.related_order),
+        const group = ensureGroup(Number(itemId), Number(contractorId), {
+          ...source,
+          order_id: orderId,
+          order_number: this.orderNumber(payment.related_order) !== '-' ? this.orderNumber(payment.related_order) : this.orderNumber(source),
           contractor_name: this.relatedName(payment.contractor),
+          product_name: this.relatedName(payment.related_order_item, 'product_name') || source.product_name,
         });
         group.contractor_name = this.relatedName(payment.contractor) || group.contractor_name;
         group.paid += this.parseMoney(payment.amount);
+      });
+
+      // Older payments could be linked only to an order. Preserve their meaning
+      // by assigning them to that order's positions of the same contractor.
+      legacyOrderPayments.forEach((payment) => {
+        const contractorId = this.entityId(payment.contractor);
+        const orderId = this.entityId(payment.related_order);
+        let remaining = this.parseMoney(payment.amount);
+        [...groups.values()]
+          .filter((row) => Number(row.contractor_id) === Number(contractorId) && Number(row.order_id) === Number(orderId))
+          .sort((left, right) => Number(left.item_id || 0) - Number(right.item_id || 0))
+          .forEach((row) => {
+            if (remaining <= 0) return;
+            const due = Math.max(this.parseMoney(row.accrued) - this.parseMoney(row.paid), 0);
+            const allocated = Math.min(remaining, due);
+            row.paid += allocated;
+            remaining = Math.max(0, this.parseMoney(remaining - allocated));
+          });
       });
 
       return [...groups.values()]
@@ -2526,7 +2682,6 @@ export const CostingModule = {
           balance: this.parseMoney(row.accrued) - this.parseMoney(row.paid),
           due: Math.max(this.parseMoney(row.accrued) - this.parseMoney(row.paid), 0),
           overpaid: Math.max(this.parseMoney(row.paid) - this.parseMoney(row.accrued), 0),
-          positions_text: row.positions.map((position) => position.name).join(', '),
         }))
         .sort((left, right) => Number(right.due > 0) - Number(left.due > 0)
           || String(right.order_date || '').localeCompare(String(left.order_date || ''))
@@ -2539,7 +2694,7 @@ export const CostingModule = {
         row.order_number,
         row.customer_name,
         row.contractor_name,
-        row.positions_text,
+        row.product_name,
       ], () => true);
     },
 
@@ -2599,12 +2754,12 @@ export const CostingModule = {
       });
 
       this.expenseRows.forEach((row) => {
-        if (row.expense_type === 'contractor_payment') return;
+        if (['contractor_payment', 'employee_bonus'].includes(row.expense_type)) return;
         const month = ensure(row.expense_date);
         if (!month) return;
         const amount = this.parseMoney(row.amount);
         month.operational_expenses += amount;
-        if (['salary_payment', 'employee_advance', 'employee_bonus'].includes(row.expense_type)) {
+        if (['salary_payment', 'employee_advance'].includes(row.expense_type)) {
           month.salary_expenses += amount;
         } else {
           month.other_expenses += amount;
@@ -2662,7 +2817,7 @@ export const CostingModule = {
       const ourDebt = contractorDebt + salaryDebt + customerOverpay;
 
       const actualMonthExpenses = this.expenseRows.reduce((sum, row) => {
-        if (row.expense_type === 'contractor_payment') return sum;
+        if (['contractor_payment', 'employee_bonus'].includes(row.expense_type)) return sum;
         if (this.monthKey(row.expense_date) !== currentMonthKey) return sum;
         const date = new Date(row.expense_date);
         if (Number.isNaN(date.getTime()) || date > todayEnd) return sum;
@@ -2670,7 +2825,7 @@ export const CostingModule = {
       }, 0);
 
       const futureMonthExpenses = this.expenseRows.reduce((sum, row) => {
-        if (row.expense_type === 'contractor_payment') return sum;
+        if (['contractor_payment', 'employee_bonus'].includes(row.expense_type)) return sum;
         if (this.monthKey(row.expense_date) !== currentMonthKey) return sum;
         const date = new Date(row.expense_date);
         if (Number.isNaN(date.getTime()) || date <= todayEnd) return sum;
@@ -2682,7 +2837,8 @@ export const CostingModule = {
       const sumField = (rows, field) => rows.reduce((sum, row) => sum + this.parseMoney(row[field]), 0);
       const currentYearResult = sumField(yearRows, 'result');
       const previousYearResult = sumField(previousYearRows, 'result');
-      const projectedExpenses = actualMonthExpenses + futureMonthExpenses + salaryDebt;
+      const unpaidRent = this.currentRentStatus.due;
+      const projectedExpenses = actualMonthExpenses + futureMonthExpenses + unpaidRent + salaryDebt;
       const projectedResult = this.parseMoney(monthRow.clean_profit) - projectedExpenses;
 
       return {
@@ -2694,7 +2850,7 @@ export const CostingModule = {
         currentMonth: {
           ...monthRow,
           operational_expenses_to_date: actualMonthExpenses,
-          future_operational_expenses: futureMonthExpenses,
+          future_operational_expenses: futureMonthExpenses + unpaidRent,
           result_to_date: this.parseMoney(monthRow.clean_profit) - actualMonthExpenses,
           projected_expenses: projectedExpenses,
           projected_result: projectedResult,
@@ -2730,14 +2886,26 @@ export const CostingModule = {
         this.relatedName(row.employee, 'full_name'),
         this.relatedName(row.payment_type),
         row.comment,
-      ], (row) => ['salary_payment', 'employee_advance', 'employee_bonus'].includes(row.expense_type));
+      ], (row) => ['salary_payment', 'employee_advance', 'employee_bonus'].includes(row.expense_type)
+        && this.monthKey(row.accounting_month || row.expense_date) === this.payrollMonth);
     },
 
     visibleSalaryRows() {
-      return this.applySearchAndFilter(this.salaryRows, (row) => [
+      return this.applySearchAndFilter(this.payrollSalaryRows, (row) => [
         row.employee_name,
         row.position_name,
       ], () => true);
+    },
+
+    currentRentStatus() {
+      const month = this.monthKey(new Date());
+      const planned = this.parseMoney(this.financeSettings?.monthly_rent);
+      const paid = this.expenseRows.reduce((sum, row) => {
+        if (row.expense_type !== 'rent') return sum;
+        if (this.monthKey(row.accounting_month || row.expense_date) !== month) return sum;
+        return sum + this.parseMoney(row.amount);
+      }, 0);
+      return { month, planned, paid, due: Math.max(planned - paid, 0) };
     },
 
     visibleMyOrderRows() {
@@ -2832,6 +3000,13 @@ export const CostingModule = {
         || String(this.entityId(event.task_created_user) || '') === currentUser;
     },
 
+    // Compatibility for a cached admin bundle that used the earlier plural
+    // method name. Keeping the alias prevents a mixed client/server update from
+    // breaking order and task history until the browser cache is refreshed.
+    eventsVisibleToCurrentUser(event) {
+      return this.eventIsVisibleToCurrentUser(event);
+    },
+
     visibleEventGroups() {
       const groups = new Map();
       this.visibleEventRows.forEach((event) => {
@@ -2886,6 +3061,7 @@ export const CostingModule = {
         my_orders: ['my_orders', 'all_orders'],
         estimates: ['estimates', 'estimate_items'],
         costing: ['costing'],
+        order_economics: ['order_economics'],
         purchasing: ['costing'],
         items_archive: ['costing'],
         production: ['production_work'],
@@ -2913,6 +3089,16 @@ export const CostingModule = {
         loaded: states.reduce((sum, state) => sum + Number(state.loaded || 0), 0),
         total: states.reduce((sum, state) => sum + Number(state.total || state.loaded || 0), 0),
       };
+    },
+
+    canRefreshCurrentArea() {
+      return [
+        'all_orders', 'my_orders', 'orders_archive',
+        'order_economics',
+        'production', 'screen', 'contractor_work', 'production_archive',
+        'admin_procurement',
+        'tasks', 'tasks_archive',
+      ].includes(this.activeTab);
     },
   },
 
@@ -3166,6 +3352,18 @@ export const CostingModule = {
       }
     },
 
+    layoutExternalUrl(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+      try {
+        const url = new URL(candidate);
+        return ['http:', 'https:'].includes(url.protocol) && url.hostname ? url.href : '';
+      } catch {
+        return '';
+      }
+    },
+
     setTab(tab) {
       if (!this.availableTabs.some((item) => item.id === tab)) return;
       this.activeTab = tab;
@@ -3184,9 +3382,11 @@ export const CostingModule = {
       }
       if (tab === 'payroll') {
         this.loadSalaryRows();
+        this.loadPayrollSalaryRows();
         this.loadManagerSummary();
         this.loadEmployees();
       }
+      if (tab === 'expenses') this.loadFinanceSettings();
       this.$nextTick(() => {
         this.bindPagingObserver();
       });
@@ -3507,6 +3707,16 @@ export const CostingModule = {
       }
     },
 
+    async openLinkedPositionById(itemId) {
+      if (!Number(itemId)) return;
+      const position = await this.findLinkedPosition(Number(itemId));
+      if (!position) {
+        this.error = 'Позиция не найдена или у вас нет к ней доступа.';
+        return;
+      }
+      await this.openDetail(position.type, position.row, { parentOrder: this.detailOrderContext(position.row) });
+    },
+
     async openLinkedEntity() {
       const reference = this.linkedEntityReference();
       if (!reference) return;
@@ -3682,6 +3892,32 @@ export const CostingModule = {
         }, 1800);
       } catch {
         this.error = 'Не удалось скопировать ссылку. Скопируйте адрес из строки браузера.';
+      }
+    },
+
+    async copyLayoutLink(row) {
+      const url = String(row?.url || '').trim();
+      const itemId = Number(this.entityId(row?.order_item) || this.entityId(row?.id) || 0);
+      if (!url || !itemId) return;
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(url);
+        } else {
+          const textarea = document.createElement('textarea');
+          textarea.value = url;
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand('copy');
+          textarea.remove();
+        }
+        this.copiedLayoutLinkId = itemId;
+        window.setTimeout(() => {
+          if (this.copiedLayoutLinkId === itemId) this.copiedLayoutLinkId = null;
+        }, 1800);
+      } catch {
+        this.error = 'Не удалось скопировать ссылку на макет.';
       }
     },
 
@@ -4508,6 +4744,7 @@ export const CostingModule = {
         this.loadAllOrderRows(),
       );
       if (allowed.has('estimates')) tasks.push(this.loadEstimateRows(), this.loadEstimateItemRows(), this.loadCustomers(), this.loadCompanies(), this.loadContractors(), this.loadCreateOrderDictionaries());
+      if (allowed.has('order_economics')) tasks.push(this.loadOrderEconomicsRows());
       const canReadAllItemRowsForLabels = allowed.has('labels') && ['Administrator', 'Управляющий'].includes(this.currentRoleName);
       if (allowed.has('costing') || allowed.has('purchasing') || allowed.has('items_archive') || canReadAllItemRowsForLabels) {
         tasks.push(this.loadRows(), this.loadContractors());
@@ -4517,8 +4754,8 @@ export const CostingModule = {
       ) {
         tasks.push(this.loadRows({ silent: true }), this.loadContractors());
       }
-      if (allowed.has('admin_finance_dashboard') || allowed.has('expenses') || allowed.has('payroll') || allowed.has('contractor_settlements') || allowed.has('monthly_results')) tasks.push(this.loadFinanceRows(), this.loadExpenseRows(), this.loadContractorPaymentRows(), this.loadSalaryRows(), this.loadEmployees(), this.loadPaymentTypes(), this.loadContractors(), this.loadRows(), this.loadContractorRows());
-      if (allowed.has('payroll')) tasks.push(this.loadManagerSummary());
+      if (allowed.has('admin_finance_dashboard') || allowed.has('expenses') || allowed.has('payroll') || allowed.has('contractor_settlements') || allowed.has('monthly_results')) tasks.push(this.loadFinanceRows(), this.loadExpenseRows(), this.loadContractorPaymentRows(), this.loadSalaryRows(), this.loadFinanceSettings(), this.loadEmployees(), this.loadPaymentTypes(), this.loadContractors(), this.loadRows(), this.loadContractorRows());
+      if (allowed.has('payroll')) tasks.push(this.loadManagerSummary(), this.loadPayrollSalaryRows());
       if (allowed.has('finance')) tasks.push(this.loadFinanceRows(), this.loadFinanceItemRows(), this.loadManagerFinanceSummary(), this.loadCustomers(), this.loadCompanies(), this.loadGiftCertificates());
       if (allowed.has('gift_certificates')) tasks.push(this.loadGiftCertificates(), this.loadGiftCertificateTransactions(), this.loadCustomers(), this.loadCompanies());
       if (allowed.has('clients') || allowed.has('companies')) tasks.push(this.loadFinanceRows(), this.loadCustomers(), this.loadCompanies(), this.loadGiftCertificates(), this.loadEmployees());
@@ -4544,12 +4781,80 @@ export const CostingModule = {
       await Promise.all(tasks);
     },
 
+    async refreshCurrentArea() {
+      if (this.areaRefreshing || !this.canRefreshCurrentArea) return;
+      this.areaRefreshing = true;
+      this.error = '';
+
+      try {
+        if (['all_orders', 'my_orders', 'orders_archive'].includes(this.activeTab)) {
+          const requests = [this.loadAllOrderRows()];
+          if (this.activeTab === 'my_orders') requests.push(this.loadMyOrderRows());
+          if (!['Производство', 'Шелкография', 'Дизайнер'].includes(this.currentRoleName)) {
+            requests.push(this.loadRows({ silent: true }));
+          }
+          await Promise.all(requests);
+        } else if (this.activeTab === 'order_economics') {
+          await Promise.all([this.loadOrderEconomicsRows(), this.loadRows({ silent: true }), this.loadContractors()]);
+        } else if (this.activeTab === 'production') {
+          await this.loadWorkRows('production_work');
+        } else if (this.activeTab === 'screen') {
+          await this.loadWorkRows('screen_printing_work');
+        } else if (this.activeTab === 'contractor_work') {
+          await this.loadContractorWorkRows();
+        } else if (this.activeTab === 'production_archive') {
+          const requests = [];
+          if (['Administrator', 'Управляющий', 'Производство'].includes(this.currentRoleName)) {
+            requests.push(this.loadWorkRows('production_work'));
+          }
+          if (['Administrator', 'Управляющий', 'Шелкография'].includes(this.currentRoleName)) {
+            requests.push(this.loadWorkRows('screen_printing_work'));
+          }
+          await Promise.all(requests);
+        } else if (this.activeTab === 'admin_procurement') {
+          await Promise.all([
+            this.loadAdminRows('admin_procurement'),
+            this.loadProcurementBatches(),
+          ]);
+        } else if (['tasks', 'tasks_archive'].includes(this.activeTab)) {
+          await this.loadTaskRows();
+        }
+      } catch (error) {
+        this.error = error.message || 'Не удалось обновить данные раздела.';
+      } finally {
+        this.areaRefreshing = false;
+        await this.$nextTick();
+        this.bindPagingObserver();
+      }
+    },
+
     searchItem(section, type, row) {
       return this.queueItem(type, row, section, row.order_status_name || this.statusName(row.production_status) || this.officeStatusName(row.office_status) || 'Найдено', ['all']);
     },
 
     setFilter(filter) {
       this.activeFilter = filter;
+    },
+
+    sortOrderEconomicsRows(rows) {
+      const [key, directionName] = String(this.orderEconomicsSort || 'date_desc').split('_');
+      const direction = directionName === 'asc' ? 1 : -1;
+      const value = (row) => {
+        if (key === 'date') return this.sortDateValue(row.date);
+        if (key === 'revenue') return this.parseMoney(row.order_sum);
+        if (key === 'cost') return this.parseMoney(this.orderEconomicsView === 'items' ? row.total_cost : row.items_total_cost);
+        if (key === 'profit') return this.parseMoney(row.profit_sum);
+        if (key === 'margin') return this.parseMoney(row.margin_percent);
+        return this.orderNumber(row);
+      };
+      return [...rows].sort((left, right) => this.compareSortValues(value(left), value(right)) * direction);
+    },
+
+    clearOrderEconomicsFilters() {
+      this.orderEconomicsDateFrom = '';
+      this.orderEconomicsDateTo = '';
+      this.orderEconomicsManagerFilter = '';
+      this.orderEconomicsContractorFilter = '';
     },
 
     toggleCostingFilterPanel(panel) {
@@ -5477,11 +5782,13 @@ export const CostingModule = {
 
     openExpenseDialog(type = 'other', employee = null, preset = {}) {
       this.error = '';
+      const accountingMonth = preset.accounting_month || this.payrollMonth || this.monthKey(new Date());
       this.expenseDialog = {
         saving: false,
         expense_date: preset.expense_date || this.todayInput(),
         expense_type: type,
-        bonus_month: String(preset.expense_date || this.todayInput()).slice(0, 7),
+        accounting_month: accountingMonth,
+        bonus_month: accountingMonth,
         amount: preset.amount === undefined || preset.amount === null ? '' : this.moneyInput(preset.amount),
         employee: employee || '',
         contractor: preset.contractor || '',
@@ -5492,13 +5799,63 @@ export const CostingModule = {
       };
     },
 
-    openContractorOrderPayment(row) {
+    scheduledDate(month, day, nextMonth = false) {
+      const [year, monthNumber] = String(month || this.monthKey(new Date())).split('-').map(Number);
+      const date = new Date(year, monthNumber - 1 + (nextMonth ? 1 : 0), 1);
+      const safeDay = Math.min(Math.max(Number(day || 1), 1), new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate());
+      date.setDate(safeDay);
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    },
+
+    openPayrollAdvance(row) {
+      this.openExpenseDialog('employee_advance', row.employee, {
+        accounting_month: this.payrollMonth,
+        expense_date: this.scheduledDate(this.payrollMonth, this.financeSettings?.advance_day || 28),
+        amount: Math.max(this.parseMoney(row.salary_fixed) / 2 - this.parseMoney(row.advances_paid), 0),
+        comment: `Аванс за ${this.monthLabel(this.payrollMonth)} (50% оклада)`,
+      });
+    },
+
+    openPayrollFinalPayment(row) {
+      this.openExpenseDialog('salary_payment', row.employee, {
+        accounting_month: this.payrollMonth,
+        expense_date: this.scheduledDate(this.payrollMonth, this.financeSettings?.salary_day || 12, true),
+        amount: Math.max(this.parseMoney(row.salary_debt), 0),
+        comment: `Зарплата за ${this.monthLabel(this.payrollMonth)}: вторая часть оклада, проценты и премии`,
+      });
+    },
+
+    openCurrentRentPayment() {
+      const status = this.currentRentStatus;
+      if (!status.due) return;
+      this.openExpenseDialog('rent', null, {
+        accounting_month: status.month,
+        expense_date: this.scheduledDate(status.month, this.financeSettings?.rent_due_day_from || 26),
+        amount: status.due,
+        comment: `Аренда за ${this.monthLabel(status.month)}`,
+      });
+    },
+
+    openContractorPositionPayment(row) {
       if (!row || this.parseMoney(row.due) <= 0) return;
       this.openExpenseDialog('contractor_payment', null, {
         amount: row.due,
         contractor: row.contractor_id,
         related_order: row.order_id,
-        comment: `Оплата по заказу ${row.order_number || `#${row.order_id}`}`,
+        related_order_item: row.item_id,
+        comment: `Оплата позиции «${row.product_name || 'Позиция'}» · заказ ${row.order_number || `#${row.order_id}`}`,
+      });
+    },
+
+    openContractorQuickPayment(row) {
+      if (!row?.id) return;
+      this.openExpenseDialog('contractor_payment', null, {
+        amount: this.parseMoney(row.debt_to_contractor) > 0 ? row.debt_to_contractor : '',
+        contractor: row.id,
+        comment: `Общая оплата контрагенту «${row.name || ''}»`,
       });
     },
 
@@ -5551,13 +5908,64 @@ export const CostingModule = {
       if (item?.orderId) this.expenseDialog.related_order = item.orderId;
     },
 
+    contractorPaymentPayloads(form, amount) {
+      const base = {
+        payment_date: form.expense_date || this.todayInput(),
+        contractor: Number(form.contractor),
+        payment_type: form.payment_type ? Number(form.payment_type) : null,
+        comment: form.comment || null,
+      };
+
+      if (form.related_order_item) {
+        return [{
+          ...base,
+          amount,
+          related_order: form.related_order ? Number(form.related_order) : null,
+          related_order_item: Number(form.related_order_item),
+        }];
+      }
+
+      let remaining = amount;
+      const payloads = [];
+      const openPositions = this.contractorOrderSettlementRows
+        .filter((row) => Number(row.contractor_id) === Number(form.contractor) && this.parseMoney(row.due) > 0)
+        .sort((left, right) => String(left.order_date || '').localeCompare(String(right.order_date || ''))
+          || Number(left.item_id || 0) - Number(right.item_id || 0));
+
+      openPositions.forEach((row) => {
+        if (remaining <= 0) return;
+        const allocated = Math.min(remaining, this.parseMoney(row.due));
+        if (allocated <= 0) return;
+        payloads.push({
+          ...base,
+          amount: allocated,
+          related_order: row.order_id ? Number(row.order_id) : null,
+          related_order_item: Number(row.item_id),
+        });
+        remaining = Math.max(0, this.parseMoney(remaining - allocated));
+      });
+
+      if (remaining > 0 || !payloads.length) {
+        payloads.push({
+          ...base,
+          amount: remaining > 0 ? remaining : amount,
+          related_order: null,
+          related_order_item: null,
+        });
+      }
+
+      return payloads;
+    },
+
     async saveExpense() {
       if (!this.expenseDialog || this.expenseDialog.saving) return;
       const form = this.expenseDialog;
       const amount = this.parseMoney(form.amount);
 
-      if (!amount) {
-        this.error = 'Укажите сумму расхода.';
+      if (amount <= 0) {
+        this.error = form.expense_type === 'contractor_payment'
+          ? 'Укажите сумму оплаты больше нуля.'
+          : 'Укажите сумму расхода больше нуля.';
         return;
       }
 
@@ -5583,18 +5991,13 @@ export const CostingModule = {
 
       try {
         if (form.expense_type === 'contractor_payment') {
-          await this.request('/items/contractor_payments', {
-            method: 'POST',
-            body: JSON.stringify({
-              payment_date: form.expense_date || this.todayInput(),
-              contractor: Number(form.contractor),
-              amount,
-              payment_type: form.payment_type ? Number(form.payment_type) : null,
-              related_order: form.related_order ? Number(form.related_order) : null,
-              related_order_item: form.related_order_item ? Number(form.related_order_item) : null,
-              comment: form.comment || null,
-            }),
-          });
+          const paymentPayloads = this.contractorPaymentPayloads(form, amount);
+          for (const payment of paymentPayloads) {
+            await this.request('/items/contractor_payments', {
+              method: 'POST',
+              body: JSON.stringify(payment),
+            });
+          }
 
           this.expenseDialog = null;
           await Promise.all([
@@ -5611,6 +6014,9 @@ export const CostingModule = {
             expense_date: form.expense_type === 'employee_bonus'
               ? `${form.bonus_month || this.monthKey(new Date())}-01`
               : (form.expense_date || this.todayInput()),
+            accounting_month: `${form.expense_type === 'employee_bonus'
+              ? (form.bonus_month || this.monthKey(new Date()))
+              : (form.accounting_month || this.monthKey(form.expense_date) || this.monthKey(new Date()))}-01`,
             expense_type: form.expense_type || 'other',
             amount,
             employee: form.employee ? Number(form.employee) : null,
@@ -5623,6 +6029,7 @@ export const CostingModule = {
         await Promise.all([
           this.loadExpenseRows(),
           this.loadSalaryRows(),
+          this.loadPayrollSalaryRows(),
           this.loadManagerSummary(),
           this.loadFinanceRows(),
           this.loadContractorRows(),
@@ -7101,6 +7508,40 @@ export const CostingModule = {
       }
     },
 
+    async loadOrderEconomicsRows(options = {}) {
+      try {
+        const params = new URLSearchParams();
+        params.set('fields', orderEconomicsFields.join(','));
+        params.set('sort', '-date,-id');
+        await this.loadPagedCollection('order_economics', '/items/orders', params, (rows, append) => {
+          this.orderEconomicsRows = append ? this.mergePagedRows(this.orderEconomicsRows, rows) : rows;
+        });
+      } catch (error) {
+        if (!options.silent) this.error = error.message;
+      }
+    },
+
+    orderEconomicsItems(row) {
+      const orderId = Number(this.entityId(row?.id));
+      return (this.rows || []).filter((item) => Number(this.entityId(item.order) || this.entityId(item.order_link)) === orderId);
+    },
+
+    orderEconomicsContractors(row) {
+      const names = [];
+      this.orderEconomicsItems(row).forEach((item) => {
+        [this.relatedName(item.contractor_1), this.relatedName(item.contractor_2)].forEach((name) => {
+          if (name && !names.includes(name)) names.push(name);
+        });
+      });
+      return names.join(', ');
+    },
+
+    orderEconomicsPositions(row) {
+      const items = this.orderEconomicsItems(row);
+      if (!items.length) return 'Нет позиций';
+      return items.map((item) => `${item.product_name || 'Позиция'} · ${this.formatQuantity(item.quantity)} шт.`).join(', ');
+    },
+
     costingFields() {
       if (this.canSeeCostingTotals) return fields;
       const adminOnly = new Set([
@@ -7283,6 +7724,62 @@ export const CostingModule = {
       } catch (error) {
         this.error = error.message;
         this.salaryRows = [];
+      }
+    },
+
+    async loadPayrollSalaryRows() {
+      try {
+        const params = new URLSearchParams();
+        params.set('fields', salaryFields.join(','));
+        params.set('filter[month_start][_eq]', `${this.payrollMonth}-01`);
+        params.set('sort', 'employee_name');
+        params.set('limit', String(this.limit));
+        const payload = await this.request(`/items/employee_salary_monthly?${params.toString()}`);
+        this.payrollSalaryRows = payload.data || [];
+      } catch (error) {
+        this.error = error.message;
+        this.payrollSalaryRows = [];
+      }
+    },
+
+    async loadFinanceSettings() {
+      try {
+        const payload = await this.request('/items/finance_settings/1');
+        if (payload?.data) this.financeSettings = { ...this.financeSettings, ...payload.data };
+      } catch (error) {
+        this.error = error.message;
+      }
+    },
+
+    async saveFinanceSettings() {
+      if (this.financeSettingsSaving) return;
+      const monthlyRent = this.parseMoney(this.financeSettings.monthly_rent);
+      if (monthlyRent < 0) {
+        this.error = 'Сумма аренды не может быть отрицательной.';
+        return;
+      }
+      this.financeSettingsSaving = true;
+      try {
+        const payload = await this.request('/items/finance_settings/1', {
+          method: 'PATCH',
+          body: JSON.stringify({
+            monthly_rent: monthlyRent,
+            rent_due_day_from: Number(this.financeSettings.rent_due_day_from || 26),
+            rent_due_day_to: Number(this.financeSettings.rent_due_day_to || 30),
+            advance_day: Number(this.financeSettings.advance_day || 28),
+            salary_day: Number(this.financeSettings.salary_day || 12),
+            updated_at: new Date().toISOString(),
+          }),
+        });
+        if (payload?.data) this.financeSettings = { ...this.financeSettings, ...payload.data };
+        this.feedbackSavedMessage = 'Постоянные расходы и платёжный календарь сохранены.';
+        window.setTimeout(() => {
+          if (this.feedbackSavedMessage === 'Постоянные расходы и платёжный календарь сохранены.') this.feedbackSavedMessage = '';
+        }, 5000);
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.financeSettingsSaving = false;
       }
     },
 
@@ -7847,7 +8344,6 @@ export const CostingModule = {
       (draft.items || []).forEach((item) => {
         delete item._mobile_extra_open;
         delete item._layout_file;
-        item.url = '';
       });
       return draft;
     },
@@ -7861,6 +8357,7 @@ export const CostingModule = {
         || (dialog.items || []).some((item) => (
           String(item.product_name || '').trim() || Number(item.quantity || 0) > 0
           || String(item.technical_task_text || '').trim() || String(item._layout_file?.name || '').trim()
+          || String(item.url || '').trim()
         ))
       );
     },
@@ -8794,7 +9291,7 @@ export const CostingModule = {
               office_status: 'not_in_office',
               shipping_method: form.shipping_method || null,
               technical_task_text: item.technical_task_text || null,
-              url: null,
+              url: this.layoutExternalUrl(item.url) || null,
               needs_designer_help: !!item.needs_designer_help,
               designer_comment: item.needs_designer_help ? (item.designer_comment || null) : null,
               designer_source_url: item.needs_designer_help ? (item.designer_source_url || null) : null,
@@ -9330,7 +9827,7 @@ export const CostingModule = {
             office_status: this.detailOfficeStatus(order) || 'not_in_office',
             shipping_method: order.shipping_method || null,
             technical_task_text: form.technical_task_text || null,
-            url: null,
+            url: this.layoutExternalUrl(form.url) || null,
             needs_designer_help: !!form.needs_designer_help,
             designer_comment: form.needs_designer_help ? (form.designer_comment || null) : null,
             designer_source_url: form.needs_designer_help ? (form.designer_source_url || null) : null,
@@ -9692,7 +10189,16 @@ export const CostingModule = {
     openLayoutUploadDialog(row) {
       const itemId = this.entityId(row?.order_item) || row?.id;
       if (!row || (itemId && this.layoutUploading[itemId])) return;
-      this.layoutUploadDialog = { row, file: null, dragging: false, error: '', draft: false };
+      const hasExternalLink = !!row.url && !row.layout_disk_path;
+      this.layoutUploadDialog = {
+        row,
+        file: null,
+        url: hasExternalLink ? row.url : '',
+        mode: hasExternalLink ? 'link' : 'file',
+        dragging: false,
+        error: '',
+        draft: false,
+      };
     },
 
     openDraftLayoutUploadDialog(row) {
@@ -9700,9 +10206,21 @@ export const CostingModule = {
       this.layoutUploadDialog = {
         row,
         file: row._layout_file || null,
+        url: row.url || '',
+        mode: row._layout_file ? 'file' : (row.url ? 'link' : 'file'),
         dragging: false,
         error: '',
         draft: true,
+      };
+    },
+
+    setLayoutUploadMode(mode) {
+      if (!this.layoutUploadDialog || !['file', 'link'].includes(mode)) return;
+      this.layoutUploadDialog = {
+        ...this.layoutUploadDialog,
+        mode,
+        error: '',
+        dragging: false,
       };
     },
 
@@ -9742,8 +10260,25 @@ export const CostingModule = {
 
     async confirmLayoutUpload() {
       const dialog = this.layoutUploadDialog;
-      if (!dialog?.file || !dialog?.row) {
-        if (dialog) this.layoutUploadDialog = { ...dialog, error: 'Выберите файл макета.' };
+      if (!dialog?.row) return;
+      if (dialog.mode === 'link') {
+        const url = this.layoutExternalUrl(dialog.url);
+        if (!url) {
+          this.layoutUploadDialog = { ...dialog, error: 'Укажите корректную ссылку на макет.' };
+          return;
+        }
+        if (dialog.draft) {
+          dialog.row.url = url;
+          dialog.row._layout_file = null;
+          this.layoutUploadDialog = null;
+          return;
+        }
+        const saved = await this.saveOrderItemLayoutLink(dialog.row, url);
+        if (saved) this.layoutUploadDialog = null;
+        return;
+      }
+      if (!dialog.file) {
+        this.layoutUploadDialog = { ...dialog, error: 'Выберите файл макета.' };
         return;
       }
       if (dialog.draft) {
@@ -9759,6 +10294,38 @@ export const CostingModule = {
       }
       const uploaded = await this.uploadOrderItemLayout(dialog.row, dialog.file);
       if (uploaded) this.layoutUploadDialog = null;
+    },
+
+    async saveOrderItemLayoutLink(row, url) {
+      const itemId = this.entityId(row?.order_item) || row?.id;
+      if (!itemId || this.layoutUploading[itemId]) return false;
+      this.layoutUploading = { ...this.layoutUploading, [itemId]: true };
+      this.error = '';
+      try {
+        const payload = await this.request(`/symbolika-yandex-disk/orders-items/${itemId}/link`, {
+          method: 'POST',
+          body: JSON.stringify({ url }),
+        });
+        const patch = {
+          url: payload?.data?.url || url,
+          layout_disk_path: null,
+          layout_disk_name: null,
+          layout_disk_size: null,
+          layout_disk_mime_type: null,
+        };
+        Object.assign(row, patch);
+        this.updateOrderItemCaches(itemId, patch);
+        await this.loadAllowedData();
+        return true;
+      } catch (error) {
+        this.error = error.message;
+        if (this.layoutUploadDialog) this.layoutUploadDialog = { ...this.layoutUploadDialog, error: error.message };
+        return false;
+      } finally {
+        const next = { ...this.layoutUploading };
+        delete next[itemId];
+        this.layoutUploading = next;
+      }
     },
 
     setLayoutUploadProgress(itemId, patch = {}) {
@@ -10506,6 +11073,42 @@ export const CostingModule = {
         }));
       }
 
+      if (this.activeTab === 'order_economics') {
+        if (this.orderEconomicsView === 'items') {
+          return this.visibleOrderEconomicsItemRows.map((row) => ({
+            "Заказ": row.order_number,
+            "Дата": this.formatDate(row.date),
+            "Заказчик": this.relatedName(row.customer_company) || this.relatedName(row.customer),
+            "Менеджер": this.relatedName(row.manager_employee, 'full_name'),
+            "Позиция": row.product_name,
+            "Количество": this.formatQuantity(row.quantity),
+            "Контрагент 1": this.relatedName(row.contractor_1),
+            "Контрагент 2": this.relatedName(row.contractor_2),
+            "Выручка": this.formatMoney(row.order_sum),
+            "Себестоимость": this.formatMoney(row.total_cost),
+            "Процент менеджера": this.formatMoney(row.manager_commission_sum),
+            "Налоги": this.formatMoney(row.tax_sum),
+            "Прибыль": this.formatMoney(row.profit_sum),
+            "Маржа": `${this.formatMoney(row.margin_percent)}%`,
+          }));
+        }
+        return this.visibleOrderEconomicsRows.map((row) => ({
+          "Заказ": row.order_number,
+          "Дата": this.formatDate(row.date),
+          "Срок": this.formatDate(row.deadline),
+          "Заказчик": this.relatedName(row.customer_company) || this.relatedName(row.customer),
+          "Менеджер": this.relatedName(row.manager_employee, 'full_name'),
+          "Контрагенты": this.orderEconomicsContractors(row),
+          "Позиции": this.orderEconomicsPositions(row),
+          "Выручка": this.formatMoney(row.order_sum),
+          "Себестоимость": this.formatMoney(row.items_total_cost),
+          "Процент менеджера": this.formatMoney(row.items_manager_commission_sum),
+          "Налоги": this.formatMoney(row.items_tax_sum),
+          "Прибыль": this.formatMoney(row.profit_sum),
+          "Маржа": `${this.formatMoney(row.margin_percent)}%`,
+        }));
+      }
+
       if (this.activeTab === 'purchasing') {
         return this.visiblePurchaseRows.map((row) => ({
           "Заказ": row.order_number,
@@ -10623,7 +11226,8 @@ export const CostingModule = {
             "Дата": this.formatDate(row.order_date),
             "Заказчик": row.customer_name,
             "Контрагент": row.contractor_name,
-            "Позиции": row.positions_text,
+            "Позиция": row.product_name,
+            "Количество": this.formatQuantity(row.quantity),
             "Начислено": this.formatMoney(row.accrued),
             "Оплачено": this.formatMoney(row.paid),
             "Остаток": this.formatMoney(row.due),
@@ -11440,13 +12044,41 @@ export const CostingModule = {
       if (!Array.isArray(items) || !items.length) return ['Заказ: нет позиций'];
       const missing = [];
       items.forEach((item) => {
-        const label = String(item?.product_name || '').trim() || `Позиция #${item?.id || ''}`.trim();
-        if (!String(item?.product_name || '').trim()) missing.push(`${label}: название`);
-        if (this.parseMoney(item?.quantity) <= 0) missing.push(`${label}: количество`);
-        if (!String(item?.technical_task_text || '').trim()) missing.push(`${label}: ТЗ`);
-        if (!String(item?.url || '').trim()) missing.push(`${label}: ссылка на макет`);
+        missing.push(...this.itemWorkReadinessMissing(item));
       });
       return missing;
+    },
+
+    itemWorkReadinessMissing(item) {
+      const label = String(item?.product_name || '').trim() || `Позиция #${item?.id || ''}`.trim();
+      const missing = [];
+      const url = String(item?.url || '').trim();
+      if (!String(item?.product_name || '').trim()) missing.push(`${label}: название`);
+      if (this.parseMoney(item?.quantity) <= 0) missing.push(`${label}: количество`);
+      if (!String(item?.technical_task_text || '').trim()) missing.push(`${label}: ТЗ`);
+      if (!url) missing.push(`${label}: ссылка на макет`);
+
+      if (this.normalizedWorkflowStatus(item?.item_status) === 'layout_revision') {
+        const snapshot = String(item?.layout_revision_url_snapshot || '').trim();
+        if (url && url === snapshot) missing.push(`${label}: обновите ссылку на макет`);
+      }
+
+      return [...new Set(missing)];
+    },
+
+    canSendItemToWork(item) {
+      if (!this.canCreateOrders) return false;
+      const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
+      if (!itemId) return false;
+      const status = this.normalizedWorkflowStatus(item?.item_status || 'new');
+      if (!['new', 'approval', 'layout_revision'].includes(status)) return false;
+      return this.itemWorkReadinessMissing(item).length === 0;
+    },
+
+    async sendItemToWork(item) {
+      const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
+      if (!itemId || !this.canSendItemToWork(item)) return;
+      await this.saveOrderItemField(item, 'item_status', 'in_work');
     },
 
     orderWorkReadinessMissing(row) {
@@ -12277,6 +12909,19 @@ export const CostingModule = {
           gap: 6px;
           align-items: center;
           justify-content: flex-end;
+        }
+
+        .symbolika-costing-area-refresh {
+          min-block-size: 36px;
+          white-space: nowrap;
+        }
+
+        .symbolika-costing-area-refresh.is-loading .v-icon {
+          animation: symbolika-area-refresh-spin 0.8s linear infinite;
+        }
+
+        @keyframes symbolika-area-refresh-spin {
+          to { transform: rotate(360deg); }
         }
 
         .symbolika-costing-segments {
@@ -13730,6 +14375,28 @@ export const CostingModule = {
           color: #17100b;
         }
 
+        .symbolika-costing-position-send-work {
+          display: inline-flex;
+          inline-size: 100%;
+          min-inline-size: 0;
+          block-size: 30px;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          overflow: hidden;
+          padding: 0 8px;
+          border-radius: 8px;
+          font-size: 10.5px;
+          line-height: 1;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .symbolika-costing-item-detail-send-work {
+          inline-size: 100%;
+          justify-content: center;
+        }
+
         .symbolika-costing-issue-actions {
           align-items: center;
         }
@@ -15030,6 +15697,54 @@ export const CostingModule = {
         .symbolika-costing-kpi {
           white-space: nowrap;
           font-weight: 700;
+        }
+
+        .symbolika-economics-summary {
+          display: grid;
+          grid-template-columns: .7fr repeat(4, 1fr);
+          gap: 10px;
+          margin-block-end: 12px;
+        }
+
+        .symbolika-economics-card {
+          min-inline-size: 0;
+          padding: 14px 16px;
+          border: 1px solid var(--theme--border-color-subdued);
+          border-radius: 12px;
+          background: color-mix(in srgb, var(--theme--background-normal) 88%, transparent);
+        }
+
+        .symbolika-economics-card span {
+          display: block;
+          margin-block-end: 6px;
+          color: var(--theme--foreground-subdued);
+          font-size: 12px;
+          font-weight: 750;
+        }
+
+        .symbolika-economics-card strong {
+          color: var(--theme--foreground);
+          font-size: clamp(17px, 1.35vw, 23px);
+          font-weight: 900;
+          font-variant-numeric: tabular-nums;
+          white-space: nowrap;
+        }
+
+        .symbolika-economics-card.is-revenue { border-color: color-mix(in srgb, #60a5fa 58%, var(--theme--border-color-subdued)); }
+        .symbolika-economics-card.is-cost { border-color: color-mix(in srgb, var(--theme--primary) 58%, var(--theme--border-color-subdued)); }
+        .symbolika-economics-card.is-profit { border-color: color-mix(in srgb, #34d399 62%, var(--theme--border-color-subdued)); }
+        .symbolika-economics-card.is-negative { border-color: color-mix(in srgb, var(--theme--danger) 62%, var(--theme--border-color-subdued)); }
+        .symbolika-economics-profit { color: #34d399; }
+        .symbolika-economics-negative { color: var(--theme--danger); }
+        .symbolika-economics-table th:nth-child(3) { min-inline-size: 270px; }
+        .symbolika-economics-description { max-inline-size: 430px; }
+        .symbolika-economics-description > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .symbolika-economics-note { padding: 10px 14px; color: var(--theme--foreground-subdued); font-size: 12px; }
+
+        @media (max-width: 1280px) {
+          .symbolika-economics-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+          .symbolika-economics-table-wrap { overflow-x: auto; }
+          .symbolika-economics-table { min-inline-size: 1180px; }
         }
 
         .symbolika-costing-num {
@@ -18852,6 +19567,24 @@ export const CostingModule = {
           flex-wrap: wrap;
         }
 
+        .symbolika-layout-current-actions {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 8px;
+          align-items: stretch;
+        }
+
+        .symbolika-layout-copy-button {
+          min-inline-size: 112px;
+          min-block-size: 40px;
+          white-space: nowrap;
+        }
+
+        @media (max-width: 560px) {
+          .symbolika-layout-current-actions { grid-template-columns: 1fr; }
+          .symbolika-layout-copy-button { inline-size: 100%; }
+        }
+
         .symbolika-layout-upload-button {
           display: inline-flex;
           align-items: center;
@@ -18988,6 +19721,53 @@ export const CostingModule = {
           font-size: 13px;
           line-height: 1.45;
         }
+
+        .symbolika-layout-source-tabs {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 6px;
+          margin-block-end: 14px;
+          padding: 5px;
+          border: 1px solid var(--theme--border-color);
+          border-radius: 13px;
+          background: var(--theme--background-subdued);
+        }
+
+        .symbolika-layout-source-tabs button {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 7px;
+          min-block-size: 40px;
+          border: 1px solid transparent;
+          border-radius: 9px;
+          background: transparent;
+          color: var(--theme--foreground-subdued);
+          font: inherit;
+          font-size: 12px;
+          font-weight: 800;
+          cursor: pointer;
+        }
+
+        .symbolika-layout-source-tabs button.is-active {
+          border-color: color-mix(in srgb, var(--symbolika-orange) 50%, var(--theme--border-color));
+          background: color-mix(in srgb, var(--symbolika-orange) 13%, var(--theme--background));
+          color: var(--theme--foreground);
+        }
+
+        .symbolika-layout-link-field {
+          display: grid;
+          gap: 8px;
+          padding: 16px;
+          border: 1px solid color-mix(in srgb, var(--symbolika-orange) 34%, var(--theme--border-color));
+          border-radius: 14px;
+          background: var(--theme--background-subdued);
+          color: var(--theme--foreground-subdued);
+          font-size: 12px;
+          font-weight: 750;
+        }
+
+        .symbolika-layout-link-field small { color: var(--theme--foreground-subdued); font-weight: 500; line-height: 1.4; }
 
         .symbolika-layout-dropzone {
           position: relative;
@@ -20591,7 +21371,7 @@ export const CostingModule = {
         .symbolika-profile-payslip-actions { display: flex; align-items: center; gap: 8px; }
         .symbolika-payroll-row-actions {
           display: grid;
-          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          grid-template-columns: repeat(3, minmax(0, 1fr));
           align-items: center;
           gap: 7px;
           inline-size: 100%;
@@ -20646,7 +21426,7 @@ export const CostingModule = {
             font-size: 0;
           }
           .symbolika-payroll-row-actions {
-            grid-template-columns: 34px 34px;
+            grid-template-columns: 34px 34px 34px;
             justify-content: center;
             gap: 4px;
           }
@@ -20658,6 +21438,17 @@ export const CostingModule = {
         .symbolika-manager-bar i { display: block; block-size: 100%; border-radius: inherit; background: linear-gradient(90deg,#f97316,#fb923c); }
         .symbolika-positive-text { color: #34d399 !important; }
         .symbolika-negative-text { color: #fb7185 !important; }
+        .symbolika-costing-info-banner { display: flex; align-items: center; gap: 10px; margin-block: 10px 14px; padding: 11px 13px; border: 1px solid color-mix(in srgb, var(--symbolika-accent) 35%, var(--theme--border-color-subdued)); border-radius: 11px; background: color-mix(in srgb, var(--symbolika-accent) 7%, var(--theme--background-subdued)); color: var(--theme--foreground-subdued); font-size: 12px; }
+        .symbolika-recurring-expenses-card { display: grid; gap: 14px; margin-block-end: 18px; padding: 18px; border: 1px solid var(--theme--border-color-subdued); border-radius: 16px; background: var(--theme--background-subdued); }
+        .symbolika-costing-form-card-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+        .symbolika-costing-form-card-head h3 { margin: 3px 0 0; color: var(--theme--foreground); font-size: 18px; }
+        .symbolika-costing-field-row { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); align-items: center; gap: 8px; }
+        .symbolika-recurring-expense-status { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border: 1px solid var(--theme--border-color-subdued); border-radius: 12px; }
+        .symbolika-recurring-expense-status.is-due { border-color: color-mix(in srgb, #f59e0b 48%, transparent); background: color-mix(in srgb, #f59e0b 7%, transparent); }
+        .symbolika-recurring-expense-status.is-paid { border-color: color-mix(in srgb, #34d399 42%, transparent); background: color-mix(in srgb, #34d399 7%, transparent); }
+        .symbolika-recurring-expense-status > div { display: grid; gap: 4px; }
+        .symbolika-recurring-expense-status strong { color: var(--theme--foreground); }
+        .symbolika-recurring-expense-status span { color: var(--theme--foreground-subdued); font-size: 12px; }
 
         .symbolika-payslip-modal { inline-size: min(760px, calc(100vw - 32px)); }
         .symbolika-payslip-employee { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border: 1px solid var(--theme--border-color-subdued); border-radius: 12px; background: var(--theme--background-subdued); }
@@ -21495,6 +22286,19 @@ export const CostingModule = {
             <span v-if="activePagedProgress.total > activePagedProgress.loaded" class="symbolika-costing-paging-progress" title="Остальные записи загрузятся при прокрутке">
               {{ activePagedProgress.loaded }} / {{ activePagedProgress.total }}
             </span>
+            <button
+              v-if="canRefreshCurrentArea"
+              type="button"
+              class="symbolika-costing-mini-button symbolika-costing-area-refresh"
+              :class="{ 'is-loading': areaRefreshing }"
+              :disabled="areaRefreshing"
+              title="Обновить данные текущего раздела"
+              aria-label="Обновить данные текущего раздела"
+              @click="refreshCurrentArea"
+            >
+              <v-icon name="refresh" small />
+              <span>{{ areaRefreshing ? 'Обновляем…' : 'Обновить' }}</span>
+            </button>
             <button type="button" class="symbolika-costing-button" @click="exportCurrentTable">
               <v-icon name="download" small />
               Экспорт
@@ -23007,7 +23811,17 @@ export const CostingModule = {
                         </div>
                       </div>
                       <div class="symbolika-costing-position-statuses" :class="{ 'is-ready': isItemReady(item) }">
+                        <button
+                          v-if="canSendItemToWork(item)"
+                          type="button"
+                          class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work"
+                          :class="savingWorkClass('orders_items', item, 'item_status')"
+                          @click.stop="sendItemToWork(item)"
+                        >
+                          <v-icon name="play_arrow" small />Запустить в работу
+                        </button>
                         <select
+                          v-else
                           class="symbolika-costing-table-select symbolika-costing-position-status-select"
                           :class="[savingWorkClass('orders_items', item, 'item_status'), statusToneClass(itemStatusName(item.item_status))]"
                           :value="item.item_status || ''"
@@ -23179,7 +23993,8 @@ export const CostingModule = {
                         </div>
                       </div>
                       <div class="symbolika-costing-position-statuses" :class="{ 'is-ready': isItemReady(item) }">
-                        <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'item_status'), statusToneClass(itemStatusName(item.item_status))]" :value="item.item_status || ''" title="Статус позиции" @click.stop @change.stop="saveOrderItemField(item, 'item_status', $event.target.value)">
+                        <button v-if="canSendItemToWork(item)" type="button" class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work" :class="savingWorkClass('orders_items', item, 'item_status')" @click.stop="sendItemToWork(item)"><v-icon name="play_arrow" small />Запустить в работу</button>
+                        <select v-else class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'item_status'), statusToneClass(itemStatusName(item.item_status))]" :value="item.item_status || ''" title="Статус позиции" @click.stop @change.stop="saveOrderItemField(item, 'item_status', $event.target.value)">
                           <option v-for="status in itemWorkflowStatusOptions(item)" :key="'all-item-status-' + status.value" :value="status.value">{{ status.text }}</option>
                         </select>
                         <select v-if="!isItemReady(item)" class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'production_status'), statusToneClass(detailProductionStatus(item))]" :value="entityId(item.production_status) || ''" title="Статус производства" @click.stop @change.stop="saveOrderItemField(item, 'production_status', $event.target.value)">
@@ -23552,6 +24367,145 @@ export const CostingModule = {
           </table>
 
           <div v-if="!queueRows.length" class="symbolika-costing-empty">Сейчас нет задач по выбранному фильтру</div>
+        </div>
+
+        <div v-if="activeTab === 'order_economics'" class="symbolika-costing-subtoolbar symbolika-costing-reconciliation-toolbar">
+          <div class="symbolika-costing-segments">
+            <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': orderEconomicsView === 'orders' }" @click="orderEconomicsView = 'orders'">По заказам</button>
+            <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': orderEconomicsView === 'items' }" @click="orderEconomicsView = 'items'">По позициям</button>
+          </div>
+          <div class="symbolika-costing-segments">
+            <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': orderEconomicsArchiveMode === 'all' }" @click="orderEconomicsArchiveMode = 'all'">Все</button>
+            <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': orderEconomicsArchiveMode === 'active' }" @click="orderEconomicsArchiveMode = 'active'">Активные</button>
+            <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': orderEconomicsArchiveMode === 'archive' }" @click="orderEconomicsArchiveMode = 'archive'">Архив</button>
+          </div>
+          <label class="symbolika-costing-compact-field">Дата с
+            <input v-model="orderEconomicsDateFrom" class="symbolika-costing-input" type="date" />
+          </label>
+          <label class="symbolika-costing-compact-field">Дата по
+            <input v-model="orderEconomicsDateTo" class="symbolika-costing-input" type="date" />
+          </label>
+          <label class="symbolika-costing-compact-field">Менеджер
+            <select v-model="orderEconomicsManagerFilter" class="symbolika-costing-select">
+              <option value="">Все менеджеры</option>
+              <option v-for="manager in orderEconomicsManagerOptions" :key="manager.id" :value="manager.id">{{ manager.name }}</option>
+            </select>
+          </label>
+          <label class="symbolika-costing-compact-field">Контрагент
+            <select v-model="orderEconomicsContractorFilter" class="symbolika-costing-select">
+              <option value="">Все контрагенты</option>
+              <option v-for="contractor in orderEconomicsContractorOptions" :key="contractor.id" :value="contractor.id">{{ contractor.name }}</option>
+            </select>
+          </label>
+          <label class="symbolika-costing-compact-field">Сортировка
+            <select v-model="orderEconomicsSort" class="symbolika-costing-select">
+              <option value="date_desc">Сначала новые</option>
+              <option value="date_asc">Сначала старые</option>
+              <option value="revenue_desc">Выручка: по убыванию</option>
+              <option value="cost_desc">Себестоимость: по убыванию</option>
+              <option value="profit_desc">Прибыль: по убыванию</option>
+              <option value="margin_desc">Маржа: по убыванию</option>
+            </select>
+          </label>
+          <button v-if="orderEconomicsDateFrom || orderEconomicsDateTo || orderEconomicsManagerFilter || orderEconomicsContractorFilter" type="button" class="symbolika-costing-mini-button" @click="clearOrderEconomicsFilters">Сбросить</button>
+        </div>
+
+        <div v-if="activeTab === 'order_economics'" class="symbolika-economics-summary">
+          <div class="symbolika-economics-card">
+            <span>Заказов</span><strong>{{ orderEconomicsSummary.orders }}</strong>
+          </div>
+          <div class="symbolika-economics-card">
+            <span>Позиций</span><strong>{{ orderEconomicsSummary.items }}</strong>
+          </div>
+          <div class="symbolika-economics-card is-revenue">
+            <span>Выручка</span><strong>{{ formatMoney(orderEconomicsSummary.revenue) }} ₽</strong>
+          </div>
+          <div class="symbolika-economics-card is-cost">
+            <span>Себестоимость</span><strong>{{ formatMoney(orderEconomicsSummary.cost) }} ₽</strong>
+          </div>
+          <div class="symbolika-economics-card">
+            <span>Налоги и % менеджеров</span><strong>{{ formatMoney(orderEconomicsSummary.tax + orderEconomicsSummary.commission) }} ₽</strong>
+          </div>
+          <div class="symbolika-economics-card" :class="orderEconomicsSummary.profit < 0 ? 'is-negative' : 'is-profit'">
+            <span>Прибыль</span><strong>{{ formatMoney(orderEconomicsSummary.profit) }} ₽</strong>
+          </div>
+        </div>
+
+        <div v-if="activeTab === 'order_economics' && orderEconomicsView === 'orders'" class="symbolika-costing-table-wrap symbolika-economics-table-wrap">
+          <table class="symbolika-costing-table symbolika-costing-table-compact symbolika-economics-table">
+            <thead>
+              <tr>
+                <th>Заказ</th>
+                <th>Заказчик</th>
+                <th>Позиции и контрагенты</th>
+                <th class="symbolika-costing-num">Выручка</th>
+                <th class="symbolika-costing-num">Себестоимость</th>
+                <th class="symbolika-costing-num">Налоги / %</th>
+                <th class="symbolika-costing-num">Прибыль</th>
+              </tr>
+            </thead>
+            <tbody v-if="visibleOrderEconomicsRows.length">
+              <tr v-for="row in visibleOrderEconomicsRows" :key="'economics-' + row.id" class="symbolika-costing-row-clickable" @click="openRowDetail('order', row, $event)">
+                <td>
+                  <div class="symbolika-costing-cell-stack">
+                    <span class="symbolika-costing-order">{{ row.order_number }}</span>
+                    <span class="symbolika-costing-cell-meta">{{ formatDate(row.date) }} · срок {{ formatDate(row.deadline) }}</span>
+                    <span class="symbolika-costing-pill">{{ relatedName(row.order_status) || 'Без статуса' }}</span>
+                  </div>
+                </td>
+                <td>
+                  <div class="symbolika-costing-cell-stack">
+                    <span class="symbolika-costing-cell-main">{{ relatedName(row.customer_company) || relatedName(row.customer) || '-' }}</span>
+                    <span v-if="relatedName(row.customer_company) && relatedName(row.customer)" class="symbolika-costing-cell-meta">{{ relatedName(row.customer) }}</span>
+                    <span class="symbolika-costing-cell-meta">Менеджер: {{ relatedName(row.manager_employee, 'full_name') || '-' }}</span>
+                  </div>
+                </td>
+                <td>
+                  <div class="symbolika-costing-cell-stack symbolika-economics-description">
+                    <span class="symbolika-costing-cell-main">{{ orderEconomicsPositions(row) }}</span>
+                    <span class="symbolika-costing-cell-meta">{{ orderEconomicsContractors(row) || 'Контрагенты не выбраны' }}</span>
+                  </div>
+                </td>
+                <td class="symbolika-costing-num"><strong>{{ formatMoney(row.order_sum) }}</strong></td>
+                <td class="symbolika-costing-num">{{ formatMoney(row.items_total_cost) }}</td>
+                <td class="symbolika-costing-num">
+                  <div class="symbolika-costing-money-stack">
+                    <span>Налог <strong>{{ formatMoney(row.items_tax_sum) }}</strong></span>
+                    <span>Менеджер <strong>{{ formatMoney(row.items_manager_commission_sum) }}</strong></span>
+                  </div>
+                </td>
+                <td class="symbolika-costing-num">
+                  <strong :class="parseMoney(row.profit_sum) < 0 ? 'symbolika-economics-negative' : 'symbolika-economics-profit'">{{ formatMoney(row.profit_sum) }}</strong>
+                  <div class="symbolika-costing-cell-meta">{{ formatMoney(row.margin_percent) }}%</div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="!visibleOrderEconomicsRows.length" class="symbolika-costing-empty">Заказы не найдены</div>
+          <div class="symbolika-economics-note">Прибыль = выручка − себестоимость − процент менеджера − налог. Нажмите строку, чтобы открыть заказ.</div>
+        </div>
+
+        <div v-if="activeTab === 'order_economics' && orderEconomicsView === 'items'" class="symbolika-costing-table-wrap symbolika-economics-table-wrap">
+          <table class="symbolika-costing-table symbolika-costing-table-compact symbolika-economics-table">
+            <thead><tr>
+              <th>Заказ</th><th>Позиция</th><th>Заказчик / менеджер</th><th>Контрагенты</th>
+              <th class="symbolika-costing-num">Выручка</th><th class="symbolika-costing-num">Себестоимость</th><th class="symbolika-costing-num">Налоги / %</th><th class="symbolika-costing-num">Прибыль</th>
+            </tr></thead>
+            <tbody v-if="visibleOrderEconomicsItemRows.length">
+              <tr v-for="row in visibleOrderEconomicsItemRows" :key="'economics-item-' + row.id" class="symbolika-costing-row-clickable" @click="openRowDetail('orders_items', row, $event)">
+                <td><div class="symbolika-costing-cell-stack"><span class="symbolika-costing-order">{{ row.order_number }}</span><span class="symbolika-costing-cell-meta">{{ formatDate(row.date) }} · срок {{ formatDate(row.deadline) }}</span></div></td>
+                <td><div class="symbolika-costing-cell-stack"><span class="symbolika-costing-cell-main">{{ row.product_name || 'Позиция' }}</span><span class="symbolika-costing-cell-meta">{{ formatQuantity(row.quantity) }} шт. · {{ formatMoney(row.price_per_unit) }} ₽/шт.</span></div></td>
+                <td><div class="symbolika-costing-cell-stack"><span class="symbolika-costing-cell-main">{{ relatedName(row.customer_company) || relatedName(row.customer) || '-' }}</span><span class="symbolika-costing-cell-meta">{{ relatedName(row.manager_employee, 'full_name') || '-' }}</span></div></td>
+                <td><div class="symbolika-costing-cell-stack"><span>{{ relatedName(row.contractor_1) || '-' }}</span><span v-if="relatedName(row.contractor_2)" class="symbolika-costing-cell-meta">{{ relatedName(row.contractor_2) }}</span></div></td>
+                <td class="symbolika-costing-num"><strong>{{ formatMoney(row.order_sum) }}</strong></td>
+                <td class="symbolika-costing-num">{{ formatMoney(row.total_cost) }}</td>
+                <td class="symbolika-costing-num"><div class="symbolika-costing-money-stack"><span>Налог <strong>{{ formatMoney(row.tax_sum) }}</strong></span><span>Менеджер <strong>{{ formatMoney(row.manager_commission_sum) }}</strong></span></div></td>
+                <td class="symbolika-costing-num"><strong :class="parseMoney(row.profit_sum) < 0 ? 'symbolika-economics-negative' : 'symbolika-economics-profit'">{{ formatMoney(row.profit_sum) }}</strong><div class="symbolika-costing-cell-meta">{{ formatMoney(row.margin_percent) }}%</div></td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="!visibleOrderEconomicsItemRows.length" class="symbolika-costing-empty">Позиции не найдены</div>
+          <div class="symbolika-economics-note">Прибыль позиции = сумма позиции − себестоимость − процент менеджера − налог.</div>
         </div>
 
         <div v-if="activeTab === 'costing'" class="symbolika-costing-filter-bar">
@@ -23968,7 +24922,7 @@ export const CostingModule = {
           <div class="symbolika-costing-subtoolbar">
             <div class="symbolika-payroll-period">
               <label class="symbolika-costing-label">Расчётный месяц
-                <input v-model="payrollMonth" class="symbolika-costing-input" type="month" @change="loadManagerSummary" />
+                <input v-model="payrollMonth" class="symbolika-costing-input" type="month" @change="loadManagerSummary(); loadPayrollSalaryRows()" />
               </label>
             </div>
             <div class="symbolika-payroll-toolbar-actions">
@@ -24021,7 +24975,11 @@ export const CostingModule = {
             <div v-else-if="!managerSummaryRows.length" class="symbolika-costing-empty">За выбранный месяц заказов менеджеров нет</div>
           </div>
 
-          <div class="symbolika-costing-section-title">Начисления сотрудников · текущий месяц</div>
+          <div class="symbolika-costing-section-title">Начисления сотрудников · {{ monthLabel(payrollMonth) }}</div>
+          <div class="symbolika-costing-info-banner">
+            <v-icon name="event" />
+            <span>Аванс — {{ financeSettings.advance_day }} числа за текущий месяц, 50% оклада. Окончательный расчёт — {{ financeSettings.salary_day }} числа следующего месяца: остаток оклада, проценты и премии.</span>
+          </div>
 
           <div class="symbolika-costing-table-wrap symbolika-payroll-table-wrap">
             <table class="symbolika-costing-table symbolika-costing-table-compact symbolika-costing-payroll-table">
@@ -24111,8 +25069,9 @@ export const CostingModule = {
                   </td>
                   <td>
                     <div class="symbolika-payroll-row-actions">
-                      <button type="button" class="symbolika-costing-mini-button" title="Открыть расчётный лист" @click="openPayslip(row.employee, payrollMonth)"><v-icon name="description" small />Расчёт</button>
-                      <button type="button" class="symbolika-costing-mini-button symbolika-costing-payroll-action" @click="openExpenseDialog('salary_payment', row.employee)"><v-icon name="payments" small />Выплатить</button>
+                      <button type="button" class="symbolika-costing-mini-button" title="Открыть расчётный лист" @click="openPayslip(row.employee, payrollMonth)"><v-icon name="description" small />Листок</button>
+                      <button type="button" class="symbolika-costing-mini-button" :disabled="parseMoney(row.salary_fixed) / 2 <= parseMoney(row.advances_paid)" @click="openPayrollAdvance(row)"><v-icon name="payments" small />Аванс</button>
+                      <button type="button" class="symbolika-costing-mini-button symbolika-costing-payroll-action" :disabled="parseMoney(row.salary_debt) <= 0" @click="openPayrollFinalPayment(row)"><v-icon name="account_balance_wallet" small />Выплатить остаток</button>
                     </div>
                   </td>
                 </tr>
@@ -24171,6 +25130,46 @@ export const CostingModule = {
               Оплата контрагенту
             </button>
           </div>
+
+          <section class="symbolika-costing-form-card symbolika-recurring-expenses-card">
+            <div class="symbolika-costing-form-card-head">
+              <div>
+                <div class="symbolika-costing-subtle">Постоянные расходы и календарь</div>
+                <h3>Аренда и выплаты сотрудникам</h3>
+              </div>
+              <button type="button" class="symbolika-costing-mini-button" :disabled="financeSettingsSaving" @click="saveFinanceSettings">
+                <v-icon name="save" small />{{ financeSettingsSaving ? 'Сохраняю…' : 'Сохранить настройки' }}
+              </button>
+            </div>
+            <div class="symbolika-costing-modal-grid">
+              <label class="symbolika-costing-label">Аренда в месяц
+                <input v-model="financeSettings.monthly_rent" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" />
+              </label>
+              <label class="symbolika-costing-label">Период оплаты аренды
+                <div class="symbolika-costing-field-row">
+                  <input v-model="financeSettings.rent_due_day_from" class="symbolika-costing-input symbolika-costing-num" type="number" min="1" max="31" />
+                  <span>—</span>
+                  <input v-model="financeSettings.rent_due_day_to" class="symbolika-costing-input symbolika-costing-num" type="number" min="1" max="31" />
+                </div>
+              </label>
+              <label class="symbolika-costing-label">День аванса
+                <input v-model="financeSettings.advance_day" class="symbolika-costing-input symbolika-costing-num" type="number" min="1" max="31" />
+              </label>
+              <label class="symbolika-costing-label">День окончательной зарплаты
+                <input v-model="financeSettings.salary_day" class="symbolika-costing-input symbolika-costing-num" type="number" min="1" max="31" />
+              </label>
+            </div>
+            <div class="symbolika-recurring-expense-status" :class="currentRentStatus.due > 0 ? 'is-due' : 'is-paid'">
+              <div>
+                <strong>Аренда за {{ monthLabel(currentRentStatus.month) }}</strong>
+                <span>Начислено {{ formatMoney(currentRentStatus.planned) }} ₽ · оплачено {{ formatMoney(currentRentStatus.paid) }} ₽</span>
+              </div>
+              <button v-if="currentRentStatus.due > 0" type="button" class="symbolika-costing-button" @click="openCurrentRentPayment">
+                <v-icon name="payments" small />Оплатить {{ formatMoney(currentRentStatus.due) }} ₽
+              </button>
+              <span v-else class="symbolika-costing-pill symbolika-costing-pill-green">Оплачено</span>
+            </div>
+          </section>
 
           <div class="symbolika-costing-dashboard symbolika-costing-dashboard-tight">
             <div class="symbolika-costing-card orange">
@@ -24268,7 +25267,7 @@ export const CostingModule = {
                 По контрагентам
               </button>
               <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': contractorSettlementView === 'orders' }" @click="contractorSettlementView = 'orders'">
-                По заказам
+                По позициям
               </button>
             </div>
             <button type="button" class="symbolika-costing-button" @click="openExpenseDialog('contractor_payment')">
@@ -24281,7 +25280,7 @@ export const CostingModule = {
             <div class="symbolika-costing-card blue">
               <div class="symbolika-costing-card-title">Работы контрагентов</div>
               <div class="symbolika-costing-card-value">{{ formatMoney(contractorSettlementSummary.items_total_cost) }}</div>
-              <div class="symbolika-costing-card-note">себестоимость по заказам</div>
+              <div class="symbolika-costing-card-note">себестоимость по позициям</div>
             </div>
             <div class="symbolika-costing-card green">
               <div class="symbolika-costing-card-title">Оплачено</div>
@@ -24302,14 +25301,14 @@ export const CostingModule = {
 
           <div v-else class="symbolika-costing-dashboard symbolika-costing-dashboard-tight">
             <div class="symbolika-costing-card blue">
-              <div class="symbolika-costing-card-title">Начислено по заказам</div>
+              <div class="symbolika-costing-card-title">Начислено по позициям</div>
               <div class="symbolika-costing-card-value">{{ formatMoney(contractorOrderSettlementSummary.accrued) }}</div>
               <div class="symbolika-costing-card-note">себестоимость работ и заготовок</div>
             </div>
             <div class="symbolika-costing-card green">
-              <div class="symbolika-costing-card-title">Оплачено по заказам</div>
+              <div class="symbolika-costing-card-title">Оплачено по позициям</div>
               <div class="symbolika-costing-card-value">{{ formatMoney(contractorOrderSettlementSummary.paid) }}</div>
-              <div class="symbolika-costing-card-note">только платежи с привязкой к заказу</div>
+              <div class="symbolika-costing-card-note">только платежи с привязкой к позиции</div>
             </div>
             <div class="symbolika-costing-card danger">
               <div class="symbolika-costing-card-title">Осталось оплатить</div>
@@ -24319,19 +25318,20 @@ export const CostingModule = {
             <div class="symbolika-costing-card orange">
               <div class="symbolika-costing-card-title">Переплата</div>
               <div class="symbolika-costing-card-value">{{ formatMoney(contractorOrderSettlementSummary.overpaid) }}</div>
-              <div class="symbolika-costing-card-note">по платежам, привязанным к заказам</div>
+              <div class="symbolika-costing-card-note">по платежам, привязанным к позициям</div>
             </div>
           </div>
 
           <div v-if="contractorSettlementView === 'contractors'" class="symbolika-costing-table-wrap">
             <table class="symbolika-costing-table symbolika-costing-table-finance">
               <colgroup>
-                <col style="width: 24%" />
+                <col style="width: 22%" />
+                <col style="width: 13%" />
                 <col style="width: 14%" />
+                <col style="width: 14%" />
+                <col style="width: 12%" />
+                <col style="width: 10%" />
                 <col style="width: 15%" />
-                <col style="width: 15%" />
-                <col style="width: 16%" />
-                <col style="width: 16%" />
               </colgroup>
               <thead>
                 <tr>
@@ -24341,6 +25341,7 @@ export const CostingModule = {
                   <th class="symbolika-costing-num">Баланс</th>
                   <th class="symbolika-costing-num">Наш долг</th>
                   <th class="symbolika-costing-num">Долг нам</th>
+                  <th>Действия</th>
                 </tr>
               </thead>
               <tbody>
@@ -24358,6 +25359,7 @@ export const CostingModule = {
                     </span>
                   </td>
                   <td class="symbolika-costing-num">{{ formatMoney(row.contractor_debt_to_us) }}</td>
+                  <td><button type="button" class="symbolika-costing-mini-button" @click="openContractorQuickPayment(row)">Оплатить</button></td>
                 </tr>
               </tbody>
             </table>
@@ -24381,7 +25383,7 @@ export const CostingModule = {
                   <th>Заказ</th>
                   <th>Заказчик</th>
                   <th>Контрагент</th>
-                  <th>Позиции</th>
+                  <th>Позиция</th>
                   <th class="symbolika-costing-num">Начислено</th>
                   <th class="symbolika-costing-num">Оплачено</th>
                   <th class="symbolika-costing-num">Остаток</th>
@@ -24397,8 +25399,8 @@ export const CostingModule = {
                   <td><div class="symbolika-costing-text" :title="row.customer_name">{{ row.customer_name }}</div></td>
                   <td><div class="symbolika-costing-product" :title="row.contractor_name">{{ row.contractor_name }}</div></td>
                   <td>
-                    <div class="symbolika-costing-text" :title="row.positions_text">{{ row.positions_text || 'Оплата без позиции' }}</div>
-                    <div class="symbolika-costing-subtle">{{ row.positions.length }} поз.</div>
+                    <button type="button" class="symbolika-costing-link-button symbolika-costing-product" @click="openLinkedPositionById(row.item_id)">{{ row.product_name || 'Позиция' }}</button>
+                    <div class="symbolika-costing-subtle">{{ formatQuantity(row.quantity) }} шт.</div>
                   </td>
                   <td class="symbolika-costing-num">{{ formatMoney(row.accrued) }}</td>
                   <td class="symbolika-costing-num">{{ formatMoney(row.paid) }}</td>
@@ -24409,13 +25411,13 @@ export const CostingModule = {
                     <div v-if="row.overpaid > 0" class="symbolika-costing-subtle">переплата {{ formatMoney(row.overpaid) }}</div>
                   </td>
                   <td class="symbolika-costing-num">
-                    <button v-if="row.due > 0" type="button" class="symbolika-costing-mini-button" @click="openContractorOrderPayment(row)">Оплатить</button>
+                    <button v-if="row.due > 0" type="button" class="symbolika-costing-mini-button" @click="openContractorPositionPayment(row)">Оплатить</button>
                     <span v-else class="symbolika-costing-subtle">Оплачен</span>
                   </td>
                 </tr>
               </tbody>
             </table>
-            <div v-if="!visibleContractorOrderSettlementRows.length" class="symbolika-costing-empty">Нет заказов с начислениями контрагентам</div>
+            <div v-if="!visibleContractorOrderSettlementRows.length" class="symbolika-costing-empty">Нет позиций с начислениями контрагентам</div>
           </div>
         </div>
 
@@ -26001,6 +27003,10 @@ export const CostingModule = {
                 Месяц начисления
                 <input v-model="expenseDialog.bonus_month" class="symbolika-costing-input" type="month" />
               </label>
+              <label v-if="['salary_payment', 'employee_advance', 'rent'].includes(expenseDialog.expense_type)" class="symbolika-costing-label">
+                Расчётный месяц
+                <input v-model="expenseDialog.accounting_month" class="symbolika-costing-input" type="month" />
+              </label>
               <label v-if="expenseDialog.expense_type !== 'employee_bonus'" class="symbolika-costing-label">
                 Тип расхода
                 <select v-model="expenseDialog.expense_type" class="symbolika-costing-select">
@@ -26031,23 +27037,17 @@ export const CostingModule = {
                   </option>
                 </select>
               </label>
-              <label v-if="expenseDialog.expense_type === 'contractor_payment'" class="symbolika-costing-label">
-                Заказ
-                <select v-model="expenseDialog.related_order" class="symbolika-costing-select">
-                  <option value="">Без привязки</option>
-                  <option v-for="order in expenseOrderOptions()" :key="order.id" :value="order.id">
-                    {{ order.label }}
-                  </option>
-                </select>
-              </label>
               <label v-if="expenseDialog.expense_type === 'contractor_payment'" class="symbolika-costing-label symbolika-costing-label-wide">
-                Позиция заказа
+                Позиция заказа (необязательно)
                 <select v-model="expenseDialog.related_order_item" class="symbolika-costing-select" @change="syncExpenseOrderFromItem">
-                  <option value="">Без привязки к позиции</option>
+                  <option value="">Общая оплата — распределить по долгам контрагента</option>
                   <option v-for="item in expenseOrderItemOptions()" :key="item.id" :value="item.id">
                     {{ item.label }}
                   </option>
                 </select>
+                <span class="symbolika-costing-subtle">
+                  Без выбора позиции сумма закроет самые старые долги. Остаток сохранится как аванс контрагенту.
+                </span>
               </label>
               <label v-if="expenseDialog.expense_type !== 'employee_bonus'" class="symbolika-costing-label">
                 Тип оплаты
@@ -26291,7 +27291,7 @@ export const CostingModule = {
             <div class="symbolika-costing-modal-head">
               <div>
                 <div class="symbolika-costing-subtle">Макет позиции</div>
-                <h2>{{ layoutUploadDialog.draft ? (layoutUploadDialog.file ? 'Изменить файл' : 'Добавить файл') : (layoutUploadDialog.row.url ? 'Заменить файл' : 'Загрузить файл') }}</h2>
+                <h2>{{ layoutUploadDialog.row.url || layoutUploadDialog.file ? 'Изменить макет' : 'Добавить макет' }}</h2>
               </div>
               <button
                 type="button"
@@ -26300,14 +27300,19 @@ export const CostingModule = {
                 @click="closeLayoutUploadDialog"
               >×</button>
             </div>
-            <p class="symbolika-layout-upload-subtitle">
-              {{ layoutUploadDialog.draft
-                ? 'Файл загрузится на Яндекс Диск автоматически после сохранения позиции.'
-                : 'Файл сохранится на Яндекс Диске, а ссылка автоматически появится в позиции заказа.' }}
-            </p>
+            <p class="symbolika-layout-upload-subtitle">Выберите файл для загрузки на Яндекс Диск или вставьте готовую ссылку, которую прислал заказчик.</p>
+
+            <div class="symbolika-layout-source-tabs">
+              <button type="button" :class="{ 'is-active': layoutUploadDialog.mode === 'file' }" @click="setLayoutUploadMode('file')">
+                <v-icon name="cloud_upload" small /> Загрузить файл
+              </button>
+              <button type="button" :class="{ 'is-active': layoutUploadDialog.mode === 'link' }" @click="setLayoutUploadMode('link')">
+                <v-icon name="link" small /> Вставить ссылку
+              </button>
+            </div>
 
             <label
-              v-if="!layoutUploadDialog.file"
+              v-if="layoutUploadDialog.mode === 'file' && !layoutUploadDialog.file"
               class="symbolika-layout-dropzone"
               :class="{ 'is-dragging': layoutUploadDialog.dragging }"
               @dragenter.prevent="setLayoutUploadDragging(true)"
@@ -26325,7 +27330,7 @@ export const CostingModule = {
               <span>или нажмите, чтобы выбрать файл · PDF, CDR, изображения и архивы · до 2 ГБ</span>
             </label>
 
-            <div v-else class="symbolika-layout-selected-file">
+            <div v-else-if="layoutUploadDialog.mode === 'file'" class="symbolika-layout-selected-file">
               <v-icon name="draft" large />
               <div class="symbolika-layout-selected-file-copy">
                 <strong>{{ layoutUploadDialog.file.name }}</strong>
@@ -26340,10 +27345,16 @@ export const CostingModule = {
               ><v-icon name="close" small /></button>
             </div>
 
+            <label v-else class="symbolika-layout-link-field">
+              Ссылка на макет
+              <input v-model.trim="layoutUploadDialog.url" class="symbolika-costing-input" inputmode="url" placeholder="https://disk.yandex.ru/..." @keydown.enter.prevent="confirmLayoutUpload" />
+              <small>Подойдут ссылки на Яндекс Диск, Google Drive, облако заказчика или другой доступный сайт.</small>
+            </label>
+
             <p v-if="layoutUploadDialog.error" class="symbolika-layout-upload-error">{{ layoutUploadDialog.error }}</p>
 
             <div
-              v-if="!layoutUploadDialog.draft && layoutUploading[entityId(layoutUploadDialog.row.order_item) || layoutUploadDialog.row.id]"
+              v-if="layoutUploadDialog.mode === 'file' && !layoutUploadDialog.draft && layoutUploading[entityId(layoutUploadDialog.row.order_item) || layoutUploadDialog.row.id]"
               class="symbolika-layout-progress"
             >
               <div class="symbolika-layout-progress-head">
@@ -26363,13 +27374,13 @@ export const CostingModule = {
               <button
                 type="button"
                 class="symbolika-costing-button"
-                :disabled="!layoutUploadDialog.file || (!layoutUploadDialog.draft && !!layoutUploading[entityId(layoutUploadDialog.row.order_item) || layoutUploadDialog.row.id])"
+                :disabled="(layoutUploadDialog.mode === 'file' ? !layoutUploadDialog.file : !layoutUploadDialog.url) || (!layoutUploadDialog.draft && !!layoutUploading[entityId(layoutUploadDialog.row.order_item) || layoutUploadDialog.row.id])"
                 @click="confirmLayoutUpload"
               >
-                <v-icon :name="layoutUploadDialog.draft ? 'attach_file' : (layoutUploading[entityId(layoutUploadDialog.row.order_item) || layoutUploadDialog.row.id] ? 'progress_activity' : 'cloud_upload')" small />
-                {{ layoutUploadDialog.draft
-                  ? 'Прикрепить файл'
-                  : (layoutUploading[entityId(layoutUploadDialog.row.order_item) || layoutUploadDialog.row.id] ? 'Загружаем…' : 'Загрузить на Диск') }}
+                <v-icon :name="layoutUploading[entityId(layoutUploadDialog.row.order_item) || layoutUploadDialog.row.id] ? 'progress_activity' : (layoutUploadDialog.mode === 'link' ? 'link' : (layoutUploadDialog.draft ? 'attach_file' : 'cloud_upload'))" small />
+                {{ layoutUploading[entityId(layoutUploadDialog.row.order_item) || layoutUploadDialog.row.id]
+                  ? 'Сохраняем…'
+                  : (layoutUploadDialog.mode === 'link' ? 'Сохранить ссылку' : (layoutUploadDialog.draft ? 'Прикрепить файл' : 'Загрузить на Диск')) }}
               </button>
             </div>
           </div>
@@ -26686,10 +27697,11 @@ export const CostingModule = {
 
                 <div class="symbolika-costing-label symbolika-costing-new-order-url symbolika-draft-layout-field">
                   <span>Макет</span>
-                  <button type="button" class="symbolika-layout-draft-button" :class="{ 'has-file': item._layout_file }" @click="openDraftLayoutUploadDialog(item)">
-                    <v-icon :name="item._layout_file ? 'draft' : 'cloud_upload'" small />
-                    <span>{{ item._layout_file ? item._layout_file.name : 'Добавить файл' }}</span>
+                  <button type="button" class="symbolika-layout-draft-button" :class="{ 'has-file': item._layout_file || item.url }" @click="openDraftLayoutUploadDialog(item)">
+                    <v-icon :name="item._layout_file ? 'draft' : (item.url ? 'link' : 'cloud_upload')" small />
+                    <span>{{ item._layout_file ? item._layout_file.name : (item.url || 'Добавить файл или ссылку') }}</span>
                     <small v-if="item._layout_file">{{ formatFileSize(item._layout_file.size) }}</small>
+                    <small v-else-if="item.url">Ссылка заказчика</small>
                   </button>
                 </div>
 
@@ -27930,10 +28942,11 @@ export const CostingModule = {
 
                   <div class="symbolika-costing-label symbolika-costing-detail-add-url symbolika-draft-layout-field">
                     <span>Макет</span>
-                    <button type="button" class="symbolika-layout-draft-button" :class="{ 'has-file': detailItemForm._layout_file }" @click="openDraftLayoutUploadDialog(detailItemForm)">
-                      <v-icon :name="detailItemForm._layout_file ? 'draft' : 'cloud_upload'" small />
-                      <span>{{ detailItemForm._layout_file ? detailItemForm._layout_file.name : 'Добавить файл' }}</span>
+                    <button type="button" class="symbolika-layout-draft-button" :class="{ 'has-file': detailItemForm._layout_file || detailItemForm.url }" @click="openDraftLayoutUploadDialog(detailItemForm)">
+                      <v-icon :name="detailItemForm._layout_file ? 'draft' : (detailItemForm.url ? 'link' : 'cloud_upload')" small />
+                      <span>{{ detailItemForm._layout_file ? detailItemForm._layout_file.name : (detailItemForm.url || 'Добавить файл или ссылку') }}</span>
                       <small v-if="detailItemForm._layout_file">{{ formatFileSize(detailItemForm._layout_file.size) }}</small>
+                      <small v-else-if="detailItemForm.url">Ссылка заказчика</small>
                     </button>
                   </div>
 
@@ -28051,6 +29064,19 @@ export const CostingModule = {
                 <div><strong>Статусы</strong><small>Текущее состояние позиции, производства и выдачи</small></div>
               </header>
               <div class="symbolika-costing-item-section-grid is-statuses">
+            <div v-if="canSendItemToWork(detail.row)" class="symbolika-costing-detail-field is-primary">
+              <div class="symbolika-costing-detail-label">Запуск позиции</div>
+              <div class="symbolika-costing-detail-value">
+                <button
+                  type="button"
+                  class="symbolika-costing-button symbolika-costing-send-work-button symbolika-costing-item-detail-send-work"
+                  :class="savingWorkClass('orders_items', detail.row, 'item_status')"
+                  @click="sendItemToWork(detail.row)"
+                >
+                  <v-icon name="play_arrow" small />Запустить в работу
+                </button>
+              </div>
+            </div>
             <div v-if="!isItemReady(detail.row)" class="symbolika-costing-detail-field is-primary symbolika-mobile-secondary">
               <div class="symbolika-costing-detail-label">Статус производства</div>
               <div class="symbolika-costing-detail-value">
@@ -28231,17 +29257,22 @@ export const CostingModule = {
             <div class="symbolika-costing-detail-field symbolika-costing-detail-wide is-primary">
               <div class="symbolika-costing-detail-label">Макет</div>
               <div class="symbolika-costing-detail-value symbolika-costing-detail-link-edit">
-                <a
-                  v-if="detail.row.url"
-                  class="symbolika-layout-current-link"
-                  :href="detail.row.url"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <v-icon name="link" small />
-                  <span>{{ detail.row.layout_disk_name || detail.row.url }}</span>
-                  <v-icon name="open_in_new" small />
-                </a>
+                <div v-if="detail.row.url" class="symbolika-layout-current-actions">
+                  <a
+                    class="symbolika-layout-current-link"
+                    :href="detail.row.url"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <v-icon name="link" small />
+                    <span>{{ detail.row.layout_disk_name || detail.row.url }}</span>
+                    <v-icon name="open_in_new" small />
+                  </a>
+                  <button type="button" class="symbolika-costing-mini-button symbolika-layout-copy-button" @click="copyLayoutLink(detail.row)">
+                    <v-icon :name="copiedLayoutLinkId === Number(entityId(detail.row.order_item) || entityId(detail.row.id)) ? 'check' : 'content_copy'" small />
+                    {{ copiedLayoutLinkId === Number(entityId(detail.row.order_item) || entityId(detail.row.id)) ? 'Скопировано' : 'Скопировать' }}
+                  </button>
+                </div>
                 <div v-else class="symbolika-layout-current-empty">Макет пока не загружен</div>
                 <div class="symbolika-layout-upload-actions">
                   <button
@@ -28252,7 +29283,7 @@ export const CostingModule = {
                     @click="openLayoutUploadDialog(detail.row)"
                   >
                     <v-icon :name="layoutUploading[detail.row.id] ? 'progress_activity' : 'cloud_upload'" small />
-                    {{ layoutUploading[detail.row.id] ? 'Загружаем на Диск…' : (detail.row.url ? 'Заменить файлом' : 'Загрузить файл') }}
+                    {{ layoutUploading[detail.row.id] ? 'Сохраняем макет…' : (detail.row.url ? 'Изменить макет' : 'Добавить файл или ссылку') }}
                   </button>
                 </div>
                 <small v-if="detail.row.layout_disk_name" class="symbolika-layout-upload-meta">

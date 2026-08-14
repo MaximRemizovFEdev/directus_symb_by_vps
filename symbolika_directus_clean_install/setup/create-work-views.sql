@@ -744,6 +744,7 @@ CREATE TABLE IF NOT EXISTS finance_dashboard_series (
 CREATE TABLE IF NOT EXISTS business_expenses (
   id serial PRIMARY KEY,
   expense_date date NOT NULL DEFAULT current_date,
+  accounting_month date,
   expense_type character varying(255) NOT NULL DEFAULT 'other',
   amount numeric(14,2) NOT NULL DEFAULT 0,
   employee integer REFERENCES employees(id) ON DELETE SET NULL,
@@ -753,12 +754,47 @@ CREATE TABLE IF NOT EXISTS business_expenses (
 );
 
 ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS expense_date date NOT NULL DEFAULT current_date;
+ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS accounting_month date;
 ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS expense_type character varying(255) NOT NULL DEFAULT 'other';
 ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS amount numeric(14,2) NOT NULL DEFAULT 0;
 ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS employee integer REFERENCES employees(id) ON DELETE SET NULL;
 ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS payment_type integer REFERENCES payment_types(id) ON DELETE SET NULL;
 ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS comment text;
 ALTER TABLE business_expenses ADD COLUMN IF NOT EXISTS created_at timestamp with time zone DEFAULT now();
+
+UPDATE business_expenses
+SET accounting_month = date_trunc('month', expense_date)::date
+WHERE accounting_month IS NULL;
+
+CREATE OR REPLACE FUNCTION normalize_business_expense_accounting_month()
+RETURNS trigger AS $$
+BEGIN
+  NEW.accounting_month := date_trunc(
+    'month',
+    COALESCE(NEW.accounting_month, NEW.expense_date, current_date)
+  )::date;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS business_expenses_normalize_accounting_month ON business_expenses;
+CREATE TRIGGER business_expenses_normalize_accounting_month
+BEFORE INSERT OR UPDATE OF expense_date, accounting_month ON business_expenses
+FOR EACH ROW EXECUTE FUNCTION normalize_business_expense_accounting_month();
+
+CREATE TABLE IF NOT EXISTS finance_settings (
+  id smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  monthly_rent numeric(14,2) NOT NULL DEFAULT 160000,
+  rent_due_day_from smallint NOT NULL DEFAULT 26 CHECK (rent_due_day_from BETWEEN 1 AND 31),
+  rent_due_day_to smallint NOT NULL DEFAULT 30 CHECK (rent_due_day_to BETWEEN 1 AND 31),
+  advance_day smallint NOT NULL DEFAULT 28 CHECK (advance_day BETWEEN 1 AND 31),
+  salary_day smallint NOT NULL DEFAULT 12 CHECK (salary_day BETWEEN 1 AND 31),
+  updated_at timestamp with time zone NOT NULL DEFAULT now()
+);
+
+INSERT INTO finance_settings (id, monthly_rent)
+VALUES (1, 160000)
+ON CONFLICT (id) DO NOTHING;
 
 DROP TABLE IF EXISTS employee_salary_monthly CASCADE;
 DROP TABLE IF EXISTS employee_salary_summary CASCADE;
@@ -789,8 +825,7 @@ employee_payments AS (
   FROM business_expenses be
   CROSS JOIN period p
   WHERE be.employee IS NOT NULL
-    AND be.expense_date >= p.month_start
-    AND be.expense_date < (p.month_start + interval '1 month')::date
+    AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = p.month_start
   GROUP BY be.employee
 )
 SELECT
@@ -853,12 +888,12 @@ base AS (
 payments AS (
   SELECT
     be.employee,
-    date_trunc('month', be.expense_date)::date AS month_start,
+    COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) AS month_start,
     COALESCE(SUM(be.amount) FILTER (WHERE be.expense_type = 'salary_payment'), 0) AS salary_paid,
     COALESCE(SUM(be.amount) FILTER (WHERE be.expense_type = 'employee_advance'), 0) AS advances_paid
   FROM business_expenses be
   WHERE be.employee IS NOT NULL
-  GROUP BY be.employee, date_trunc('month', be.expense_date)::date
+  GROUP BY be.employee, COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date)
 )
 SELECT
   row_number() OVER (ORDER BY b.month_start DESC, b.employee)::integer AS id,
@@ -907,6 +942,7 @@ CREATE TABLE IF NOT EXISTS employee_salary_monthly (
   id integer PRIMARY KEY,
   employee integer,
   employee_name character varying(255),
+  position_name character varying(255),
   month_start date,
   month_label character varying(255),
   salary_fixed numeric(14,2) DEFAULT 0,
@@ -923,6 +959,7 @@ CREATE TABLE IF NOT EXISTS employee_salary_monthly (
 );
 
 ALTER TABLE employee_salary_monthly ADD COLUMN IF NOT EXISTS bonus_paid numeric(14,2) DEFAULT 0;
+ALTER TABLE employee_salary_monthly ADD COLUMN IF NOT EXISTS position_name character varying(255);
 
 CREATE OR REPLACE FUNCTION refresh_employee_salary_tables()
 RETURNS void AS $$
@@ -958,8 +995,7 @@ BEGIN
         FROM business_expenses be
         WHERE be.employee = e.id
           AND be.expense_type = 'employee_bonus'
-          AND be.expense_date >= month_begin
-          AND be.expense_date < (month_begin + interval '1 month')::date
+          AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = month_begin
       ), 0),
       2
     ),
@@ -968,24 +1004,21 @@ BEGIN
       FROM business_expenses be
       WHERE be.employee = e.id
         AND be.expense_type = 'salary_payment'
-        AND be.expense_date >= month_begin
-        AND be.expense_date < (month_begin + interval '1 month')::date
+        AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = month_begin
     ), 0),
     COALESCE((
       SELECT SUM(be.amount)
       FROM business_expenses be
       WHERE be.employee = e.id
         AND be.expense_type = 'employee_advance'
-        AND be.expense_date >= month_begin
-        AND be.expense_date < (month_begin + interval '1 month')::date
+        AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = month_begin
     ), 0),
     COALESCE((
       SELECT SUM(be.amount)
       FROM business_expenses be
       WHERE be.employee = e.id
         AND be.expense_type = 'employee_bonus'
-        AND be.expense_date >= month_begin
-        AND be.expense_date < (month_begin + interval '1 month')::date
+        AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = month_begin
     ), 0),
     ROUND(
       COALESCE(e.salary_fixed, 0)
@@ -995,24 +1028,21 @@ BEGIN
         FROM business_expenses be
         WHERE be.employee = e.id
           AND be.expense_type = 'employee_bonus'
-          AND be.expense_date >= month_begin
-          AND be.expense_date < (month_begin + interval '1 month')::date
+          AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = month_begin
       ), 0)
       - COALESCE((
         SELECT SUM(be.amount)
         FROM business_expenses be
         WHERE be.employee = e.id
           AND be.expense_type = 'salary_payment'
-          AND be.expense_date >= month_begin
-          AND be.expense_date < (month_begin + interval '1 month')::date
+          AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = month_begin
       ), 0)
       - COALESCE((
         SELECT SUM(be.amount)
         FROM business_expenses be
         WHERE be.employee = e.id
           AND be.expense_type = 'employee_advance'
-          AND be.expense_date >= month_begin
-          AND be.expense_date < (month_begin + interval '1 month')::date
+          AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = month_begin
       ), 0),
       2
     )
@@ -1028,7 +1058,7 @@ BEGIN
   DELETE FROM employee_salary_monthly;
 
   INSERT INTO employee_salary_monthly (
-    id, employee, employee_name, month_start, month_label,
+    id, employee, employee_name, position_name, month_start, month_label,
     salary_fixed, order_percent, orders_sum, paid_orders_sum, unpaid_orders_sum,
     commission_accrued, salary_accrued, salary_paid, advances_paid, bonus_paid, salary_debt
   )
@@ -1043,6 +1073,7 @@ BEGIN
     SELECT
       e.id AS employee,
       e.full_name AS employee_name,
+      ep.name AS position_name,
       m.month_start,
       to_char(m.month_start, 'MM.YY') AS month_label,
       COALESCE(e.salary_fixed, 0) AS salary_fixed,
@@ -1051,18 +1082,20 @@ BEGIN
       COALESCE(SUM(o.paid_amount), 0) AS paid_orders_sum,
       COALESCE(SUM(GREATEST(o.payment_due, 0)), 0) AS unpaid_orders_sum
     FROM employees e
+    LEFT JOIN employee_positions ep ON ep.id = e.position
     CROSS JOIN months m
     LEFT JOIN orders o
       ON COALESCE(o.commission_manager_employee, o.manager_employee) = e.id
      AND o.date >= m.month_start
      AND o.date < (m.month_start + interval '1 month')::date
     WHERE COALESCE(e.is_active, true) = true
-    GROUP BY e.id, e.full_name, m.month_start, e.salary_fixed, e.order_percent
+    GROUP BY e.id, e.full_name, ep.name, m.month_start, e.salary_fixed, e.order_percent
   )
   SELECT
     row_number() OVER (ORDER BY b.month_start DESC, b.employee)::integer,
     b.employee,
     b.employee_name,
+    b.position_name,
     b.month_start,
     b.month_label,
     b.salary_fixed,
@@ -1079,8 +1112,7 @@ BEGIN
         FROM business_expenses be
         WHERE be.employee = b.employee
           AND be.expense_type = 'employee_bonus'
-          AND be.expense_date >= b.month_start
-          AND be.expense_date < (b.month_start + interval '1 month')::date
+          AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = b.month_start
       ), 0),
       2
     ),
@@ -1089,24 +1121,21 @@ BEGIN
       FROM business_expenses be
       WHERE be.employee = b.employee
         AND be.expense_type = 'salary_payment'
-        AND be.expense_date >= b.month_start
-        AND be.expense_date < (b.month_start + interval '1 month')::date
+        AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = b.month_start
     ), 0),
     COALESCE((
       SELECT SUM(be.amount)
       FROM business_expenses be
       WHERE be.employee = b.employee
         AND be.expense_type = 'employee_advance'
-        AND be.expense_date >= b.month_start
-        AND be.expense_date < (b.month_start + interval '1 month')::date
+        AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = b.month_start
     ), 0),
     COALESCE((
       SELECT SUM(be.amount)
       FROM business_expenses be
       WHERE be.employee = b.employee
         AND be.expense_type = 'employee_bonus'
-        AND be.expense_date >= b.month_start
-        AND be.expense_date < (b.month_start + interval '1 month')::date
+        AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = b.month_start
     ), 0),
     ROUND(
       b.salary_fixed
@@ -1116,24 +1145,21 @@ BEGIN
         FROM business_expenses be
         WHERE be.employee = b.employee
           AND be.expense_type = 'employee_bonus'
-          AND be.expense_date >= b.month_start
-          AND be.expense_date < (b.month_start + interval '1 month')::date
+          AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = b.month_start
       ), 0)
       - COALESCE((
         SELECT SUM(be.amount)
         FROM business_expenses be
         WHERE be.employee = b.employee
           AND be.expense_type = 'salary_payment'
-          AND be.expense_date >= b.month_start
-          AND be.expense_date < (b.month_start + interval '1 month')::date
+          AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = b.month_start
       ), 0)
       - COALESCE((
         SELECT SUM(be.amount)
         FROM business_expenses be
         WHERE be.employee = b.employee
           AND be.expense_type = 'employee_advance'
-          AND be.expense_date >= b.month_start
-          AND be.expense_date < (b.month_start + interval '1 month')::date
+          AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = b.month_start
       ), 0),
       2
     )
@@ -1404,12 +1430,14 @@ BEGIN
       FROM business_expenses be
       WHERE be.expense_date >= months.month_start
         AND be.expense_date < (months.month_start + interval '1 month')::date
+        AND be.expense_type <> 'employee_bonus'
     ), 0),
     COALESCE(SUM(o.items_total_cost), 0) + COALESCE((
       SELECT SUM(be.amount)
       FROM business_expenses be
       WHERE be.expense_date >= months.month_start
         AND be.expense_date < (months.month_start + interval '1 month')::date
+        AND be.expense_type <> 'employee_bonus'
     ), 0),
     COALESCE(SUM(GREATEST(o.payment_due, 0)), 0)
   FROM generate_series(
@@ -2030,7 +2058,8 @@ BEGIN
   LEFT JOIN customers c ON c.id = o.customer
   LEFT JOIN customer_companies cc ON cc.id = o.customer_company
   WHERE oi.id = item_id
-    AND oi.office_status = 'in_office';
+    AND o.shipping_method = 'office_pickup'
+    AND COALESCE(o.office_status, 'not_in_office') <> 'issued';
 END;
 $$;
 
@@ -2410,8 +2439,8 @@ BEGIN
      AND NEW.office_status IS NOT DISTINCT FROM OLD.office_status
      AND NEW.item_status IS DISTINCT FROM previous_item_status THEN
     item_transition_allowed := CASE
-      WHEN previous_item_status IN ('new', 'approval') THEN NEW.item_status IN ('new', 'approval')
-      WHEN previous_item_status = 'layout_revision' THEN NEW.item_status = 'layout_revision'
+      WHEN previous_item_status IN ('new', 'approval') THEN NEW.item_status IN ('new', 'approval', 'in_work')
+      WHEN previous_item_status = 'layout_revision' THEN NEW.item_status IN ('layout_revision', 'in_work')
       WHEN previous_item_status IN ('sent_to_work', 'in_work') THEN NEW.item_status IN ('sent_to_work', 'in_work', 'ready', 'delivered')
       WHEN previous_item_status = 'ready' THEN NEW.item_status IN ('ready', 'delivered')
       WHEN previous_item_status = 'delivered' THEN NEW.item_status = 'delivered'
@@ -2420,6 +2449,27 @@ BEGIN
 
     IF NOT COALESCE(item_transition_allowed, false) THEN
       RAISE EXCEPTION 'Недопустимый переход статуса позиции: % -> %', previous_item_status, NEW.item_status;
+    END IF;
+
+    IF NEW.item_status = 'in_work'
+       AND previous_item_status IN ('new', 'approval', 'layout_revision') THEN
+      IF NULLIF(BTRIM(COALESCE(NEW.product_name, '')), '') IS NULL THEN
+        RAISE EXCEPTION 'Позицию нельзя запустить в работу: заполните наименование';
+      END IF;
+      IF COALESCE(NEW.quantity, 0) <= 0 THEN
+        RAISE EXCEPTION 'Позицию нельзя запустить в работу: заполните количество';
+      END IF;
+      IF NULLIF(BTRIM(COALESCE(NEW.technical_task_text, '')), '') IS NULL THEN
+        RAISE EXCEPTION 'Позицию нельзя запустить в работу: заполните ТЗ';
+      END IF;
+      IF NULLIF(BTRIM(COALESCE(NEW.url, '')), '') IS NULL THEN
+        RAISE EXCEPTION 'Позицию нельзя запустить в работу: загрузите макет';
+      END IF;
+      IF previous_item_status = 'layout_revision'
+         AND BTRIM(COALESCE(NEW.url, '')) = BTRIM(COALESCE(OLD.layout_revision_url_snapshot, '')) THEN
+        RAISE EXCEPTION 'Позицию нельзя повторно запустить в работу: загрузите обновленный макет';
+      END IF;
+      NEW.layout_revision_url_snapshot := NULL;
     END IF;
   END IF;
 
@@ -3363,7 +3413,8 @@ FROM orders_items oi
 JOIN orders o ON o.id = oi."order"
 LEFT JOIN customers c ON c.id = o.customer
 LEFT JOIN customer_companies cc ON cc.id = o.customer_company
-WHERE oi.office_status = 'in_office';
+WHERE o.shipping_method = 'office_pickup'
+  AND COALESCE(o.office_status, 'not_in_office') <> 'issued';
 
 DELETE FROM production_work;
 DELETE FROM screen_printing_work;
@@ -8517,6 +8568,13 @@ INSERT INTO directus_collections (
     true, 'all', 55, 'open', false
   ),
   (
+    'finance_settings', 'event_repeat',
+    'Recurring finance settings and payment calendar.',
+    'Постоянные расходы', true, true,
+    json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\0441\0442\043e\044f\043d\043d\044b\0435 \0440\0430\0441\0445\043e\0434\044b'))::json,
+    true, 'all', 56, 'open', false
+  ),
+  (
     'employee_salary_summary', 'payments',
     'Current month salary accrual and employee debt summary.',
     '{{employee_name}}', true, false,
@@ -8548,7 +8606,7 @@ ON CONFLICT (collection) DO UPDATE SET
   collapse = EXCLUDED.collapse;
 
 DELETE FROM directus_fields
-WHERE collection IN ('finance_dashboard_metrics', 'finance_dashboard_monthly', 'finance_dashboard_series', 'business_expenses', 'employee_salary_summary', 'employee_salary_monthly', 'manager_finance_summary');
+WHERE collection IN ('finance_dashboard_metrics', 'finance_dashboard_monthly', 'finance_dashboard_series', 'business_expenses', 'finance_settings', 'employee_salary_summary', 'employee_salary_monthly', 'manager_finance_summary');
 
 INSERT INTO directus_fields (
   collection, field, special, interface, options, display, display_options,
@@ -8578,12 +8636,20 @@ INSERT INTO directus_fields (
   ('finance_dashboard_series', 'updated_at', NULL, 'datetime', NULL, NULL, NULL, true, false, 8, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\0431\043d\043e\0432\043b\0435\043d\043e'))::json, false, true),
   ('business_expenses', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'half', NULL, true, true),
   ('business_expenses', 'expense_date', NULL, 'datetime', NULL, 'datetime', NULL, false, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0430\0442\0430'))::json, true, true),
-  ('business_expenses', 'expense_type', NULL, 'select-dropdown', '{"choices":[{"text":"Аренда","value":"rent"},{"text":"Материалы (бумага, тонер)","value":"production_materials"},{"text":"Производственная расходка","value":"production_consumables"},{"text":"Обслуживание и ремонт техники","value":"equipment_maintenance"},{"text":"Закупка прочих запасов","value":"inventory_purchase"},{"text":"Выплата зарплаты","value":"salary_payment"},{"text":"Назначенная премия","value":"employee_bonus"},{"text":"Оплата за доставку","value":"delivery"},{"text":"Прочие расходы","value":"other"},{"text":"Аванс сотруднику","value":"employee_advance"}]}'::json, 'labels', NULL, false, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0438\043f \0440\0430\0441\0445\043e\0434\0430'))::json, true, true),
-  ('business_expenses', 'amount', NULL, 'input', NULL, NULL, NULL, false, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0443\043c\043c\0430'))::json, true, true),
-  ('business_expenses', 'employee', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}"}'::json, 'related-values', '{"template":"{{full_name}}"}'::json, false, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
-  ('business_expenses', 'payment_type', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0438\043f \043e\043f\043b\0430\0442\044b'))::json, false, true),
-  ('business_expenses', 'comment', NULL, 'input-multiline', NULL, NULL, NULL, false, false, 7, 'full', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439'))::json, false, true),
-  ('business_expenses', 'created_at', NULL, 'datetime', NULL, NULL, NULL, true, true, 8, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0437\0434\0430\043d\043e'))::json, false, true),
+  ('business_expenses', 'accounting_month', NULL, 'datetime', NULL, 'datetime', NULL, false, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0420\0430\0441\0447\0451\0442\043d\044b\0439 \043c\0435\0441\044f\0446'))::json, false, true),
+  ('business_expenses', 'expense_type', NULL, 'select-dropdown', '{"choices":[{"text":"Аренда","value":"rent"},{"text":"Материалы (бумага, тонер)","value":"production_materials"},{"text":"Производственная расходка","value":"production_consumables"},{"text":"Обслуживание и ремонт техники","value":"equipment_maintenance"},{"text":"Закупка прочих запасов","value":"inventory_purchase"},{"text":"Выплата зарплаты","value":"salary_payment"},{"text":"Назначенная премия","value":"employee_bonus"},{"text":"Оплата за доставку","value":"delivery"},{"text":"Прочие расходы","value":"other"},{"text":"Аванс сотруднику","value":"employee_advance"}]}'::json, 'labels', NULL, false, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0438\043f \0440\0430\0441\0445\043e\0434\0430'))::json, true, true),
+  ('business_expenses', 'amount', NULL, 'input', NULL, NULL, NULL, false, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0443\043c\043c\0430'))::json, true, true),
+  ('business_expenses', 'employee', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}"}'::json, 'related-values', '{"template":"{{full_name}}"}'::json, false, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
+  ('business_expenses', 'payment_type', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 7, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0438\043f \043e\043f\043b\0430\0442\044b'))::json, false, true),
+  ('business_expenses', 'comment', NULL, 'input-multiline', NULL, NULL, NULL, false, false, 8, 'full', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439'))::json, false, true),
+  ('business_expenses', 'created_at', NULL, 'datetime', NULL, NULL, NULL, true, true, 9, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0437\0434\0430\043d\043e'))::json, false, true),
+  ('finance_settings', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'half', NULL, true, true),
+  ('finance_settings', 'monthly_rent', NULL, 'input', NULL, NULL, NULL, false, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0410\0440\0435\043d\0434\0430 \0432 \043c\0435\0441\044f\0446'))::json, true, true),
+  ('finance_settings', 'rent_due_day_from', NULL, 'input', NULL, NULL, NULL, false, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\043f\043b\0430\0442\0430 \0430\0440\0435\043d\0434\044b \0441'))::json, true, true),
+  ('finance_settings', 'rent_due_day_to', NULL, 'input', NULL, NULL, NULL, false, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\043f\043b\0430\0442\0430 \0430\0440\0435\043d\0434\044b \0434\043e'))::json, true, true),
+  ('finance_settings', 'advance_day', NULL, 'input', NULL, NULL, NULL, false, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0435\043d\044c \0430\0432\0430\043d\0441\0430'))::json, true, true),
+  ('finance_settings', 'salary_day', NULL, 'input', NULL, NULL, NULL, false, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0435\043d\044c \0437\0430\0440\043f\043b\0430\0442\044b'))::json, true, true),
+  ('finance_settings', 'updated_at', NULL, 'datetime', NULL, NULL, NULL, true, true, 7, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\0431\043d\043e\0432\043b\0435\043d\043e'))::json, false, true),
   ('employee_salary_summary', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'half', NULL, true, true),
   ('employee_salary_summary', 'employee', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}"}'::json, 'related-values', '{"template":"{{full_name}}"}'::json, true, true, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
   ('employee_salary_summary', 'employee_name', NULL, 'input', NULL, NULL, NULL, true, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
@@ -8616,7 +8682,8 @@ INSERT INTO directus_fields (
   ('manager_finance_summary', 'commission_to_pay', NULL, 'input', NULL, NULL, NULL, true, false, 14, 'half', json_build_array(json_build_object('language','ru-RU','translation', 'К выплате'))::json, false, true),
   ('employee_salary_monthly', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'half', NULL, true, true),
   ('employee_salary_monthly', 'employee_name', NULL, 'input', NULL, NULL, NULL, true, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
-  ('employee_salary_monthly', 'month_label', NULL, 'input', NULL, NULL, NULL, true, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041c\0435\0441\044f\0446'))::json, false, true),
+  ('employee_salary_monthly', 'position_name', NULL, 'input', NULL, NULL, NULL, true, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\043e\043b\0436\043d\043e\0441\0442\044c'))::json, false, true),
+  ('employee_salary_monthly', 'month_label', NULL, 'input', NULL, NULL, NULL, true, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041c\0435\0441\044f\0446'))::json, false, true),
   ('employee_salary_monthly', 'salary_accrued', NULL, 'input', NULL, NULL, NULL, true, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041d\0430\0447\0438\0441\043b\0435\043d\043e'))::json, false, true),
   ('employee_salary_monthly', 'salary_paid', NULL, 'input', NULL, NULL, NULL, true, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0412\044b\043f\043b\0430\0447\0435\043d\043e'))::json, false, true),
   ('employee_salary_monthly', 'bonus_paid', NULL, 'input', NULL, NULL, NULL, true, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0440\0435\043c\0438\0438'))::json, false, true),
@@ -8633,12 +8700,16 @@ INSERT INTO directus_relations (
   ('business_expenses', 'payment_type', 'payment_types', NULL, NULL, NULL, NULL, NULL, 'nullify');
 
 DELETE FROM directus_permissions
-WHERE collection IN ('finance_dashboard_metrics', 'finance_dashboard_monthly', 'finance_dashboard_series', 'business_expenses', 'contractor_payments', 'employee_salary_summary', 'employee_salary_monthly', 'manager_finance_summary')
+WHERE collection IN ('finance_dashboard_metrics', 'finance_dashboard_monthly', 'finance_dashboard_series', 'business_expenses', 'finance_settings', 'contractor_payments', 'employee_salary_summary', 'employee_salary_monthly', 'manager_finance_summary')
   AND policy = '00000000-0000-4000-8000-000000000205';
 
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
 SELECT collection_name, 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'
-FROM (VALUES ('finance_dashboard_metrics'), ('finance_dashboard_monthly'), ('finance_dashboard_series'), ('employee_salary_summary'), ('employee_salary_monthly'), ('manager_finance_summary')) AS finance(collection_name);
+FROM (VALUES ('finance_dashboard_metrics'), ('finance_dashboard_monthly'), ('finance_dashboard_series'), ('finance_settings'), ('employee_salary_summary'), ('employee_salary_monthly'), ('manager_finance_summary')) AS finance(collection_name);
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+SELECT 'finance_settings', action_value, '{}'::json, '{}'::json, NULL, '*', '00000000-0000-4000-8000-000000000205'
+FROM (VALUES ('update')) AS actions(action_value);
 
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
 SELECT 'business_expenses', action_value, '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'
@@ -8851,6 +8922,8 @@ CREATE TABLE IF NOT EXISTS contractor_costing (
   contractor_2_cost numeric(10,2) DEFAULT 0,
   unit_cost numeric(10,2) DEFAULT 0,
   total_cost numeric(10,2) DEFAULT 0,
+  manager_commission_sum numeric(10,2) DEFAULT 0,
+  tax_sum numeric(10,2) DEFAULT 0,
   profit_sum numeric(10,2) DEFAULT 0,
   margin_percent numeric(10,2) DEFAULT 0,
   item_status varchar(255),
@@ -8860,6 +8933,8 @@ CREATE TABLE IF NOT EXISTS contractor_costing (
 
 ALTER TABLE contractor_costing ADD COLUMN IF NOT EXISTS blank_source varchar(255) DEFAULT 'none';
 ALTER TABLE contractor_costing ADD COLUMN IF NOT EXISTS blank_ordered boolean NOT NULL DEFAULT false;
+ALTER TABLE contractor_costing ADD COLUMN IF NOT EXISTS manager_commission_sum numeric(10,2) DEFAULT 0;
+ALTER TABLE contractor_costing ADD COLUMN IF NOT EXISTS tax_sum numeric(10,2) DEFAULT 0;
 
 CREATE OR REPLACE FUNCTION sync_contractor_costing_item(item_id integer)
 RETURNS void
@@ -8870,8 +8945,8 @@ BEGIN
     id, "order", order_link, order_number, date, order_deadline, customer, customer_company,
     manager_employee, product_name, quantity, price_per_unit, order_sum, product_category,
     product_subcategory, application_method, blank_source, blank_ordered, contractor_1,
-    contractor_2, contractor_1_cost, contractor_2_cost, unit_cost, total_cost, profit_sum,
-    margin_percent, item_status, production_status, deadline
+    contractor_2, contractor_1_cost, contractor_2_cost, unit_cost, total_cost,
+    manager_commission_sum, tax_sum, profit_sum, margin_percent, item_status, production_status, deadline
   )
   SELECT
     oi.id,
@@ -8898,6 +8973,8 @@ BEGIN
     oi.contractor_2_cost,
     oi.unit_cost,
     oi.total_cost,
+    oi.manager_commission_sum,
+    oi.tax_sum,
     oi.profit_sum,
     oi.margin_percent,
     oi.item_status,
@@ -8930,6 +9007,8 @@ BEGIN
     contractor_2_cost = EXCLUDED.contractor_2_cost,
     unit_cost = EXCLUDED.unit_cost,
     total_cost = EXCLUDED.total_cost,
+    manager_commission_sum = EXCLUDED.manager_commission_sum,
+    tax_sum = EXCLUDED.tax_sum,
     profit_sum = EXCLUDED.profit_sum,
     margin_percent = EXCLUDED.margin_percent,
     item_status = EXCLUDED.item_status,
@@ -13652,6 +13731,19 @@ BEGIN
   END IF;
 END;
 $$;
+
+-- Manager ownership on order items is stored directly in manager_employee.
+-- Use that direct relation for permission checks: traversing through
+-- orders_items.order.manager_employee can be rejected by Directus when the
+-- manager also has the shared office policy, even for the manager's own item.
+UPDATE directus_permissions
+SET permissions = '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json
+WHERE collection = 'orders_items'
+  AND action IN ('read', 'update')
+  AND policy IN (
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202'
+  );
 
 COMMIT;
 

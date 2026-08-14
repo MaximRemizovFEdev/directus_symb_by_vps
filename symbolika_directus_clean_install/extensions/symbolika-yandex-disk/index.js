@@ -252,5 +252,62 @@ export default {
         return res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось загрузить макет.' }] });
       }
     });
+
+    router.post('/orders-items/:id/link', async (req, res) => {
+      try {
+        const userId = requireUser(req, res);
+        if (!userId) return;
+
+        const itemId = Number(req.params.id);
+        if (!Number.isInteger(itemId) || itemId <= 0) throw apiError('Некорректная позиция заказа.', 400);
+        const rawUrl = String(req.body?.url || '').trim();
+        const candidate = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+        let externalUrl = '';
+        try {
+          const parsed = new URL(candidate);
+          if (['http:', 'https:'].includes(parsed.protocol) && parsed.hostname) externalUrl = parsed.href;
+        } catch {
+          externalUrl = '';
+        }
+        if (!externalUrl) throw apiError('Укажите корректную ссылку на макет.', 400);
+
+        const schema = await getSchema();
+        const itemService = new services.ItemsService('orders_items', { schema, accountability: req.accountability });
+        await itemService.readOne(itemId, { fields: ['id'] });
+        const item = await database('orders_items')
+          .where('id', itemId)
+          .select('id', 'layout_disk_path')
+          .first();
+        if (!item) throw apiError('Позиция заказа не найдена.', 404);
+
+        await itemService.updateOne(itemId, { url: externalUrl });
+        await database('orders_items').where('id', itemId).update({
+          layout_disk_path: null,
+          layout_disk_name: null,
+          layout_disk_size: null,
+          layout_disk_mime_type: null,
+          layout_disk_uploaded_by: null,
+          layout_disk_uploaded_at: null,
+        });
+
+        const oldDiskPath = String(item.layout_disk_path || '').trim();
+        const oldPathIsManaged = oldDiskPath === root || oldDiskPath.startsWith(`${root}/`);
+        if (token && deleteReplacedFiles && oldPathIsManaged) {
+          try {
+            await requestYandex('/resources', {
+              method: 'DELETE',
+              query: { path: oldDiskPath, permanently: true },
+            });
+          } catch (cleanupError) {
+            logger.warn(`[Symbolika Yandex Disk] old file cleanup (${oldDiskPath}): ${cleanupError.message}`);
+          }
+        }
+
+        return res.json({ data: { item_id: itemId, url: externalUrl } });
+      } catch (error) {
+        logger.error(`[Symbolika Yandex Disk] external link: ${error.message}`);
+        return res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось сохранить ссылку на макет.' }] });
+      }
+    });
   },
 };
