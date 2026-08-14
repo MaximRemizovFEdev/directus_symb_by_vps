@@ -1551,8 +1551,11 @@ CREATE TABLE IF NOT EXISTS product_routing_rules (
 CREATE TABLE IF NOT EXISTS production_work (
   id integer PRIMARY KEY,
   "order" integer,
+  order_number character varying(255),
   customer integer,
+  customer_name character varying(255),
   customer_company integer,
+  customer_company_name character varying(255),
   manager_employee integer,
   product_name character varying(255),
   quantity numeric(10,0),
@@ -1578,8 +1581,11 @@ CREATE TABLE IF NOT EXISTS production_work (
 CREATE TABLE IF NOT EXISTS screen_printing_work (
   id integer PRIMARY KEY,
   "order" integer,
+  order_number character varying(255),
   customer integer,
+  customer_name character varying(255),
   customer_company integer,
+  customer_company_name character varying(255),
   manager_employee integer,
   product_name character varying(255),
   quantity numeric(10,0),
@@ -1623,6 +1629,9 @@ CREATE TABLE IF NOT EXISTS contractor_work (
 );
 
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE production_work ADD COLUMN IF NOT EXISTS order_number character varying(255);
+ALTER TABLE production_work ADD COLUMN IF NOT EXISTS customer_name character varying(255);
+ALTER TABLE production_work ADD COLUMN IF NOT EXISTS customer_company_name character varying(255);
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS production_comment text;
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS date timestamp without time zone;
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS item_status character varying(255);
@@ -1637,6 +1646,9 @@ ALTER TABLE production_work ADD COLUMN IF NOT EXISTS application_method integer;
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS contractor_1 integer;
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS contractor_1_cost numeric(14,2);
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS order_link integer;
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS order_number character varying(255);
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS customer_name character varying(255);
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS customer_company_name character varying(255);
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS production_comment text;
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS date timestamp without time zone;
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS item_status character varying(255);
@@ -2818,18 +2830,20 @@ BEGIN
   END IF;
 
   INSERT INTO production_work (
-    id, "order", customer, customer_company, manager_employee,
+    id, "order", order_number, customer, customer_name, customer_company, customer_company_name, manager_employee,
     product_name, quantity, price_per_unit, order_sum, blank_source, blank_ordered,
     product_category, product_subcategory, application_method, contractor_1, contractor_1_cost,
     technical_task_text, production_comment, url, item_status, office_status, production_status, date, deadline
   )
   SELECT
-    oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
+    oi.id, oi."order", o.order_number, o.customer, c.name, o.customer_company, cc.name, o.manager_employee,
     oi.product_name, oi.quantity, oi.price_per_unit, oi.order_sum, oi.blank_source, oi.blank_ordered,
     oi.product_category, oi.product_subcategory, oi.application_method, oi.contractor_1, oi.contractor_1_cost,
     oi.technical_task_text, oi.production_comment, oi.url, oi.item_status, oi.office_status, oi.production_status, o.date, oi.deadline
   FROM orders_items oi
   JOIN orders o ON o.id = oi."order"
+  LEFT JOIN customers c ON c.id = o.customer
+  LEFT JOIN customer_companies cc ON cc.id = o.customer_company
   LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
   LEFT JOIN contractors c2 ON c2.id = oi.contractor_2
   WHERE oi.id = item_id
@@ -2840,18 +2854,20 @@ BEGIN
     );
 
   INSERT INTO screen_printing_work (
-    id, "order", customer, customer_company, manager_employee,
+    id, "order", order_number, customer, customer_name, customer_company, customer_company_name, manager_employee,
     product_name, quantity, price_per_unit, order_sum, blank_source, blank_ordered,
     product_category, product_subcategory, application_method, contractor_1, contractor_1_cost,
     technical_task_text, production_comment, url, item_status, office_status, production_status, date, deadline
   )
   SELECT
-    oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
+    oi.id, oi."order", o.order_number, o.customer, c.name, o.customer_company, cc.name, o.manager_employee,
     oi.product_name, oi.quantity, oi.price_per_unit, oi.order_sum, oi.blank_source, oi.blank_ordered,
     oi.product_category, oi.product_subcategory, oi.application_method, oi.contractor_1, oi.contractor_1_cost,
     oi.technical_task_text, oi.production_comment, oi.url, oi.item_status, oi.office_status, oi.production_status, o.date, oi.deadline
   FROM orders_items oi
   JOIN orders o ON o.id = oi."order"
+  LEFT JOIN customers c ON c.id = o.customer
+  LEFT JOIN customer_companies cc ON cc.id = o.customer_company
   LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
   LEFT JOIN contractors c2 ON c2.id = oi.contractor_2
   WHERE oi.id = item_id
@@ -3458,18 +3474,20 @@ DELETE FROM production_work;
 DELETE FROM screen_printing_work;
 DELETE FROM contractor_work;
 INSERT INTO production_work (
-  id, "order", customer, customer_company, manager_employee,
+  id, "order", order_number, customer, customer_name, customer_company, customer_company_name, manager_employee,
   product_name, quantity, price_per_unit, order_sum, blank_source, blank_ordered,
   product_category, product_subcategory, application_method, contractor_1, contractor_1_cost,
   technical_task_text, production_comment, url, item_status, office_status, production_status, date, deadline
 )
 SELECT
-  oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
+  oi.id, oi."order", o.order_number, o.customer, c.name, o.customer_company, cc.name, o.manager_employee,
   oi.product_name, oi.quantity, oi.price_per_unit, oi.order_sum, oi.blank_source, oi.blank_ordered,
   oi.product_category, oi.product_subcategory, oi.application_method, oi.contractor_1, oi.contractor_1_cost,
   oi.technical_task_text, oi.production_comment, oi.url, oi.item_status, oi.office_status, oi.production_status, o.date, oi.deadline
 FROM orders_items oi
 JOIN orders o ON o.id = oi."order"
+LEFT JOIN customers c ON c.id = o.customer
+LEFT JOIN customer_companies cc ON cc.id = o.customer_company
 LEFT JOIN order_statuses os ON os.id = o.order_status
 LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
 LEFT JOIN contractors c2 ON c2.id = oi.contractor_2
@@ -3490,18 +3508,20 @@ WHERE (
   );
 
 INSERT INTO screen_printing_work (
-  id, "order", customer, customer_company, manager_employee,
+  id, "order", order_number, customer, customer_name, customer_company, customer_company_name, manager_employee,
   product_name, quantity, price_per_unit, order_sum, blank_source, blank_ordered,
   product_category, product_subcategory, application_method, contractor_1, contractor_1_cost,
   technical_task_text, production_comment, url, item_status, office_status, production_status, date, deadline
 )
 SELECT
-  oi.id, oi."order", o.customer, o.customer_company, o.manager_employee,
+  oi.id, oi."order", o.order_number, o.customer, c.name, o.customer_company, cc.name, o.manager_employee,
   oi.product_name, oi.quantity, oi.price_per_unit, oi.order_sum, oi.blank_source, oi.blank_ordered,
   oi.product_category, oi.product_subcategory, oi.application_method, oi.contractor_1, oi.contractor_1_cost,
   oi.technical_task_text, oi.production_comment, oi.url, oi.item_status, oi.office_status, oi.production_status, o.date, oi.deadline
 FROM orders_items oi
 JOIN orders o ON o.id = oi."order"
+LEFT JOIN customers c ON c.id = o.customer
+LEFT JOIN customer_companies cc ON cc.id = o.customer_company
 LEFT JOIN order_statuses os ON os.id = o.order_status
 LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
 LEFT JOIN contractors c2 ON c2.id = oi.contractor_2
@@ -13883,13 +13903,13 @@ CROSS JOIN own_order_permissions permission;
 
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy) VALUES
   ('production_work', 'read', '{}'::json, NULL, NULL,
-    'id,order,order_link,manager_employee,product_name,quantity,date,deadline,item_status,office_status,technical_task_text,production_comment,url,production_status',
+    'id,order,order_number,order_link,customer_name,customer_company_name,manager_employee,product_name,quantity,date,deadline,item_status,office_status,technical_task_text,production_comment,url,production_status',
     '00000000-0000-4000-8000-000000000204'),
   ('production_work', 'update', '{}'::json, NULL, NULL,
     'production_status,production_comment',
     '00000000-0000-4000-8000-000000000204'),
   ('screen_printing_work', 'read', '{}'::json, NULL, NULL,
-    'id,order,order_link,manager_employee,product_name,quantity,date,deadline,item_status,office_status,technical_task_text,production_comment,url,production_status',
+    'id,order,order_number,order_link,customer_name,customer_company_name,manager_employee,product_name,quantity,date,deadline,item_status,office_status,technical_task_text,production_comment,url,production_status',
     '00000000-0000-4000-8000-000000000206'),
   ('screen_printing_work', 'update', '{}'::json, NULL, NULL,
     'production_status,production_comment',

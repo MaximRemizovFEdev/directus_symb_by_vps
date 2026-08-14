@@ -41,11 +41,14 @@ const workFields = [
   'id',
   'order',
   'order.order_number',
+  'order_number',
   'order_link',
   'date',
   'deadline',
   'customer.name',
   'customer_company.name',
+  'customer_name',
+  'customer_company_name',
   'manager_employee.id',
   'manager_employee.full_name',
   'product_name',
@@ -77,9 +80,12 @@ const workFields = [
 const limitedWorkFields = [
   'id',
   'order',
+  'order_number',
   'order_link',
   'date',
   'deadline',
+  'customer_name',
+  'customer_company_name',
   'manager_employee.id',
   'manager_employee.full_name',
   'product_name',
@@ -19530,19 +19536,23 @@ export const CostingModule = {
         }
 
         .symbolika-costing-table-work col.symbolika-costing-work-order-col {
-          width: 18% !important;
+          width: 14% !important;
+        }
+
+        .symbolika-costing-table-work col.symbolika-costing-work-customer-col {
+          width: 19% !important;
         }
 
         .symbolika-costing-table-work col.symbolika-costing-work-item-col {
-          width: 28% !important;
+          width: 21% !important;
         }
 
         .symbolika-costing-table-work col.symbolika-costing-work-brief-col {
-          width: 24% !important;
+          width: 21% !important;
         }
 
         .symbolika-costing-table-work col.symbolika-costing-work-status-col {
-          width: 30% !important;
+          width: 25% !important;
         }
 
         .symbolika-costing-table th.symbolika-costing-work-check-cell,
@@ -27638,6 +27648,7 @@ export const CostingModule = {
             <colgroup>
               <col class="symbolika-costing-work-check-col" />
               <col class="symbolika-costing-work-order-col" />
+              <col class="symbolika-costing-work-customer-col" />
               <col class="symbolika-costing-work-item-col" />
               <col class="symbolika-costing-work-brief-col" />
               <col class="symbolika-costing-work-status-col" />
@@ -27645,7 +27656,8 @@ export const CostingModule = {
             <thead>
               <tr>
                 <th class="symbolika-costing-work-check-cell"></th>
-                <th>Заказ</th>
+                <th>Номер заказа</th>
+                <th>Заказчик</th>
                 <th>Позиция</th>
                 <th>ТЗ / макет</th>
                 <th>Статус / комментарий</th>
@@ -27672,8 +27684,10 @@ export const CostingModule = {
                   <span class="symbolika-costing-date" :class="deadlineClass(row.deadline)"><v-icon :name="deadlineIcon(row.deadline)" small />{{ formatDate(row.deadline) }}</span>
                 </td>
                 <td>
-                  <div>{{ relatedName(row.customer) || '-' }}</div>
-                  <div class="symbolika-costing-subtle">{{ relatedName(row.customer_company) }}</div>
+                  <div class="symbolika-costing-cell-main">{{ row.customer_company_name || row.customer_name || relatedName(row.customer_company) || relatedName(row.customer) || '-' }}</div>
+                  <div v-if="row.customer_company_name && row.customer_name" class="symbolika-costing-subtle">{{ row.customer_name }}</div>
+                </td>
+                <td>
                   <div class="symbolika-costing-product">{{ row.product_name }}</div>
                   <div class="symbolika-costing-subtle">
                     {{ formatQuantity(row.quantity) }} шт. ·
@@ -30810,6 +30824,5 @@ export default {
     },
   ],
 };
-
 
 
