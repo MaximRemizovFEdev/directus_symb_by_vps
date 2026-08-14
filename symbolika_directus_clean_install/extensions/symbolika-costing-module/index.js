@@ -326,6 +326,7 @@ const orderSummaryFields = [
   'customer',
   'customer_company',
   'customer_display',
+  'manager_employee',
   'manager_name',
   'order_status',
   'order_status_name',
@@ -5287,6 +5288,13 @@ export const CostingModule = {
 
     orderBelongsToCurrentEmployee(row) {
       if (!this.currentEmployeeId) return false;
+      const orderId = Number(this.entityId(this.orderId(row)) || 0);
+      // my_orders_in_work is already filtered by currentEmployeeId on the
+      // server. Treat an order present in that list as owned even when a
+      // compact summary row has not carried the manager relation yet.
+      if (orderId && (this.myOrderRows || []).some((item) => (
+        Number(this.entityId(this.orderId(item)) || 0) === orderId
+      ))) return true;
       const context = this.detailOrderContext(row);
       const managerId = this.entityId(
         row?.manager_employee
@@ -30802,7 +30810,6 @@ export default {
     },
   ],
 };
-
 
 
 
