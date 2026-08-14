@@ -12763,6 +12763,35 @@ WHERE NOT EXISTS (
     AND COALESCE(existing.fields, '') = COALESCE(pr.fields, '')
 );
 
+-- A customer belongs to an employee not only when the employee is explicitly
+-- selected in customers.manager, but also when the employee has already
+-- created an order for that customer. This second path keeps a customer
+-- available after quick creation inside the new-order dialog even if an old
+-- record has an empty or stale manager relation.
+UPDATE directus_permissions
+SET permissions = '{"_or":[{"manager":{"directus_user":{"_eq":"$CURRENT_USER"}}},{"orders":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json
+WHERE collection = 'customers'
+  AND action IN ('read', 'update')
+  AND policy IN (
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202',
+    '00000000-0000-4000-8000-000000000204',
+    '00000000-0000-4000-8000-000000000206',
+    '00000000-0000-4000-8000-000000000208'
+  );
+
+UPDATE directus_permissions
+SET permissions = '{"_or":[{"manager":{"directus_user":{"_eq":"$CURRENT_USER"}}},{"customers":{"manager":{"directus_user":{"_eq":"$CURRENT_USER"}}}},{"orders":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json
+WHERE collection = 'customer_companies'
+  AND action IN ('read', 'update')
+  AND policy IN (
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202',
+    '00000000-0000-4000-8000-000000000204',
+    '00000000-0000-4000-8000-000000000206',
+    '00000000-0000-4000-8000-000000000208'
+  );
+
 WITH self_sales_policies(policy) AS (
   VALUES
     ('00000000-0000-4000-8000-000000000204'::uuid),
