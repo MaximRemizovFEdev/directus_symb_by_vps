@@ -12293,10 +12293,33 @@ export const CostingModule = {
     },
 
     itemSendToWorkTitle(item) {
+      const readinessLoaded = Object.prototype.hasOwnProperty.call(item || {}, 'technical_task_text')
+        && Object.prototype.hasOwnProperty.call(item || {}, 'url');
+      if (!readinessLoaded) return 'Проверить заполнение и запустить позицию в работу';
       const missing = this.itemWorkReadinessMissing(item);
       return missing.length
         ? `Для запуска заполните: ${missing.map((value) => value.replace(/^.*?:\s*/, '')).join(', ')}`
         : 'Запустить позицию в работу';
+    },
+
+    itemSendToWorkBusy(item) {
+      const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
+      return !!(itemId && this.saving[`orders_items:${itemId}:item_status`]);
+    },
+
+    async sendItemToWorkFromList(item) {
+      const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
+      if (!itemId || !this.showsSendItemToWorkButton(item) || this.itemSendToWorkBusy(item)) return;
+
+      const hydrated = await this.hydrateOrderItemDetailRow(item);
+      this.updateOrderItemCaches(itemId, hydrated);
+      const missing = this.itemWorkReadinessMissing(hydrated);
+      if (missing.length) {
+        this.error = `Для запуска заполните: ${missing.map((value) => value.replace(/^.*?:\s*/, '')).join(', ')}.`;
+        return;
+      }
+
+      await this.sendItemToWork(hydrated);
     },
 
     async sendItemToWork(item) {
@@ -13866,13 +13889,13 @@ export const CostingModule = {
         .symbolika-costing-position-row {
           display: grid;
           grid-template-columns:
-            minmax(160px, .9fr)
-            72px
-            146px
+            minmax(130px, .75fr)
+            68px
+            140px
+            60px
             78px
-            90px
-            104px
-            repeat(3, minmax(118px, 1fr));
+            92px
+            repeat(3, minmax(128px, 1fr));
           gap: 8px;
           align-items: center;
           border: 1px solid color-mix(in srgb, var(--theme--border-color) 72%, transparent);
@@ -13883,14 +13906,14 @@ export const CostingModule = {
 
         .symbolika-costing-position-row.has-send-work {
           grid-template-columns:
-            minmax(140px, .75fr)
-            72px
-            146px
+            minmax(120px, .65fr)
+            68px
+            140px
+            60px
             78px
-            90px
-            104px
-            repeat(3, minmax(112px, 1fr))
-            minmax(158px, 176px);
+            92px
+            repeat(3, minmax(126px, 1fr))
+            minmax(148px, 164px);
         }
 
         .symbolika-costing-position-row-clickable {
@@ -14014,7 +14037,7 @@ export const CostingModule = {
           display: inline-flex;
           flex: 0 0 auto;
           align-items: center;
-          gap: 4px;
+          gap: 0;
           inline-size: 100%;
           min-inline-size: 0;
           min-block-size: auto;
@@ -14022,8 +14045,9 @@ export const CostingModule = {
           border-inline-start: 1px solid color-mix(in srgb, var(--theme--border-color) 72%, transparent);
           border-radius: 0;
           background: transparent;
-          padding: 0 0 0 8px;
-          text-align: start;
+          padding: 0 0 0 7px;
+          text-align: end;
+          justify-content: flex-end;
         }
 
         .symbolika-costing-position-number span {
@@ -14042,7 +14066,7 @@ export const CostingModule = {
           white-space: nowrap;
         }
 
-        .symbolika-costing-position-number:last-child strong {
+        .symbolika-costing-position-number.is-sum strong {
           color: #a7f3d0;
         }
 
@@ -17014,11 +17038,11 @@ export const CostingModule = {
 
         @media (max-width: 1380px) {
           .symbolika-costing-position-row {
-            grid-template-columns: minmax(140px, 1fr) 72px 146px 78px 90px 104px;
+            grid-template-columns: minmax(130px, 1fr) 68px 140px 60px 78px 92px;
           }
 
           .symbolika-costing-position-row.has-send-work {
-            grid-template-columns: minmax(140px, 1fr) 72px 146px 78px 90px 104px;
+            grid-template-columns: minmax(130px, 1fr) 68px 140px 60px 78px 92px;
           }
 
           .symbolika-costing-position-statuses {
@@ -24071,7 +24095,7 @@ export const CostingModule = {
                     <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'office_status'), officeSelectClass(row.office_status)]" :value="row.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(row, 'office_status', $event.target.value)">
                       <option v-for="status in officeStatusChoices" :key="'position-mode-office-' + status.value" :value="status.value">{{ status.text }}</option>
                     </select>
-                    <button v-if="showsSendItemToWorkButton(row)" type="button" class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work" :class="savingWorkClass('orders_items', row, 'item_status')" :disabled="!canSendItemToWork(row)" :title="itemSendToWorkTitle(row)" @click.stop="sendItemToWork(row)"><v-icon name="play_arrow" small />Запустить в работу</button>
+                    <button v-if="showsSendItemToWorkButton(row)" type="button" class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work" :class="savingWorkClass('orders_items', row, 'item_status')" :disabled="itemSendToWorkBusy(row)" :title="itemSendToWorkTitle(row)" @click.stop="sendItemToWorkFromList(row)"><v-icon name="play_arrow" small />Запустить в работу</button>
                   </div>
                 </td>
                 <td class="symbolika-costing-num">
@@ -24205,15 +24229,9 @@ export const CostingModule = {
                             <span class="symbolika-costing-position-deadline-icon"><v-icon :name="deadlineIcon(item.deadline)" small /></span>
                             <span class="symbolika-costing-position-deadline-value">{{ formatDate(item.deadline) }}</span>
                           </span>
-                          <span class="symbolika-costing-position-number">
-                            <span>Кол-во</span><strong>{{ formatQuantity(item.quantity) }} шт.</strong>
-                          </span>
-                          <span class="symbolika-costing-position-number">
-                            <span>Цена</span><strong>{{ formatMoney(positionPrice(item)) }}</strong>
-                          </span>
-                          <span class="symbolika-costing-position-number">
-                            <span>Сумма</span><strong>{{ formatMoney(positionSum(item)) }}</strong>
-                          </span>
+                          <span class="symbolika-costing-position-number" title="Количество"><strong>{{ formatQuantity(item.quantity) }} шт.</strong></span>
+                          <span class="symbolika-costing-position-number" title="Цена за единицу"><strong>{{ formatMoney(positionPrice(item)) }}</strong></span>
+                          <span class="symbolika-costing-position-number is-sum" title="Сумма"><strong>{{ formatMoney(positionSum(item)) }}</strong></span>
                         </div>
                       </div>
                       <div class="symbolika-costing-position-statuses" :class="{ 'is-ready': isItemReady(item) }">
@@ -24254,9 +24272,9 @@ export const CostingModule = {
                           type="button"
                           class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work"
                           :class="savingWorkClass('orders_items', item, 'item_status')"
-                          :disabled="!canSendItemToWork(item)"
+                          :disabled="itemSendToWorkBusy(item)"
                           :title="itemSendToWorkTitle(item)"
-                          @click.stop="sendItemToWork(item)"
+                          @click.stop="sendItemToWorkFromList(item)"
                         >
                           <v-icon name="play_arrow" small />Запустить в работу
                         </button>
@@ -24395,9 +24413,9 @@ export const CostingModule = {
                             <span class="symbolika-costing-position-deadline-icon"><v-icon :name="deadlineIcon(item.deadline)" small /></span>
                             <span class="symbolika-costing-position-deadline-value">{{ formatDate(item.deadline) }}</span>
                           </span>
-                          <span class="symbolika-costing-position-number"><span>Кол-во</span><strong>{{ formatQuantity(item.quantity) }} шт.</strong></span>
-                          <span class="symbolika-costing-position-number"><span>Цена</span><strong>{{ formatMoney(positionPrice(item)) }}</strong></span>
-                          <span class="symbolika-costing-position-number"><span>Сумма</span><strong>{{ formatMoney(positionSum(item)) }}</strong></span>
+                          <span class="symbolika-costing-position-number" title="Количество"><strong>{{ formatQuantity(item.quantity) }} шт.</strong></span>
+                          <span class="symbolika-costing-position-number" title="Цена за единицу"><strong>{{ formatMoney(positionPrice(item)) }}</strong></span>
+                          <span class="symbolika-costing-position-number is-sum" title="Сумма"><strong>{{ formatMoney(positionSum(item)) }}</strong></span>
                         </div>
                       </div>
                       <div class="symbolika-costing-position-statuses" :class="{ 'is-ready': isItemReady(item) }">
@@ -24411,7 +24429,7 @@ export const CostingModule = {
                         <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'office_status'), officeSelectClass(item.office_status)]" :value="item.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(item, 'office_status', $event.target.value)">
                           <option v-for="status in officeStatusChoices" :key="'all-office-status-' + status.value" :value="status.value">{{ status.text }}</option>
                         </select>
-                        <button v-if="showsSendItemToWorkButton(item)" type="button" class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work" :class="savingWorkClass('orders_items', item, 'item_status')" :disabled="!canSendItemToWork(item)" :title="itemSendToWorkTitle(item)" @click.stop="sendItemToWork(item)"><v-icon name="play_arrow" small />Запустить в работу</button>
+                        <button v-if="showsSendItemToWorkButton(item)" type="button" class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work" :class="savingWorkClass('orders_items', item, 'item_status')" :disabled="itemSendToWorkBusy(item)" :title="itemSendToWorkTitle(item)" @click.stop="sendItemToWorkFromList(item)"><v-icon name="play_arrow" small />Запустить в работу</button>
                       </div>
                     </div>
                     <div v-if="!detailPositions(row).length" class="symbolika-costing-empty">Нет позиций</div>
@@ -24535,9 +24553,9 @@ export const CostingModule = {
                             <span class="symbolika-costing-position-deadline-icon"><v-icon :name="deadlineIcon(item.deadline)" small /></span>
                             <span class="symbolika-costing-position-deadline-value">{{ formatDate(item.deadline) }}</span>
                           </span>
-                          <span class="symbolika-costing-position-number"><span>Кол-во</span><strong>{{ formatQuantity(item.quantity) }} шт.</strong></span>
-                          <span class="symbolika-costing-position-number"><span>Цена</span><strong>{{ formatMoney(positionPrice(item)) }}</strong></span>
-                          <span class="symbolika-costing-position-number"><span>Сумма</span><strong>{{ formatMoney(positionSum(item)) }}</strong></span>
+                          <span class="symbolika-costing-position-number" title="Количество"><strong>{{ formatQuantity(item.quantity) }} шт.</strong></span>
+                          <span class="symbolika-costing-position-number" title="Цена за единицу"><strong>{{ formatMoney(positionPrice(item)) }}</strong></span>
+                          <span class="symbolika-costing-position-number is-sum" title="Сумма"><strong>{{ formatMoney(positionSum(item)) }}</strong></span>
                         </div>
                       </div>
                       <div class="symbolika-costing-position-statuses" :class="{ 'is-ready': isItemReady(item) }">
@@ -24598,9 +24616,9 @@ export const CostingModule = {
                         <span class="symbolika-costing-position-deadline-icon"><v-icon :name="deadlineIcon(row.deadline)" small /></span>
                         <span class="symbolika-costing-position-deadline-value">{{ formatDate(row.deadline) }}</span>
                       </span>
-                      <span class="symbolika-costing-position-number"><span>Кол-во</span><strong>{{ formatQuantity(row.quantity) }} шт.</strong></span>
-                      <span class="symbolika-costing-position-number"><span>Цена</span><strong>{{ formatMoney(positionPrice(row)) }}</strong></span>
-                      <span class="symbolika-costing-position-number"><span>Сумма</span><strong>{{ formatMoney(positionSum(row)) }}</strong></span>
+                      <span class="symbolika-costing-position-number" title="Количество"><strong>{{ formatQuantity(row.quantity) }} шт.</strong></span>
+                      <span class="symbolika-costing-position-number" title="Цена за единицу"><strong>{{ formatMoney(positionPrice(row)) }}</strong></span>
+                      <span class="symbolika-costing-position-number is-sum" title="Сумма"><strong>{{ formatMoney(positionSum(row)) }}</strong></span>
                     </div>
                   </div>
                 </td>
