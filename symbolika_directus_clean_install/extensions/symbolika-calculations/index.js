@@ -984,7 +984,9 @@ export default ({ filter, action }, { database, logger, env }) => {
 
   function isItemVisibleForWork(item) {
     const status = String(item?.item_status || '');
-    return ['sent_to_work', 'in_work', 'ready'].includes(status);
+    // A workshop assignment is created only by the explicit launch transition.
+    // The parent order status and later final statuses must not create a new task.
+    return ['sent_to_work', 'in_work'].includes(status);
   }
 
   async function buildWorkAssignmentMessage(item, target) {
@@ -1031,7 +1033,7 @@ export default ({ filter, action }, { database, logger, env }) => {
 
   async function notifyWorkAssignment(item, target) {
     if (!item?.id || !target) return;
-    if (!isItemVisibleForWork(item) && !await isOrderVisibleForWork(item.order)) return;
+    if (!isItemVisibleForWork(item)) return;
 
     const shouldNotify = await markWorkAssignmentNotified(item.id, target.vkChannel);
     if (!shouldNotify) return;
@@ -1075,6 +1077,74 @@ export default ({ filter, action }, { database, logger, env }) => {
       if (!target) continue;
 
       await notifyWorkAssignment(item, target);
+    }
+  }
+
+  async function notifyItemCancellationChanged(item, prevItem = null) {
+    if (!item?.id) return;
+    const status = String(item.item_status || '');
+    const previousStatus = String(prevItem?.item_status || '');
+    if (!['cancellation_requested', 'cancelled'].includes(status) || status === previousStatus) return;
+
+    const order = item.order
+      ? await database('orders').where({ id: item.order }).select('id', 'order_number', 'manager_employee').first()
+      : null;
+    const orderLabel = order?.order_number || (order?.id ? `#${order.id}` : await getOrderLabel(item.order));
+    const productName = item.product_name || `#${item.id}`;
+    const isRequest = status === 'cancellation_requested';
+    const orderItems = !isRequest && item.order
+      ? await database('orders_items').where({ order: item.order }).select('item_status', 'contractor_1', 'contractor_2')
+      : [];
+    const wholeOrderCancelled = orderItems.length > 0
+      && orderItems.every((row) => String(row.item_status || '') === 'cancelled');
+    const subject = isRequest
+      ? `\u0417\u0430\u043f\u0440\u043e\u0441 \u043d\u0430 \u043e\u0442\u043c\u0435\u043d\u0443 \u043f\u043e\u0437\u0438\u0446\u0438\u0438: ${orderLabel}`
+      : wholeOrderCancelled
+        ? `\u0417\u0430\u043a\u0430\u0437 \u043e\u0442\u043c\u0435\u043d\u0435\u043d: ${orderLabel}`
+        : `\u041f\u043e\u0437\u0438\u0446\u0438\u044f \u043e\u0442\u043c\u0435\u043d\u0435\u043d\u0430: ${orderLabel}`;
+    const message = isRequest
+      ? `\u041c\u0435\u043d\u0435\u0434\u0436\u0435\u0440 \u0437\u0430\u043f\u0440\u043e\u0441\u0438\u043b \u043e\u0442\u043c\u0435\u043d\u0443 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u00ab${productName}\u00bb. \u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0435 \u043e\u0442\u043c\u0435\u043d\u0443, \u0435\u0441\u043b\u0438 \u043f\u043e\u0437\u0438\u0446\u0438\u044f \u0435\u0449\u0451 \u043d\u0435 \u043e\u0442\u043f\u0435\u0447\u0430\u0442\u0430\u043d\u0430.`
+      : wholeOrderCancelled
+        ? `\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u043b\u043e \u043e\u0442\u043c\u0435\u043d\u0443 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u00ab${productName}\u00bb. \u0412\u0441\u0435 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430 \u043e\u0442\u043c\u0435\u043d\u0435\u043d\u044b.`
+        : `\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u043b\u043e \u043e\u0442\u043c\u0435\u043d\u0443 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u00ab${productName}\u00bb.`;
+
+    if (!isRequest && (item.manager_employee || order?.manager_employee)) {
+      await notifyManager(
+        item.manager_employee || order.manager_employee,
+        subject,
+        message,
+        'orders_items',
+        item.id,
+        'item_status'
+      );
+    }
+
+    let contractors = await getItemContractors(item);
+    if (wholeOrderCancelled) {
+      const contractorIds = [...new Set(orderItems.flatMap((row) => [row.contractor_1, row.contractor_2]).filter(Boolean))];
+      contractors = contractorIds.length
+        ? await database('contractors').whereIn('id', contractorIds).select('id', 'name')
+        : contractors;
+    }
+    for (const contractor of contractors) {
+      const target = getWorkNotificationTarget(contractor.name);
+      if (!target) continue;
+      const channel = `${target.vkChannel}:${status}`;
+      const shouldNotify = await markWorkAssignmentNotified(item.id, channel);
+      if (!shouldNotify) continue;
+
+      await notifyUsers(
+        await getRoleUserIds(target.roleName),
+        subject,
+        message,
+        target.collection,
+        item.id,
+        'production'
+      );
+      const vkSent = await sendVkMessage(target.vkChannel, `${subject}\n\n${message}`);
+      if (!vkSent) {
+        await database('symbolika_work_assignment_notifications').where({ item: item.id, channel }).delete();
+      }
     }
   }
 
@@ -1342,10 +1412,12 @@ export default ({ filter, action }, { database, logger, env }) => {
     if (!contractorId) return;
 
     const itemsAsFirst = await database('orders_items')
-      .where({ contractor_1: contractorId });
+      .where({ contractor_1: contractorId })
+      .whereNot({ item_status: 'cancelled' });
 
     const itemsAsSecond = await database('orders_items')
-      .where({ contractor_2: contractorId });
+      .where({ contractor_2: contractorId })
+      .whereNot({ item_status: 'cancelled' });
 
     const contractor1Cost = itemsAsFirst.reduce((s, x) => {
       return s + num(x.contractor_1_cost) * num(x.quantity);
@@ -1550,11 +1622,12 @@ export default ({ filter, action }, { database, logger, env }) => {
     if (!orderId) return;
 
     const items = await database('orders_items').where({ order: orderId });
+    const activeItems = items.filter((item) => String(item.item_status || '') !== 'cancelled');
 
-    const order_sum = round(items.reduce((s, x) => s + num(x.order_sum), 0));
-    const items_total_cost = round(items.reduce((s, x) => s + num(x.total_cost), 0));
-    const items_manager_commission_sum = round(items.reduce((s, x) => s + num(x.manager_commission_sum), 0));
-    const items_tax_sum = round(items.reduce((s, x) => s + num(x.tax_sum), 0));
+    const order_sum = round(activeItems.reduce((s, x) => s + num(x.order_sum), 0));
+    const items_total_cost = round(activeItems.reduce((s, x) => s + num(x.total_cost), 0));
+    const items_manager_commission_sum = round(activeItems.reduce((s, x) => s + num(x.manager_commission_sum), 0));
+    const items_tax_sum = round(activeItems.reduce((s, x) => s + num(x.tax_sum), 0));
 
     const profit_sum = round(order_sum - items_total_cost - items_manager_commission_sum - items_tax_sum);
     const margin_percent = order_sum > 0 ? round(profit_sum / order_sum * 100) : 0;
@@ -1692,8 +1765,24 @@ export default ({ filter, action }, { database, logger, env }) => {
   });
 
   // CAPTURE OLD VALUES BEFORE UPDATE
-  filter('items.update', async (payload, meta) => {
+  filter('items.update', async (payload, meta, context) => {
     const keys = meta?.keys || [];
+
+    if (meta.collection === 'orders_items') {
+      const actor = await getEmployeeActorByUser(context?.accountability?.user || meta?.accountability?.user);
+      const requestedFinalCancellation = payload?.item_status === 'cancelled';
+      let requestedCancelledProductionStatus = false;
+      if (payload?.production_status) {
+        const productionStatus = await database('production_statuses')
+          .where({ id: payload.production_status })
+          .select('name')
+          .first();
+        requestedCancelledProductionStatus = productionStatus?.name === '\u041e\u0442\u043c\u0435\u043d\u0435\u043d';
+      }
+      if (actor?.role_name === '\u041c\u0435\u043d\u0435\u0434\u0436\u0435\u0440' && (requestedFinalCancellation || requestedCancelledProductionStatus)) {
+        throw new Error('\u041e\u0442\u043c\u0435\u043d\u0443 \u0437\u0430\u043f\u0443\u0449\u0435\u043d\u043d\u043e\u0439 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u0434\u043e\u043b\u0436\u043d\u043e \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e.');
+      }
+    }
 
     if (meta.collection === 'orders') {
       for (const id of keys) {
@@ -1878,8 +1967,9 @@ export default ({ filter, action }, { database, logger, env }) => {
       const orderBeforeRecalc = orderId
         ? await database('orders').where({ id: orderId }).first()
         : null;
-      await syncDesignerTask(item);
-      await notifyNewProductionAssignments(item);
+        await syncDesignerTask(item);
+        await notifyNewProductionAssignments(item);
+        await notifyItemCancellationChanged(item);
       await notifyLayoutRevisionIfNeeded(item);
       await recalcOrder(orderId);
       const orderAfterRecalc = orderId
@@ -1913,6 +2003,7 @@ export default ({ filter, action }, { database, logger, env }) => {
           : null;
         await syncDesignerTask(item, prevItem);
         await notifyNewProductionAssignments(item, prevItem);
+        await notifyItemCancellationChanged(item, prevItem);
         await notifyLayoutRevisionIfNeeded(item, prevItem);
         await recalcOrder(orderId);
         const orderAfterRecalc = orderId
@@ -2021,6 +2112,8 @@ export default ({ filter, action }, { database, logger, env }) => {
 
       for (const key of keys) {
         await notifyWorkAssignmentFromCollection(collection, key);
+        const item = await database('orders_items').where({ id: key }).first();
+        await notifyItemCancellationChanged(item);
       }
     } catch (error) {
       logger.error(error);

@@ -975,6 +975,7 @@ const itemStatusChoices = [
   { text: 'Доработка макета', value: 'layout_revision' },
   { text: 'Отправлен в работу', value: 'sent_to_work' },
   { text: 'В работе', value: 'in_work' },
+  { text: 'Отмена запрошена', value: 'cancellation_requested' },
   { text: 'Готов', value: 'ready' },
   { text: 'Доставлен', value: 'delivered' },
   { text: 'Отменен', value: 'cancelled' },
@@ -12433,7 +12434,8 @@ export const CostingModule = {
 
       if (['new', 'approval'].includes(current)) allowed = ['new', 'approval'];
       else if (current === 'layout_revision') allowed = ['layout_revision'];
-      else if (['sent_to_work', 'in_work'].includes(current)) allowed = [current, 'ready', 'delivered'];
+      else if (['sent_to_work', 'in_work'].includes(current)) allowed = [current, 'cancellation_requested', 'ready', 'delivered'];
+      else if (current === 'cancellation_requested') allowed = ['cancellation_requested'];
       else if (current === 'ready') allowed = ['ready', 'delivered'];
       else if (current === 'delivered') allowed = ['delivered'];
       else allowed = [current];
@@ -12518,6 +12520,50 @@ export const CostingModule = {
       const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
       if (!itemId || !this.canSendItemToWork(item)) return;
       await this.saveOrderItemField(item, 'item_status', 'in_work');
+    },
+
+    canRequestItemCancellation(item) {
+      if (!['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName)) return false;
+      return ['sent_to_work', 'in_work'].includes(this.normalizedWorkflowStatus(item?.item_status));
+    },
+
+    isItemCancellationRequested(item) {
+      return this.normalizedWorkflowStatus(item?.item_status) === 'cancellation_requested';
+    },
+
+    async requestItemCancellation(item) {
+      if (!this.canRequestItemCancellation(item)) return;
+      const name = String(item?.product_name || 'Позиция').trim();
+      if (!window.confirm(`Запросить у производства отмену позиции «${name}»?`)) return;
+      await this.saveOrderItemField(item, 'item_status', 'cancellation_requested');
+    },
+
+    cancelledProductionStatusId() {
+      const status = this.productionStatuses.find((row) => this.normalizeStatus(row?.name).includes('отмен'));
+      return this.entityId(status);
+    },
+
+    itemProductionStatusOptions() {
+      if (this.currentRoleName !== 'Менеджер') return this.productionStatuses;
+      return this.productionStatuses.filter((row) => !this.normalizeStatus(row?.name).includes('отмен'));
+    },
+
+    canConfirmItemCancellation(row) {
+      return ['Administrator', 'Управляющий', 'Производство', 'Шелкография'].includes(this.currentRoleName)
+        && this.isItemCancellationRequested(row)
+        && !!this.cancelledProductionStatusId();
+    },
+
+    async confirmItemCancellation(row, collection = '') {
+      if (!this.canConfirmItemCancellation(row)) return;
+      const name = String(row?.product_name || 'Позиция').trim();
+      if (!window.confirm(`Подтвердить, что позиция «${name}» не отпечатана и может быть отменена?`)) return;
+      if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) {
+        await this.saveOrderItemField(row, 'production_status', this.cancelledProductionStatusId());
+        return;
+      }
+      const targetCollection = collection || (this.currentRoleName === 'Шелкография' ? 'screen_printing_work' : 'production_work');
+      await this.saveWorkField(targetCollection, row, 'production_status', this.cancelledProductionStatusId());
     },
 
     canDeleteOrderItem(item) {
@@ -19103,6 +19149,31 @@ export const CostingModule = {
           background: color-mix(in srgb, var(--symbolika-danger-strong, #ff6b7d) 14%, transparent);
         }
 
+        .symbolika-costing-cancellation-request {
+          display: grid;
+          gap: 6px;
+          margin-block-end: 8px;
+          padding: 10px 12px;
+          border: 1px solid color-mix(in srgb, var(--symbolika-danger-strong, #ff6b7d) 55%, transparent);
+          border-radius: 12px;
+          background: color-mix(in srgb, var(--symbolika-danger-strong, #ff6b7d) 10%, var(--theme--background-normal));
+        }
+
+        .symbolika-costing-cancellation-request strong,
+        .symbolika-costing-item-cancel-request,
+        .symbolika-costing-item-cancel-confirm {
+          color: var(--symbolika-danger-strong, #ff6b7d);
+        }
+
+        .symbolika-costing-cancellation-request small {
+          color: var(--theme--foreground-subdued);
+        }
+
+        .symbolika-costing-item-cancel-request,
+        .symbolika-costing-item-cancel-confirm {
+          border-color: color-mix(in srgb, var(--symbolika-danger-strong, #ff6b7d) 60%, transparent);
+        }
+
         .symbolika-costing-detail-action {
           inline-size: 100%;
         }
@@ -24058,6 +24129,12 @@ export const CostingModule = {
             </div>
             <div v-if="entry.subtitle" class="symbolika-costing-work-card-subtitle">{{ entry.subtitle }}</div>
             <div v-if="entry.description" class="symbolika-costing-work-card-description">{{ entry.description }}</div>
+            <div v-if="isItemCancellationRequested(entry.row)" class="symbolika-costing-cancellation-request">
+              <strong>Запрошена отмена</strong>
+              <button v-if="canConfirmItemCancellation(entry.row)" type="button" class="symbolika-costing-mini-button symbolika-costing-item-cancel-confirm" @click.stop="confirmItemCancellation(entry.row, activeTab === 'screen' ? 'screen_printing_work' : 'production_work')">
+                <v-icon name="block" small />Подтвердить
+              </button>
+            </div>
             <div
               v-if="showsWorkspaceOrderCompletion(entry)"
               class="symbolika-costing-order-completion is-card"
@@ -24117,6 +24194,12 @@ export const CostingModule = {
                 <strong>{{ entry.title }}</strong>
                 <span v-if="entry.subtitle" class="symbolika-costing-work-card-subtitle">{{ entry.subtitle }}</span>
                 <span v-if="entry.description" class="symbolika-costing-work-card-description">{{ entry.description }}</span>
+                <div v-if="isItemCancellationRequested(entry.row)" class="symbolika-costing-cancellation-request">
+                  <strong>Запрошена отмена</strong>
+                  <button v-if="canConfirmItemCancellation(entry.row)" type="button" class="symbolika-costing-mini-button symbolika-costing-item-cancel-confirm" @click.stop="confirmItemCancellation(entry.row, activeTab === 'screen' ? 'screen_printing_work' : 'production_work')" @dragstart.stop.prevent>
+                    <v-icon name="block" small />Подтвердить
+                  </button>
+                </div>
                 <div
                   v-if="showsWorkspaceOrderCompletion(entry)"
                   class="symbolika-costing-order-completion is-card"
@@ -24431,7 +24514,7 @@ export const CostingModule = {
                       <span class="symbolika-costing-position-status-label">Производство</span>
                       <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'production_status'), statusToneClass(detailProductionStatus(row))]" :value="entityId(row.production_status) || ''" title="Статус производства" @click.stop @change.stop="saveOrderItemField(row, 'production_status', $event.target.value)">
                         <option value="">Без статуса производства</option>
-                        <option v-for="status in productionStatuses" :key="'position-mode-production-' + status.id" :value="status.id">{{ status.name }}</option>
+                        <option v-for="status in itemProductionStatusOptions()" :key="'position-mode-production-' + status.id" :value="status.id">{{ status.name }}</option>
                       </select>
                     </label>
                     <label class="symbolika-costing-position-status-field" @click.stop>
@@ -24600,7 +24683,7 @@ export const CostingModule = {
                           @change.stop="saveOrderItemField(item, 'production_status', $event.target.value)"
                         >
                           <option value="">Без статуса производства</option>
-                          <option v-for="status in productionStatuses" :key="'my-production-status-' + status.id" :value="status.id">{{ status.name }}</option>
+                          <option v-for="status in itemProductionStatusOptions()" :key="'my-production-status-' + status.id" :value="status.id">{{ status.name }}</option>
                         </select>
                         <select
                           class="symbolika-costing-table-select symbolika-costing-position-status-select"
@@ -24769,7 +24852,7 @@ export const CostingModule = {
                         </select>
                         <select v-if="!isItemReady(item)" class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'production_status'), statusToneClass(detailProductionStatus(item))]" :value="entityId(item.production_status) || ''" title="Статус производства" @click.stop @change.stop="saveOrderItemField(item, 'production_status', $event.target.value)">
                           <option value="">Без статуса производства</option>
-                          <option v-for="status in productionStatuses" :key="'all-production-status-' + status.id" :value="status.id">{{ status.name }}</option>
+                          <option v-for="status in itemProductionStatusOptions()" :key="'all-production-status-' + status.id" :value="status.id">{{ status.name }}</option>
                         </select>
                         <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'office_status'), officeSelectClass(item.office_status)]" :value="item.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(item, 'office_status', $event.target.value)">
                           <option v-for="status in officeStatusChoices" :key="'all-office-status-' + status.value" :value="status.value">{{ status.text }}</option>
@@ -24909,7 +24992,7 @@ export const CostingModule = {
                         </select>
                         <select v-if="!isItemReady(item)" class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'production_status'), statusToneClass(detailProductionStatus(item))]" :value="entityId(item.production_status) || ''" title="Статус производства" @click.stop @change.stop="saveOrderItemField(item, 'production_status', $event.target.value)">
                           <option value="">Без статуса производства</option>
-                          <option v-for="status in productionStatuses" :key="'archive-production-status-' + status.id" :value="status.id">{{ status.name }}</option>
+                          <option v-for="status in itemProductionStatusOptions()" :key="'archive-production-status-' + status.id" :value="status.id">{{ status.name }}</option>
                         </select>
                         <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'office_status'), officeSelectClass(item.office_status)]" :value="item.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(item, 'office_status', $event.target.value)">
                           <option v-for="status in officeStatusChoices" :key="'archive-office-status-' + status.value" :value="status.value">{{ status.text }}</option>
@@ -24995,7 +25078,7 @@ export const CostingModule = {
                       @change.stop="saveOrderItemField(row, 'production_status', $event.target.value)"
                     >
                       <option value="">Без статуса производства</option>
-                      <option v-for="status in productionStatuses" :key="'items-archive-production-' + status.id" :value="status.id">{{ status.name }}</option>
+                      <option v-for="status in itemProductionStatusOptions()" :key="'items-archive-production-' + status.id" :value="status.id">{{ status.name }}</option>
                     </select>
                   </div>
                 </td>
@@ -25403,6 +25486,16 @@ export const CostingModule = {
                   </div>
                 </td>
                 <td>
+                  <div v-if="isItemCancellationRequested(row)" class="symbolika-costing-cancellation-request">
+                    <strong>Запрошена отмена</strong>
+                    <small>Подтвердите, если позиция ещё не отпечатана.</small>
+                    <button
+                      v-if="canConfirmItemCancellation(row)"
+                      type="button"
+                      class="symbolika-costing-mini-button symbolika-costing-item-cancel-confirm"
+                      @click.stop="confirmItemCancellation(row, activeTab === 'production' ? 'production_work' : 'screen_printing_work')"
+                    ><v-icon name="block" small />Подтвердить отмену</button>
+                  </div>
                   <select
                     class="symbolika-costing-select"
                     :class="savingClass(row, 'contractor_1')"
@@ -29937,6 +30030,23 @@ export const CostingModule = {
                 </button>
               </div>
             </div>
+            <div v-if="canRequestItemCancellation(detail.row)" class="symbolika-costing-detail-field is-primary">
+              <div class="symbolika-costing-detail-label">Отмена позиции</div>
+              <div class="symbolika-costing-detail-value">
+                <button type="button" class="symbolika-costing-mini-button symbolika-costing-item-cancel-request" @click="requestItemCancellation(detail.row)">
+                  <v-icon name="block" small />Запросить отмену
+                </button>
+              </div>
+            </div>
+            <div v-else-if="isItemCancellationRequested(detail.row)" class="symbolika-costing-detail-field is-primary symbolika-costing-cancellation-request">
+              <div class="symbolika-costing-detail-label">Отмена запрошена</div>
+              <div class="symbolika-costing-detail-value">
+                <span>Ожидаем подтверждения производства.</span>
+                <button v-if="canConfirmItemCancellation(detail.row)" type="button" class="symbolika-costing-mini-button symbolika-costing-item-cancel-confirm" @click="confirmItemCancellation(detail.row)">
+                  <v-icon name="block" small />Подтвердить отмену
+                </button>
+              </div>
+            </div>
             <div v-if="!isItemReady(detail.row)" class="symbolika-costing-detail-field is-primary symbolika-mobile-secondary">
               <div class="symbolika-costing-detail-label">Статус производства</div>
               <div class="symbolika-costing-detail-value">
@@ -29947,7 +30057,7 @@ export const CostingModule = {
                   @change="saveOrderItemField(detail.row, 'production_status', $event.target.value)"
                 >
                   <option value="">Не выбран</option>
-                  <option v-for="status in productionStatuses" :key="status.id" :value="status.id">
+                  <option v-for="status in itemProductionStatusOptions()" :key="status.id" :value="status.id">
                     {{ status.name }}
                   </option>
                 </select>

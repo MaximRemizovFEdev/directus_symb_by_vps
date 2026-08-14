@@ -2222,6 +2222,7 @@ BEGIN
     SELECT oi.*
     FROM orders_items oi
     WHERE oi."order" = order_id
+      AND symbolika_normalize_item_status(oi.item_status) <> 'cancelled'
     ORDER BY oi.id
   LOOP
     item_label := COALESCE(NULLIF(BTRIM(item_row.product_name), ''), U&'\041f\043e\0437\0438\0446\0438\044f #' || item_row.id::text);
@@ -2334,9 +2335,10 @@ BEGIN
   )
   SELECT CASE
     WHEN bool_and(item_status = 'cancelled') THEN U&'\041e\0442\043c\0435\043d\0435\043d'
-    WHEN bool_and(item_status = 'delivered') THEN U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d'
-    WHEN bool_and(item_status = 'ready') THEN U&'\0413\043e\0442\043e\0432'
+    WHEN bool_and(item_status IN ('delivered', 'cancelled')) AND bool_or(item_status = 'delivered') THEN U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d'
+    WHEN bool_and(item_status IN ('ready', 'cancelled')) AND bool_or(item_status = 'ready') THEN U&'\0413\043e\0442\043e\0432'
     WHEN bool_or(item_status = 'layout_revision') THEN U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430'
+    WHEN bool_or(item_status = 'cancellation_requested') THEN U&'\0412 \0440\0430\0431\043e\0442\0435'
     WHEN bool_or(item_status = 'in_work') THEN U&'\0412 \0440\0430\0431\043e\0442\0435'
     WHEN bool_or(item_status = 'sent_to_work') THEN U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443'
     WHEN bool_or(item_status = 'approval') THEN U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435'
@@ -2476,7 +2478,8 @@ BEGIN
     item_transition_allowed := CASE
       WHEN previous_item_status IN ('new', 'approval') THEN NEW.item_status IN ('new', 'approval', 'in_work')
       WHEN previous_item_status = 'layout_revision' THEN NEW.item_status IN ('layout_revision', 'in_work')
-      WHEN previous_item_status IN ('sent_to_work', 'in_work') THEN NEW.item_status IN ('sent_to_work', 'in_work', 'ready', 'delivered')
+      WHEN previous_item_status IN ('sent_to_work', 'in_work') THEN NEW.item_status IN ('sent_to_work', 'in_work', 'cancellation_requested', 'ready', 'delivered')
+      WHEN previous_item_status = 'cancellation_requested' THEN NEW.item_status IN ('cancellation_requested', 'cancelled')
       WHEN previous_item_status = 'ready' THEN NEW.item_status IN ('ready', 'delivered')
       WHEN previous_item_status = 'delivered' THEN NEW.item_status = 'delivered'
       ELSE NEW.item_status = previous_item_status
@@ -3478,7 +3481,7 @@ WHERE (
       U&'\0413\043e\0442\043e\0432',
       U&'\041e\0442\043c\0435\043d\0435\043d'
     )
-    OR symbolika_normalize_item_status(oi.item_status) IN ('sent_to_work', 'in_work', 'layout_revision', 'ready', 'cancelled')
+    OR symbolika_normalize_item_status(oi.item_status) IN ('sent_to_work', 'in_work', 'layout_revision', 'cancellation_requested', 'ready', 'cancelled')
   )
   AND (
     c1.name ILIKE U&'%\043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432%'
@@ -3510,7 +3513,7 @@ WHERE (
       U&'\0413\043e\0442\043e\0432',
       U&'\041e\0442\043c\0435\043d\0435\043d'
     )
-    OR symbolika_normalize_item_status(oi.item_status) IN ('sent_to_work', 'in_work', 'layout_revision', 'ready', 'cancelled')
+    OR symbolika_normalize_item_status(oi.item_status) IN ('sent_to_work', 'in_work', 'layout_revision', 'cancellation_requested', 'ready', 'cancelled')
   )
   AND (
     c1.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%'
@@ -11772,9 +11775,10 @@ BEGIN
       END, ', ') AS item_statuses,
       CASE
         WHEN bool_and(symbolika_normalize_item_status(oi.item_status) = 'cancelled') THEN 'Отменен'
-        WHEN bool_and(symbolika_normalize_item_status(oi.item_status) = 'delivered') THEN 'Доставлен'
-        WHEN bool_and(symbolika_normalize_item_status(oi.item_status) = 'ready') THEN 'Готов'
+        WHEN bool_and(symbolika_normalize_item_status(oi.item_status) IN ('delivered', 'cancelled')) AND bool_or(symbolika_normalize_item_status(oi.item_status) = 'delivered') THEN 'Доставлен'
+        WHEN bool_and(symbolika_normalize_item_status(oi.item_status) IN ('ready', 'cancelled')) AND bool_or(symbolika_normalize_item_status(oi.item_status) = 'ready') THEN 'Готов'
         WHEN bool_or(symbolika_normalize_item_status(oi.item_status) = 'layout_revision') THEN 'Доработка макета'
+        WHEN bool_or(symbolika_normalize_item_status(oi.item_status) = 'cancellation_requested') THEN 'В работе'
         WHEN bool_or(symbolika_normalize_item_status(oi.item_status) = 'in_work') THEN 'В работе'
         WHEN bool_or(symbolika_normalize_item_status(oi.item_status) = 'sent_to_work') THEN 'Отправлен в работу'
         WHEN bool_or(symbolika_normalize_item_status(oi.item_status) = 'approval') THEN 'Согласование'
@@ -13809,6 +13813,28 @@ WHERE collection = 'orders_items'
     '00000000-0000-4000-8000-000000000201',
     '00000000-0000-4000-8000-000000000202'
   );
+
+-- Coordinated cancellation: managers request it on the item, the workshop
+-- confirms it with the final production status "Отменен".
+UPDATE directus_fields
+SET options = jsonb_set(
+  COALESCE(options::jsonb, '{}'::jsonb),
+  '{choices}',
+  jsonb_build_array(
+    jsonb_build_object('text', 'Новый', 'value', 'new'),
+    jsonb_build_object('text', 'Согласование', 'value', 'approval'),
+    jsonb_build_object('text', 'Доработка макета', 'value', 'layout_revision'),
+    jsonb_build_object('text', 'Отправлен в работу', 'value', 'sent_to_work'),
+    jsonb_build_object('text', 'В работе', 'value', 'in_work'),
+    jsonb_build_object('text', 'Отмена запрошена', 'value', 'cancellation_requested'),
+    jsonb_build_object('text', 'Готов', 'value', 'ready'),
+    jsonb_build_object('text', 'Доставлен', 'value', 'delivered'),
+    jsonb_build_object('text', 'Отменен', 'value', 'cancelled')
+  ),
+  true
+)::json
+WHERE collection IN ('orders_items', 'production_work', 'screen_printing_work')
+  AND field = 'item_status';
 
 COMMIT;
 
