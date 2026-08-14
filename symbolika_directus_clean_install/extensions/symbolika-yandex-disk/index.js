@@ -1,5 +1,6 @@
 const API_ROOT = 'https://cloud-api.yandex.net/v1/disk';
 const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024;
+const MAX_PREVIEW_SIZE = 20 * 1024 * 1024;
 
 function cleanSegment(value, fallback = 'file') {
   const cleaned = String(value || '')
@@ -307,6 +308,130 @@ export default {
       } catch (error) {
         logger.error(`[Symbolika Yandex Disk] external link: ${error.message}`);
         return res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось сохранить ссылку на макет.' }] });
+      }
+    });
+
+    router.get('/orders-items/:id/preview/content', async (req, res) => {
+      try {
+        if (!requireUser(req, res)) return;
+        if (!token) throw apiError('Интеграция с Яндекс Диском не настроена.', 503);
+        const itemId = Number(req.params.id);
+        if (!Number.isInteger(itemId) || itemId <= 0) throw apiError('Некорректная позиция заказа.', 400);
+        const schema = await getSchema();
+        const itemService = new services.ItemsService('orders_items', { schema, accountability: req.accountability });
+        await itemService.readOne(itemId, { fields: ['id'] });
+        const item = await database('orders_items')
+          .where('id', itemId)
+          .select('layout_preview_disk_path')
+          .first();
+        if (!item?.layout_preview_disk_path) throw apiError('Превью макета не найдено.', 404);
+        const download = await requestYandex('/resources/download', { query: { path: item.layout_preview_disk_path } });
+        if (!download?.href) throw apiError('Яндекс Диск не вернул адрес превью.', 502);
+        res.setHeader('Cache-Control', 'private, max-age=300');
+        return res.redirect(302, download.href);
+      } catch (error) {
+        logger.warn(`[Symbolika Yandex Disk] preview content: ${error.message}`);
+        return res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось открыть превью макета.' }] });
+      }
+    });
+
+    router.post('/orders-items/:id/preview', async (req, res) => {
+      try {
+        const userId = requireUser(req, res);
+        if (!userId) return;
+        if (!token) throw apiError('Интеграция с Яндекс Диском не настроена.', 503);
+
+        const itemId = Number(req.params.id);
+        if (!Number.isInteger(itemId) || itemId <= 0) throw apiError('Некорректная позиция заказа.', 400);
+
+        const encodedName = String(req.headers['x-file-name'] || 'preview.png');
+        let originalName;
+        try { originalName = decodeURIComponent(encodedName); } catch { originalName = encodedName; }
+        const declaredSize = Number(req.headers['x-file-size'] || 0);
+        const contentType = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+        const extension = fileExtension(originalName);
+        const allowedType = contentType === 'image/jpeg' || contentType === 'image/png';
+        const allowedExtension = ['.jpg', '.jpeg', '.png'].includes(extension);
+        if (!declaredSize || declaredSize < 0) throw apiError('Не удалось определить размер превью.', 400);
+        if (declaredSize > MAX_PREVIEW_SIZE) throw apiError('Превью больше 20 МБ. Уменьшите изображение и повторите загрузку.', 413);
+        if (!allowedType || !allowedExtension) throw apiError('Для превью можно загрузить только JPEG или PNG.', 415);
+
+        const schema = await getSchema();
+        const itemService = new services.ItemsService('orders_items', { schema, accountability: req.accountability });
+        await itemService.readOne(itemId, { fields: ['id'] });
+        const item = await database('orders_items')
+          .where('id', itemId)
+          .select('id', 'order', 'product_name', 'layout_preview_disk_path')
+          .first();
+        if (!item) throw apiError('Позиция заказа не найдена.', 404);
+
+        const orderId = typeof item.order === 'object' ? item.order?.id : item.order;
+        const order = await database('orders').where('id', orderId).select('id', 'order_number').first();
+        if (!order) throw apiError('Заказ позиции не найден.', 404);
+
+        const orderFolder = cleanSegment(order.order_number || `Заказ-${order.id}`, `Заказ-${order.id}`);
+        const itemFolder = `Позиция-${itemId}`;
+        const folderPath = `${root}/${orderFolder}/${itemFolder}`;
+        await ensureFolderTree(folderPath);
+
+        const normalizedExtension = contentType === 'image/png' ? '.png' : '.jpg';
+        const previewBase = cleanSegment(`Превью-${item.product_name || itemId}`, `Превью-${itemId}`).slice(0, 190);
+        const fileName = `${previewBase}${normalizedExtension}`;
+        const diskPath = `${folderPath}/${fileName}`;
+        const upload = await requestYandex('/resources/upload', { query: { path: diskPath, overwrite: true } });
+        if (!upload?.href) throw apiError('Яндекс Диск не вернул адрес загрузки превью.', 502);
+
+        const uploadResponse = await fetch(upload.href, {
+          method: upload.method || 'PUT',
+          headers: { 'Content-Type': contentType },
+          body: req,
+          duplex: 'half',
+        });
+        if (!uploadResponse.ok) throw apiError(`Не удалось загрузить превью на Яндекс Диск: HTTP ${uploadResponse.status}.`, 502);
+
+        if (publishFiles) await requestYandex('/resources/publish', { method: 'PUT', query: { path: diskPath } });
+        const meta = await requestYandex('/resources', {
+          query: { path: diskPath, fields: 'name,path,size,mime_type,public_url,created,modified' },
+        });
+        const link = meta.public_url || '';
+        if (publishFiles && !link) throw apiError('Превью загружено, но публичная ссылка не была создана.', 502);
+
+        await database('orders_items').where('id', itemId).update({
+          layout_preview_url: link || null,
+          layout_preview_disk_path: diskPath,
+          layout_preview_disk_name: meta.name || fileName,
+          layout_preview_disk_size: Number(meta.size || declaredSize),
+          layout_preview_disk_mime_type: meta.mime_type || contentType,
+          layout_preview_uploaded_by: userId,
+          layout_preview_uploaded_at: database.fn.now(),
+        });
+
+        const oldDiskPath = String(item.layout_preview_disk_path || '').trim();
+        const oldPathIsManaged = isManagedOldPath(oldDiskPath, { root, orderFolder, itemFolder });
+        if (deleteReplacedFiles && oldPathIsManaged && oldDiskPath !== diskPath) {
+          try {
+            await requestYandex('/resources', {
+              method: 'DELETE',
+              query: { path: oldDiskPath, permanently: true },
+            });
+          } catch (cleanupError) {
+            logger.warn(`[Symbolika Yandex Disk] old preview cleanup (${oldDiskPath}): ${cleanupError.message}`);
+          }
+        }
+
+        return res.json({
+          data: {
+            item_id: itemId,
+            url: link,
+            name: meta.name || fileName,
+            size: Number(meta.size || declaredSize),
+            mime_type: meta.mime_type || contentType,
+            path: diskPath,
+          },
+        });
+      } catch (error) {
+        logger.error(`[Symbolika Yandex Disk] preview upload: ${error.message}`);
+        return res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось загрузить превью макета.' }] });
       }
     });
   },

@@ -1338,6 +1338,10 @@ export const CostingModule = {
       layoutUploading: {},
       layoutUploadProgress: {},
       layoutUploadDialog: null,
+      layoutPreviewUploading: {},
+      layoutPreviewProgress: {},
+      layoutPreviewDialog: null,
+      layoutPreviewLightbox: null,
       entityDetail: null,
     };
   },
@@ -3688,7 +3692,7 @@ export const CostingModule = {
       if (this.currentRoleName === 'Менеджер') {
         try {
           const params = new URLSearchParams();
-          params.set('fields', 'id,order,product_name,quantity,price_per_unit,order_sum,deadline,item_status,office_status,shipping_method,blank_source,product_category,product_subcategory,application_method,contractor_1,contractor_1_cost,technical_task_text,url,layout_revision_url_snapshot,layout_disk_path,layout_disk_name,layout_disk_size,layout_disk_mime_type,layout_disk_uploaded_at,needs_designer_help,designer_comment,designer_source_url,production_status,production_comment');
+          params.set('fields', 'id,order,product_name,quantity,price_per_unit,order_sum,deadline,item_status,office_status,shipping_method,blank_source,product_category,product_subcategory,application_method,contractor_1,contractor_1_cost,technical_task_text,url,layout_revision_url_snapshot,layout_disk_path,layout_disk_name,layout_disk_size,layout_disk_mime_type,layout_disk_uploaded_at,layout_preview_url,layout_preview_disk_path,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at,needs_designer_help,designer_comment,designer_source_url,production_status,production_comment');
           const payload = await this.request(`/items/orders_items/${Number(itemId)}?${params.toString()}`);
           return payload.data ? { type: 'orders_items', row: payload.data } : null;
         } catch {
@@ -5268,15 +5272,23 @@ export const CostingModule = {
           'layout_disk_size',
           'layout_disk_mime_type',
           'layout_disk_uploaded_at',
+          'layout_preview_url',
+          'layout_preview_disk_path',
+          'layout_preview_disk_name',
+          'layout_preview_disk_size',
+          'layout_preview_disk_mime_type',
+          'layout_preview_uploaded_at',
           'needs_designer_help',
           'designer_comment',
           'designer_source_url',
           'production_status',
           'production_comment',
         ];
-        const fields = this.currentRoleName === 'Менеджер'
+        const fields = ['Менеджер', 'Administrator', 'Управляющий'].includes(this.currentRoleName)
           ? managerFields.join(',')
-          : 'id,internal_route_production,internal_route_screen';
+          : (this.currentRoleName === 'Дизайнер'
+            ? 'id,order,product_name,quantity,deadline,technical_task_text,url,needs_designer_help,designer_comment,designer_source_url,layout_preview_url,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at'
+            : 'id,internal_route_production,internal_route_screen');
         const payload = await this.request(`/items/orders_items/${itemId}?fields=${encodeURIComponent(fields)}`);
         if (!payload?.data) return row;
         const hydrated = { ...row, ...payload.data };
@@ -5398,6 +5410,12 @@ export const CostingModule = {
           'layout_disk_size',
           'layout_disk_mime_type',
           'layout_disk_uploaded_at',
+          'layout_preview_url',
+          'layout_preview_disk_path',
+          'layout_preview_disk_name',
+          'layout_preview_disk_size',
+          'layout_preview_disk_mime_type',
+          'layout_preview_uploaded_at',
           'needs_designer_help',
           'designer_comment',
           'designer_source_url',
@@ -6131,8 +6149,10 @@ export const CostingModule = {
     },
 
     async request(url, options = {}) {
+      const method = String(options.method || 'GET').toUpperCase();
       const response = await fetch(url, {
         credentials: 'same-origin',
+        cache: method === 'GET' ? 'no-store' : 'default',
         headers: {
           'Content-Type': 'application/json',
           ...(options.headers || {}),
@@ -10152,6 +10172,12 @@ export const CostingModule = {
           patch.order_sum = quantity * price;
         }
 
+        // Keep the opened card and every visible representation of this item in
+        // sync immediately. This also preserves the edit when the user closes
+        // the card before the PATCH and the following background reload finish.
+        Object.assign(row, patch);
+        this.updateOrderItemCaches(itemId, patch);
+
         await this.request(`/items/orders_items/${itemId}`, {
           method: 'PATCH',
           body: JSON.stringify(patch),
@@ -10159,6 +10185,10 @@ export const CostingModule = {
 
         this.updateOrderItemCaches(itemId, patch);
         await this.loadAllowedData();
+        // loadAllowedData replaces list arrays with freshly fetched rows. Some
+        // summary views don't expose detail-only fields (for example TЗ), so
+        // reapply the confirmed patch to the new row objects as well.
+        this.updateOrderItemCaches(itemId, patch);
 
         // Database triggers can change the item and production statuses together
         // with the edited office status. Reload those values explicitly because
@@ -10316,6 +10346,7 @@ export const CostingModule = {
         Object.assign(row, patch);
         this.updateOrderItemCaches(itemId, patch);
         await this.loadAllowedData();
+        this.updateOrderItemCaches(itemId, patch);
         return true;
       } catch (error) {
         this.error = error.message;
@@ -10424,7 +10455,10 @@ export const CostingModule = {
         };
         Object.assign(row, patch);
         this.updateOrderItemCaches(itemId, patch);
-        if (options.reload !== false) await this.loadAllowedData();
+        if (options.reload !== false) {
+          await this.loadAllowedData();
+          this.updateOrderItemCaches(itemId, patch);
+        }
         return true;
       } catch (error) {
         this.setLayoutUploadProgress(itemId, { status: 'error', error: error.message });
@@ -10439,6 +10473,181 @@ export const CostingModule = {
         this.layoutUploading = next;
         if (input) input.value = '';
       }
+    },
+
+    openLayoutPreviewDialog(row) {
+      const itemId = this.entityId(row?.order_item) || row?.id;
+      if (!row || !itemId || this.layoutPreviewUploading[itemId]) return;
+      this.layoutPreviewDialog = {
+        row,
+        file: null,
+        objectUrl: '',
+        dragging: false,
+        error: '',
+      };
+      this.$nextTick(() => this.$refs.layoutPreviewPasteTarget?.focus?.());
+    },
+
+    closeLayoutPreviewDialog() {
+      const itemId = this.entityId(this.layoutPreviewDialog?.row?.order_item) || this.layoutPreviewDialog?.row?.id;
+      if (itemId && this.layoutPreviewUploading[itemId]) return;
+      if (this.layoutPreviewDialog?.objectUrl) URL.revokeObjectURL(this.layoutPreviewDialog.objectUrl);
+      this.layoutPreviewDialog = null;
+    },
+
+    setLayoutPreviewFile(file) {
+      const dialog = this.layoutPreviewDialog;
+      if (!dialog) return;
+      if (dialog.objectUrl) URL.revokeObjectURL(dialog.objectUrl);
+      const type = String(file?.type || '').toLowerCase();
+      const name = String(file?.name || '').toLowerCase();
+      let error = '';
+      if (!file) error = '';
+      else if (!['image/jpeg', 'image/png'].includes(type) || !/\.(jpe?g|png)$/i.test(name)) error = 'Для превью можно использовать только JPEG или PNG.';
+      else if (!Number(file.size)) error = 'Нельзя загрузить пустое изображение.';
+      else if (Number(file.size) > 20 * 1024 * 1024) error = 'Превью больше 20 МБ. Уменьшите изображение.';
+      this.layoutPreviewDialog = {
+        ...dialog,
+        file: error ? null : file,
+        objectUrl: error || !file ? '' : URL.createObjectURL(file),
+        dragging: false,
+        error,
+      };
+    },
+
+    selectLayoutPreviewFile(event) {
+      this.setLayoutPreviewFile(event?.target?.files?.[0] || null);
+      if (event?.target) event.target.value = '';
+    },
+
+    handleLayoutPreviewDrop(event) {
+      this.setLayoutPreviewFile(event?.dataTransfer?.files?.[0] || null);
+    },
+
+    setLayoutPreviewDragging(value) {
+      if (!this.layoutPreviewDialog) return;
+      this.layoutPreviewDialog = { ...this.layoutPreviewDialog, dragging: !!value };
+    },
+
+    handleLayoutPreviewPaste(event) {
+      if (!this.layoutPreviewDialog) return;
+      const file = Array.from(event?.clipboardData?.files || []).find((entry) => String(entry.type || '').startsWith('image/'))
+        || Array.from(event?.clipboardData?.items || [])
+          .find((entry) => String(entry.type || '').startsWith('image/'))?.getAsFile?.();
+      if (!file) {
+        this.layoutPreviewDialog = { ...this.layoutPreviewDialog, error: 'В буфере обмена нет изображения JPEG или PNG.' };
+        return;
+      }
+      event.preventDefault();
+      const extension = file.type === 'image/jpeg' ? '.jpg' : '.png';
+      const namedFile = /\.(jpe?g|png)$/i.test(file.name || '')
+        ? file
+        : new File([file], `preview-${Date.now()}${extension}`, { type: file.type || 'image/png' });
+      this.setLayoutPreviewFile(namedFile);
+    },
+
+    async readLayoutPreviewClipboard() {
+      if (!this.layoutPreviewDialog) return;
+      try {
+        if (!navigator.clipboard?.read) throw new Error('Нажмите Ctrl+V в этом окне — браузер не разрешает чтение буфера по кнопке.');
+        const clipboardItems = await navigator.clipboard.read();
+        for (const item of clipboardItems) {
+          const type = item.types.find((value) => ['image/png', 'image/jpeg'].includes(value));
+          if (!type) continue;
+          const blob = await item.getType(type);
+          const extension = type === 'image/jpeg' ? '.jpg' : '.png';
+          this.setLayoutPreviewFile(new File([blob], `preview-${Date.now()}${extension}`, { type }));
+          return;
+        }
+        throw new Error('В буфере обмена нет изображения JPEG или PNG.');
+      } catch (error) {
+        this.layoutPreviewDialog = { ...this.layoutPreviewDialog, error: error.message };
+      }
+    },
+
+    previewUploadPercent(row) {
+      const itemId = this.entityId(row?.order_item) || row?.id;
+      return Math.max(0, Math.min(100, Number(this.layoutPreviewProgress[itemId]?.percent || 0)));
+    },
+
+    uploadLayoutPreviewRequest(itemId, file, onProgress) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `/symbolika-yandex-disk/orders-items/${itemId}/preview`, true);
+        xhr.withCredentials = true;
+        xhr.setRequestHeader('Content-Type', file.type);
+        xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
+        xhr.setRequestHeader('X-File-Size', String(file.size));
+        xhr.upload.addEventListener('progress', (event) => {
+          if (!event.lengthComputable) return;
+          onProgress?.(Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100))));
+        });
+        xhr.addEventListener('load', () => {
+          let payload = {};
+          try { payload = JSON.parse(xhr.responseText || '{}'); } catch { payload = {}; }
+          if (xhr.status < 200 || xhr.status >= 300) {
+            reject(new Error(payload?.errors?.[0]?.message || 'Не удалось загрузить превью макета.'));
+            return;
+          }
+          resolve(payload?.data || {});
+        });
+        xhr.addEventListener('error', () => reject(new Error('Соединение прервалось во время загрузки превью.')));
+        xhr.send(file);
+      });
+    },
+
+    async uploadOrderItemLayoutPreview() {
+      const dialog = this.layoutPreviewDialog;
+      const row = dialog?.row;
+      const file = dialog?.file;
+      const itemId = this.entityId(row?.order_item) || row?.id;
+      if (!file || !itemId || this.layoutPreviewUploading[itemId]) return;
+      this.layoutPreviewUploading = { ...this.layoutPreviewUploading, [itemId]: true };
+      this.layoutPreviewProgress = { ...this.layoutPreviewProgress, [itemId]: { percent: 0 } };
+      try {
+        const uploaded = await this.uploadLayoutPreviewRequest(itemId, file, (percent) => {
+          this.layoutPreviewProgress = { ...this.layoutPreviewProgress, [itemId]: { percent } };
+        });
+        const patch = {
+          layout_preview_url: uploaded.url || null,
+          layout_preview_disk_path: uploaded.path || null,
+          layout_preview_disk_name: uploaded.name || file.name,
+          layout_preview_disk_size: Number(uploaded.size || file.size),
+          layout_preview_disk_mime_type: uploaded.mime_type || file.type,
+          layout_preview_uploaded_at: new Date().toISOString(),
+        };
+        Object.assign(row, patch);
+        this.updateOrderItemCaches(itemId, patch);
+        this.layoutPreviewProgress = { ...this.layoutPreviewProgress, [itemId]: { percent: 100 } };
+        if (this.layoutPreviewDialog?.objectUrl) URL.revokeObjectURL(this.layoutPreviewDialog.objectUrl);
+        this.layoutPreviewDialog = null;
+      } catch (error) {
+        this.error = error.message;
+        if (this.layoutPreviewDialog) this.layoutPreviewDialog = { ...this.layoutPreviewDialog, error: error.message };
+      } finally {
+        const next = { ...this.layoutPreviewUploading };
+        delete next[itemId];
+        this.layoutPreviewUploading = next;
+      }
+    },
+
+    layoutPreviewSrc(row) {
+      const itemId = this.entityId(row?.order_item) || row?.id;
+      if (!itemId || !row?.layout_preview_url) return '';
+      const version = encodeURIComponent(row.layout_preview_uploaded_at || row.layout_preview_disk_name || 'current');
+      return `/symbolika-yandex-disk/orders-items/${itemId}/preview/content?v=${version}`;
+    },
+
+    openLayoutPreviewLightbox(row) {
+      if (!row?.layout_preview_url) return;
+      this.layoutPreviewLightbox = {
+        url: this.layoutPreviewSrc(row),
+        name: row.layout_preview_disk_name || `Превью · ${row.product_name || 'позиция'}`,
+      };
+    },
+
+    closeLayoutPreviewLightbox() {
+      this.layoutPreviewLightbox = null;
     },
 
     async saveOrderItemCategory(row, value) {
@@ -12075,6 +12284,21 @@ export const CostingModule = {
       return this.itemWorkReadinessMissing(item).length === 0;
     },
 
+    showsSendItemToWorkButton(item) {
+      if (!this.canCreateOrders) return false;
+      const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
+      if (!itemId) return false;
+      const status = this.normalizedWorkflowStatus(item?.item_status || 'new');
+      return ['new', 'approval', 'layout_revision'].includes(status);
+    },
+
+    itemSendToWorkTitle(item) {
+      const missing = this.itemWorkReadinessMissing(item);
+      return missing.length
+        ? `Для запуска заполните: ${missing.map((value) => value.replace(/^.*?:\s*/, '')).join(', ')}`
+        : 'Запустить позицию в работу';
+    },
+
     async sendItemToWork(item) {
       const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
       if (!itemId || !this.canSendItemToWork(item)) return;
@@ -13657,6 +13881,18 @@ export const CostingModule = {
           padding: 8px 12px;
         }
 
+        .symbolika-costing-position-row.has-send-work {
+          grid-template-columns:
+            minmax(240px, 1.55fr)
+            78px
+            168px
+            92px
+            92px
+            112px
+            repeat(3, minmax(0, 1fr))
+            minmax(132px, 152px);
+        }
+
         .symbolika-costing-position-row-clickable {
           cursor: pointer;
           transition: border-color .15s ease, background .15s ease, transform .15s ease;
@@ -13812,6 +14048,16 @@ export const CostingModule = {
 
         .symbolika-costing-position-statuses {
           display: contents;
+        }
+
+        .symbolika-costing-position-statuses-cell {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 6px;
+        }
+
+        .symbolika-costing-position-statuses-cell .symbolika-costing-position-send-work {
+          grid-column: 1 / -1;
         }
 
         .symbolika-costing-position-statuses.is-ready > .symbolika-costing-position-status-select:last-child {
@@ -14390,6 +14636,15 @@ export const CostingModule = {
           line-height: 1;
           text-overflow: ellipsis;
           white-space: nowrap;
+        }
+
+        .symbolika-costing-position-send-work:disabled,
+        .symbolika-costing-position-send-work:disabled:hover {
+          border-color: color-mix(in srgb, var(--theme--foreground-subdued) 35%, transparent);
+          background: color-mix(in srgb, var(--theme--foreground-subdued) 8%, transparent);
+          color: var(--theme--foreground-subdued);
+          cursor: not-allowed;
+          opacity: .72;
         }
 
         .symbolika-costing-item-detail-send-work {
@@ -16753,12 +17008,20 @@ export const CostingModule = {
             grid-template-columns: minmax(180px, 1fr) 78px 168px 92px 92px 112px;
           }
 
+          .symbolika-costing-position-row.has-send-work {
+            grid-template-columns: minmax(180px, 1fr) 78px 168px 92px 92px 112px;
+          }
+
           .symbolika-costing-position-statuses {
             display: grid;
             grid-column: 1 / -1;
             grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 6px;
             min-inline-size: 0;
+          }
+
+          .symbolika-costing-position-row.has-send-work .symbolika-costing-position-statuses {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
           }
         }
 
@@ -19825,6 +20088,138 @@ export const CostingModule = {
         .symbolika-layout-selected-file-copy strong { overflow: hidden; color: var(--theme--foreground); text-overflow: ellipsis; white-space: nowrap; }
         .symbolika-layout-selected-file-copy span { margin-block-start: 4px; color: var(--theme--foreground-subdued); font-size: 11px; }
         .symbolika-layout-upload-error { margin: 10px 0 0; color: var(--theme--danger); font-size: 12px; font-weight: 700; }
+
+        .symbolika-layout-preview-backdrop { z-index: 1700; }
+        .symbolika-layout-preview-modal {
+          inline-size: min(680px, calc(100vw - 28px));
+          outline: none;
+        }
+
+        .symbolika-layout-preview-dropzone { min-block-size: 250px; }
+        .symbolika-preview-paste-button { margin-block-start: 4px; }
+
+        .symbolika-layout-preview-selected {
+          display: grid;
+          grid-template-columns: minmax(120px, 180px) minmax(0, 1fr) auto;
+          align-items: center;
+          gap: 14px;
+          padding: 12px;
+          border: 1px solid color-mix(in srgb, var(--symbolika-orange) 42%, var(--theme--border-color));
+          border-radius: 15px;
+          background: var(--theme--background-subdued);
+        }
+
+        .symbolika-layout-preview-selected > img {
+          inline-size: 100%;
+          block-size: 130px;
+          border-radius: 10px;
+          background: color-mix(in srgb, var(--theme--background) 88%, #111827);
+          object-fit: contain;
+        }
+
+        .symbolika-layout-preview-card {
+          display: grid;
+          grid-template-columns: minmax(120px, 168px) minmax(0, 1fr);
+          gap: 12px;
+          align-items: center;
+          padding: 10px;
+          border: 1px dashed color-mix(in srgb, var(--symbolika-orange) 34%, var(--theme--border-color));
+          border-radius: 13px;
+          background: color-mix(in srgb, var(--symbolika-orange) 5%, var(--theme--background-subdued));
+        }
+
+        .symbolika-layout-preview-card:not(.has-preview) { grid-template-columns: minmax(0, 1fr); }
+        .symbolika-layout-preview-card.has-preview { border-style: solid; }
+
+        .symbolika-layout-preview-thumb {
+          position: relative;
+          overflow: hidden;
+          inline-size: 100%;
+          block-size: 104px;
+          border: 1px solid var(--theme--border-color);
+          border-radius: 10px;
+          background: color-mix(in srgb, var(--theme--background) 90%, #111827);
+          padding: 0;
+          cursor: zoom-in;
+        }
+
+        .symbolika-layout-preview-thumb img { inline-size: 100%; block-size: 100%; object-fit: contain; }
+        .symbolika-layout-preview-thumb span {
+          position: absolute;
+          inset-inline: 7px;
+          inset-block-end: 7px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          min-block-size: 28px;
+          border-radius: 8px;
+          background: rgba(10, 14, 20, .82);
+          color: #fff;
+          font-size: 10px;
+          font-weight: 800;
+          opacity: 0;
+          transition: opacity .15s ease;
+        }
+        .symbolika-layout-preview-thumb:hover span { opacity: 1; }
+
+        .symbolika-layout-preview-copy { display: grid; gap: 6px; min-inline-size: 0; }
+        .symbolika-layout-preview-copy strong { color: var(--theme--foreground); font-size: 13px; }
+        .symbolika-layout-preview-copy > span {
+          overflow: hidden;
+          color: var(--theme--foreground-subdued);
+          font-size: 11px;
+          line-height: 1.35;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .symbolika-layout-preview-copy .symbolika-costing-mini-button { justify-self: start; }
+
+        .symbolika-layout-lightbox {
+          z-index: 1800;
+          padding: 18px;
+          background: rgba(4, 7, 12, .92);
+        }
+
+        .symbolika-layout-lightbox-panel {
+          display: grid;
+          grid-template-rows: auto minmax(0, 1fr);
+          inline-size: min(1500px, calc(100vw - 36px));
+          block-size: min(940px, calc(100vh - 36px));
+          overflow: hidden;
+          border: 1px solid color-mix(in srgb, var(--symbolika-orange) 40%, var(--theme--border-color));
+          border-radius: 18px;
+          background: var(--theme--background);
+          box-shadow: 0 30px 100px rgba(0, 0, 0, .56);
+        }
+
+        .symbolika-layout-lightbox-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+          min-block-size: 64px;
+          padding: 10px 12px 10px 18px;
+          border-block-end: 1px solid var(--theme--border-color);
+        }
+        .symbolika-layout-lightbox-head strong { overflow: hidden; color: var(--theme--foreground); text-overflow: ellipsis; white-space: nowrap; }
+        .symbolika-layout-lightbox-panel > img {
+          inline-size: 100%;
+          block-size: 100%;
+          min-block-size: 0;
+          padding: 18px;
+          object-fit: contain;
+        }
+
+        @media (max-width: 620px) {
+          .symbolika-layout-preview-selected { grid-template-columns: minmax(0, 1fr) auto; }
+          .symbolika-layout-preview-selected > img { grid-column: 1 / -1; block-size: 180px; }
+          .symbolika-layout-preview-card { grid-template-columns: 112px minmax(0, 1fr); }
+          .symbolika-layout-preview-thumb { block-size: 88px; }
+          .symbolika-layout-preview-thumb span { opacity: 1; }
+          .symbolika-layout-lightbox { padding: 0; }
+          .symbolika-layout-lightbox-panel { inline-size: 100vw; block-size: 100vh; border: 0; border-radius: 0; }
+        }
 
         .symbolika-costing-item-public-link {
           display: grid;
@@ -23656,7 +24051,7 @@ export const CostingModule = {
                   <span v-else class="symbolika-costing-cell-main">{{ detailManagerName(row) }}</span>
                 </td>
                 <td>
-                  <div class="symbolika-costing-position-statuses" :class="{ 'is-ready': isItemReady(row) }">
+                  <div class="symbolika-costing-position-statuses symbolika-costing-position-statuses-cell" :class="{ 'is-ready': isItemReady(row) }">
                     <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'item_status'), statusToneClass(itemStatusName(row.item_status))]" :value="row.item_status || ''" title="Статус позиции" @click.stop @change.stop="saveOrderItemField(row, 'item_status', $event.target.value)">
                       <option v-for="status in itemWorkflowStatusOptions(row)" :key="'position-mode-item-' + status.value" :value="status.value">{{ status.text }}</option>
                     </select>
@@ -23667,6 +24062,7 @@ export const CostingModule = {
                     <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'office_status'), officeSelectClass(row.office_status)]" :value="row.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(row, 'office_status', $event.target.value)">
                       <option v-for="status in officeStatusChoices" :key="'position-mode-office-' + status.value" :value="status.value">{{ status.text }}</option>
                     </select>
+                    <button v-if="showsSendItemToWorkButton(row)" type="button" class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work" :class="savingWorkClass('orders_items', row, 'item_status')" :disabled="!canSendItemToWork(row)" :title="itemSendToWorkTitle(row)" @click.stop="sendItemToWork(row)"><v-icon name="play_arrow" small />Запустить в работу</button>
                   </div>
                 </td>
                 <td class="symbolika-costing-num">
@@ -23785,6 +24181,7 @@ export const CostingModule = {
                       v-for="item in detailPositions(row)"
                       :key="'my-order-position-' + (entityId(item.order_item) || item.id || item.product_name)"
                       class="symbolika-costing-position-row symbolika-costing-position-row-clickable"
+                      :class="{ 'has-send-work': showsSendItemToWorkButton(item) }"
                       role="button"
                       tabindex="0"
                       @click.stop="openDetail('orders_items', item, { parentOrder: row })"
@@ -23811,17 +24208,7 @@ export const CostingModule = {
                         </div>
                       </div>
                       <div class="symbolika-costing-position-statuses" :class="{ 'is-ready': isItemReady(item) }">
-                        <button
-                          v-if="canSendItemToWork(item)"
-                          type="button"
-                          class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work"
-                          :class="savingWorkClass('orders_items', item, 'item_status')"
-                          @click.stop="sendItemToWork(item)"
-                        >
-                          <v-icon name="play_arrow" small />Запустить в работу
-                        </button>
                         <select
-                          v-else
                           class="symbolika-costing-table-select symbolika-costing-position-status-select"
                           :class="[savingWorkClass('orders_items', item, 'item_status'), statusToneClass(itemStatusName(item.item_status))]"
                           :value="item.item_status || ''"
@@ -23853,6 +24240,17 @@ export const CostingModule = {
                         >
                           <option v-for="status in officeStatusChoices" :key="'my-office-status-' + status.value" :value="status.value">{{ status.text }}</option>
                         </select>
+                        <button
+                          v-if="showsSendItemToWorkButton(item)"
+                          type="button"
+                          class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work"
+                          :class="savingWorkClass('orders_items', item, 'item_status')"
+                          :disabled="!canSendItemToWork(item)"
+                          :title="itemSendToWorkTitle(item)"
+                          @click.stop="sendItemToWork(item)"
+                        >
+                          <v-icon name="play_arrow" small />Запустить в работу
+                        </button>
                       </div>
                     </div>
                     <div v-if="!detailPositions(row).length" class="symbolika-costing-empty">Нет позиций</div>
@@ -23973,6 +24371,7 @@ export const CostingModule = {
                       v-for="item in detailPositions(row)"
                       :key="'all-order-position-' + (entityId(item.order_item) || item.id || item.product_name)"
                       class="symbolika-costing-position-row symbolika-costing-position-row-clickable"
+                      :class="{ 'has-send-work': showsSendItemToWorkButton(item) }"
                       role="button"
                       tabindex="0"
                       @click.stop="openDetail('orders_items', item, { parentOrder: row })"
@@ -23993,8 +24392,7 @@ export const CostingModule = {
                         </div>
                       </div>
                       <div class="symbolika-costing-position-statuses" :class="{ 'is-ready': isItemReady(item) }">
-                        <button v-if="canSendItemToWork(item)" type="button" class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work" :class="savingWorkClass('orders_items', item, 'item_status')" @click.stop="sendItemToWork(item)"><v-icon name="play_arrow" small />Запустить в работу</button>
-                        <select v-else class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'item_status'), statusToneClass(itemStatusName(item.item_status))]" :value="item.item_status || ''" title="Статус позиции" @click.stop @change.stop="saveOrderItemField(item, 'item_status', $event.target.value)">
+                        <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'item_status'), statusToneClass(itemStatusName(item.item_status))]" :value="item.item_status || ''" title="Статус позиции" @click.stop @change.stop="saveOrderItemField(item, 'item_status', $event.target.value)">
                           <option v-for="status in itemWorkflowStatusOptions(item)" :key="'all-item-status-' + status.value" :value="status.value">{{ status.text }}</option>
                         </select>
                         <select v-if="!isItemReady(item)" class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'production_status'), statusToneClass(detailProductionStatus(item))]" :value="entityId(item.production_status) || ''" title="Статус производства" @click.stop @change.stop="saveOrderItemField(item, 'production_status', $event.target.value)">
@@ -24004,6 +24402,7 @@ export const CostingModule = {
                         <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'office_status'), officeSelectClass(item.office_status)]" :value="item.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(item, 'office_status', $event.target.value)">
                           <option v-for="status in officeStatusChoices" :key="'all-office-status-' + status.value" :value="status.value">{{ status.text }}</option>
                         </select>
+                        <button v-if="showsSendItemToWorkButton(item)" type="button" class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work" :class="savingWorkClass('orders_items', item, 'item_status')" :disabled="!canSendItemToWork(item)" :title="itemSendToWorkTitle(item)" @click.stop="sendItemToWork(item)"><v-icon name="play_arrow" small />Запустить в работу</button>
                       </div>
                     </div>
                     <div v-if="!detailPositions(row).length" class="symbolika-costing-empty">Нет позиций</div>
@@ -27386,6 +27785,88 @@ export const CostingModule = {
           </div>
         </div>
 
+        <div v-if="layoutPreviewDialog" class="symbolika-costing-modal-backdrop symbolika-layout-preview-backdrop">
+          <div
+            ref="layoutPreviewPasteTarget"
+            class="symbolika-costing-modal symbolika-layout-preview-modal"
+            tabindex="0"
+            @paste="handleLayoutPreviewPaste"
+          >
+            <div class="symbolika-costing-modal-head">
+              <div>
+                <div class="symbolika-costing-subtle">Превью макета</div>
+                <h2>{{ layoutPreviewDialog.row.layout_preview_url ? 'Заменить превью' : 'Добавить превью' }}</h2>
+              </div>
+              <button
+                type="button"
+                class="symbolika-costing-detail-close"
+                :disabled="!!layoutPreviewUploading[entityId(layoutPreviewDialog.row.order_item) || layoutPreviewDialog.row.id]"
+                @click="closeLayoutPreviewDialog"
+              >×</button>
+            </div>
+            <p class="symbolika-layout-upload-subtitle">Загрузите JPEG/PNG или скопируйте изображение и нажмите Ctrl+V прямо в этом окне.</p>
+
+            <label
+              v-if="!layoutPreviewDialog.file"
+              class="symbolika-layout-dropzone symbolika-layout-preview-dropzone"
+              :class="{ 'is-dragging': layoutPreviewDialog.dragging }"
+              @dragenter.prevent="setLayoutPreviewDragging(true)"
+              @dragover.prevent="setLayoutPreviewDragging(true)"
+              @dragleave.prevent="setLayoutPreviewDragging(false)"
+              @drop.prevent="handleLayoutPreviewDrop"
+            >
+              <input type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" @change="selectLayoutPreviewFile" />
+              <span class="symbolika-layout-dropzone-icon"><v-icon name="image" large /></span>
+              <strong>{{ layoutPreviewDialog.dragging ? 'Отпустите изображение здесь' : 'Перетащите превью сюда' }}</strong>
+              <span>или нажмите, чтобы выбрать JPEG/PNG · до 20 МБ</span>
+              <button type="button" class="symbolika-costing-mini-button symbolika-preview-paste-button" @click.prevent="readLayoutPreviewClipboard">
+                <v-icon name="content_paste" small /> Вставить из буфера
+              </button>
+            </label>
+
+            <div v-else class="symbolika-layout-preview-selected">
+              <img :src="layoutPreviewDialog.objectUrl" alt="Выбранное превью" />
+              <div class="symbolika-layout-selected-file-copy">
+                <strong>{{ layoutPreviewDialog.file.name }}</strong>
+                <span>{{ formatFileSize(layoutPreviewDialog.file.size) }} · готово к загрузке</span>
+              </div>
+              <button type="button" class="symbolika-costing-icon-button" title="Выбрать другое изображение" @click="setLayoutPreviewFile(null)">
+                <v-icon name="close" small />
+              </button>
+            </div>
+
+            <p v-if="layoutPreviewDialog.error" class="symbolika-layout-upload-error">{{ layoutPreviewDialog.error }}</p>
+            <div
+              v-if="layoutPreviewUploading[entityId(layoutPreviewDialog.row.order_item) || layoutPreviewDialog.row.id]"
+              class="symbolika-layout-progress"
+            >
+              <div class="symbolika-layout-progress-head">
+                <strong>Загружаем превью на Яндекс.Диск</strong>
+                <span>{{ previewUploadPercent(layoutPreviewDialog.row) }}%</span>
+              </div>
+              <div class="symbolika-layout-progress-track"><span :style="{ inlineSize: previewUploadPercent(layoutPreviewDialog.row) + '%' }"></span></div>
+            </div>
+
+            <div class="symbolika-costing-modal-actions">
+              <button type="button" class="symbolika-costing-mini-button" :disabled="!!layoutPreviewUploading[entityId(layoutPreviewDialog.row.order_item) || layoutPreviewDialog.row.id]" @click="closeLayoutPreviewDialog">Отмена</button>
+              <button type="button" class="symbolika-costing-button" :disabled="!layoutPreviewDialog.file || !!layoutPreviewUploading[entityId(layoutPreviewDialog.row.order_item) || layoutPreviewDialog.row.id]" @click="uploadOrderItemLayoutPreview">
+                <v-icon :name="layoutPreviewUploading[entityId(layoutPreviewDialog.row.order_item) || layoutPreviewDialog.row.id] ? 'progress_activity' : 'cloud_upload'" small />
+                {{ layoutPreviewUploading[entityId(layoutPreviewDialog.row.order_item) || layoutPreviewDialog.row.id] ? 'Загружаем…' : 'Сохранить превью' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="layoutPreviewLightbox" class="symbolika-costing-modal-backdrop symbolika-layout-lightbox" @click.self="closeLayoutPreviewLightbox">
+          <div class="symbolika-layout-lightbox-panel">
+            <div class="symbolika-layout-lightbox-head">
+              <strong>{{ layoutPreviewLightbox.name }}</strong>
+              <button type="button" class="symbolika-costing-detail-close" @click="closeLayoutPreviewLightbox">×</button>
+            </div>
+            <img :src="layoutPreviewLightbox.url" :alt="layoutPreviewLightbox.name" />
+          </div>
+        </div>
+
         <button type="button" class="symbolika-costing-feedback-button" title="Сообщить об ошибке" @click="openFeedbackDialog">
           <v-icon name="bug_report" small /><span>Сообщить об ошибке</span>
         </button>
@@ -29289,6 +29770,31 @@ export const CostingModule = {
                 <small v-if="detail.row.layout_disk_name" class="symbolika-layout-upload-meta">
                   {{ detail.row.layout_disk_name }} · {{ formatFileSize(detail.row.layout_disk_size) }} · Яндекс Диск
                 </small>
+                <div class="symbolika-layout-preview-card" :class="{ 'has-preview': !!detail.row.layout_preview_url }">
+                  <button
+                    v-if="detail.row.layout_preview_url"
+                    type="button"
+                    class="symbolika-layout-preview-thumb"
+                    title="Открыть превью на весь экран"
+                    @click="openLayoutPreviewLightbox(detail.row)"
+                  >
+                    <img :src="layoutPreviewSrc(detail.row)" :alt="detail.row.layout_preview_disk_name || 'Превью макета'" />
+                    <span><v-icon name="fullscreen" small /> Открыть</span>
+                  </button>
+                  <div class="symbolika-layout-preview-copy">
+                    <strong>{{ detail.row.layout_preview_url ? 'Превью макета' : 'Превью не добавлено' }}</strong>
+                    <span>{{ detail.row.layout_preview_url ? (detail.row.layout_preview_disk_name || 'JPEG / PNG') : 'Добавьте JPEG/PNG для быстрого просмотра PDF или CDR' }}</span>
+                    <button
+                      type="button"
+                      class="symbolika-costing-mini-button"
+                      :disabled="!!layoutPreviewUploading[detail.row.id]"
+                      @click="openLayoutPreviewDialog(detail.row)"
+                    >
+                      <v-icon :name="detail.row.layout_preview_url ? 'swap_horiz' : 'add_photo_alternate'" small />
+                      {{ detail.row.layout_preview_url ? 'Заменить' : 'Добавить превью' }}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
             <div v-if="currentRoleName !== 'Дизайнер'" class="symbolika-costing-detail-field is-primary">

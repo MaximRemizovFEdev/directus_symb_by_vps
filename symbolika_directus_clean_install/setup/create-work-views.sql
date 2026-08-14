@@ -249,6 +249,13 @@ ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS layout_disk_size bigint;
 ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS layout_disk_mime_type character varying(255);
 ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS layout_disk_uploaded_by uuid REFERENCES directus_users(id) ON DELETE SET NULL;
 ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS layout_disk_uploaded_at timestamptz;
+ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS layout_preview_url text;
+ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS layout_preview_disk_path text;
+ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS layout_preview_disk_name text;
+ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS layout_preview_disk_size bigint;
+ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS layout_preview_disk_mime_type character varying(255);
+ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS layout_preview_uploaded_by uuid REFERENCES directus_users(id) ON DELETE SET NULL;
+ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS layout_preview_uploaded_at timestamptz;
 ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS internal_route_production boolean NOT NULL DEFAULT false;
 ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS internal_route_screen boolean NOT NULL DEFAULT false;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS commission_manager_employee integer REFERENCES employees(id) ON DELETE SET NULL;
@@ -11278,6 +11285,15 @@ WHERE collection = 'orders_items'
   AND fields <> '*'
   AND fields NOT LIKE '%layout_disk_name%';
 
+UPDATE directus_permissions
+SET fields = fields || ',layout_preview_url,layout_preview_disk_path,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at'
+WHERE collection = 'orders_items'
+  AND action = 'read'
+  AND policy IN ('00000000-0000-4000-8000-000000000201', '00000000-0000-4000-8000-000000000202')
+  AND fields IS NOT NULL
+  AND fields <> '*'
+  AND fields NOT LIKE '%layout_preview_url%';
+
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
 VALUES
   ('symbolika_tasks', 'read', '{"task_type":{"_eq":"design"}}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000208'),
@@ -11296,7 +11312,7 @@ VALUES
   ('symbolika_task_attachments', 'delete', '{"task":{"task_type":{"_eq":"design"}}}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000208'),
   ('directus_files', 'create', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000208'),
   ('directus_files', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000208'),
-  ('orders_items', 'read', '{"needs_designer_help":{"_eq":true}}'::json, NULL, NULL, 'id,order,product_name,quantity,deadline,technical_task_text,url,needs_designer_help,designer_comment,designer_source_url', '00000000-0000-4000-8000-000000000208'),
+  ('orders_items', 'read', '{"needs_designer_help":{"_eq":true}}'::json, NULL, NULL, 'id,order,product_name,quantity,deadline,technical_task_text,url,needs_designer_help,designer_comment,designer_source_url,layout_preview_url,layout_preview_disk_path,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at', '00000000-0000-4000-8000-000000000208'),
   ('orders_items', 'update', '{"needs_designer_help":{"_eq":true}}'::json, NULL, NULL, 'url', '00000000-0000-4000-8000-000000000208'),
   ('orders', 'read', '{}'::json, NULL, NULL, 'id,order_number,customer,customer_company,manager_employee,deadline', '00000000-0000-4000-8000-000000000208'),
   ('employees', 'read', '{}'::json, NULL, NULL, 'id,full_name,directus_user', '00000000-0000-4000-8000-000000000208'),
@@ -12635,7 +12651,7 @@ WITH self_sales_policies(policy) AS (
       'order,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url'),
     ('orders_items', 'read', '{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}'::json,
       NULL::json, NULL::json,
-      'id,order,order_link,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,production_status,deadline,production_comment,technical_task_text,manager_employee,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url,layout_revision_url_snapshot,layout_disk_path,layout_disk_name,layout_disk_size,layout_disk_mime_type,layout_disk_uploaded_at'),
+      'id,order,order_link,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,production_status,deadline,production_comment,technical_task_text,manager_employee,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url,layout_revision_url_snapshot,layout_disk_path,layout_disk_name,layout_disk_size,layout_disk_mime_type,layout_disk_uploaded_at,layout_preview_url,layout_preview_disk_path,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at'),
     ('orders_items', 'update', '{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}'::json,
       NULL::json, NULL::json,
       'product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url'),
