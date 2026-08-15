@@ -19742,22 +19742,22 @@ export const CostingModule = {
           width: 28px !important;
         }
 
-        .symbolika-costing-table-my-orders col:nth-child(2) { width: 15% !important; }
-        .symbolika-costing-table-my-orders col:nth-child(3) { width: 18% !important; }
-        .symbolika-costing-table-my-orders col:nth-child(4) { width: 14% !important; }
-        .symbolika-costing-table-my-orders col:nth-child(5) { width: 31% !important; }
-        .symbolika-costing-table-my-orders col:nth-child(6) { width: 20% !important; }
-
+        .symbolika-costing-table-my-orders col:nth-child(2),
         .symbolika-costing-table-all-orders col:nth-child(2),
         .symbolika-costing-table-archive-orders col:nth-child(2) { width: 15% !important; }
+        .symbolika-costing-table-my-orders col:nth-child(3),
         .symbolika-costing-table-all-orders col:nth-child(3),
         .symbolika-costing-table-archive-orders col:nth-child(3) { width: 16% !important; }
+        .symbolika-costing-table-my-orders col:nth-child(4),
         .symbolika-costing-table-all-orders col:nth-child(4),
         .symbolika-costing-table-archive-orders col:nth-child(4) { width: 13% !important; }
+        .symbolika-costing-table-my-orders col:nth-child(5),
         .symbolika-costing-table-all-orders col:nth-child(5),
         .symbolika-costing-table-archive-orders col:nth-child(5) { width: 28% !important; }
+        .symbolika-costing-table-my-orders col:nth-child(6),
         .symbolika-costing-table-all-orders col:nth-child(6),
         .symbolika-costing-table-archive-orders col:nth-child(6) { width: 5% !important; }
+        .symbolika-costing-table-my-orders col:nth-child(7),
         .symbolika-costing-table-all-orders col:nth-child(7),
         .symbolika-costing-table-archive-orders col:nth-child(7) { width: 17% !important; }
 
