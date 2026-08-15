@@ -1,7 +1,7 @@
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const APPEARANCE_THEMES = new Set(['graphite', 'espresso', 'pearl', 'frost']);
-const NOTIFICATION_TOPICS = ['order_status', 'item_status', 'new_tasks', 'task_updates', 'production', 'procurement', 'mail', 'finance'];
+const NOTIFICATION_TOPICS = ['order_status', 'item_status', 'new_tasks', 'task_updates', 'production', 'procurement', 'mail', 'finance', 'birthdays'];
 const DEFAULT_NOTIFICATION_TOPICS = {
   order_status: true,
   item_status: true,
@@ -11,6 +11,7 @@ const DEFAULT_NOTIFICATION_TOPICS = {
   procurement: true,
   mail: false,
   finance: true,
+  birthdays: true,
 };
 
 function cleanText(value, maxLength) {
@@ -55,6 +56,7 @@ function notificationLink(collection, item) {
   if (collection === 'procurement_requests') return `/admin/symbolika-procurement${query('request')}`;
   if (collection === 'production_work' || collection === 'screen_printing_work') return `/admin/symbolika-production${query('item')}`;
   if (collection === 'customers' || collection === 'customer_companies') return '/admin/symbolika-orders';
+  if (collection === 'employees') return '/admin/symbolika-notifications-module';
   return '/admin/symbolika-orders';
 }
 
@@ -64,6 +66,7 @@ function notificationKind(collection) {
   if (collection === 'symbolika_tasks') return 'task';
   if (collection === 'symbolika_mail_threads') return 'mail';
   if (collection === 'procurement_requests') return 'procurement';
+  if (collection === 'employees') return 'birthday';
   return 'system';
 }
 
@@ -94,7 +97,7 @@ export default {
         .select(
           'u.id', 'u.email', 'u.first_name', 'u.last_name', 'u.avatar',
           'u.phone as profile_phone', 'u.symbolika_theme', 'r.name as role_name',
-          'e.id as employee_id', 'e.full_name as employee_name', 'e.phone as employee_phone',
+          'e.id as employee_id', 'e.full_name as employee_name', 'e.phone as employee_phone', 'e.birthday as employee_birthday',
           'ep.name as position_name',
           'c.id as contractor_id', 'c.name as contractor_name', 'c.phone as contractor_phone',
         )
@@ -121,6 +124,7 @@ export default {
           contractor_id: row.contractor_id || null,
           name: row.employee_name || row.contractor_name || [row.first_name, row.last_name].filter(Boolean).join(' ') || row.email,
           position: row.position_name || (row.contractor_id ? 'Контрагент' : row.role_name) || '',
+          birthday: row.employee_birthday || null,
         },
         salary,
         salary_history: salaryHistory,
@@ -453,6 +457,23 @@ export default {
           update.phone = phone || null;
         }
 
+        let birthday;
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, 'birthday')) {
+          const value = cleanText(req.body.birthday, 10);
+          if (value) {
+            const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            const date = match ? new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))) : null;
+            const valid = date
+              && date.getUTCFullYear() === Number(match[1])
+              && date.getUTCMonth() === Number(match[2]) - 1
+              && date.getUTCDate() === Number(match[3])
+              && Number(match[1]) >= 1900
+              && date <= new Date();
+            if (!valid) return res.status(400).json({ errors: [{ message: 'Укажите корректную дату рождения.' }] });
+          }
+          birthday = value || null;
+        }
+
         if (Object.prototype.hasOwnProperty.call(req.body || {}, 'avatar')) {
           const avatar = req.body.avatar || null;
           if (avatar !== null && !UUID_PATTERN.test(String(avatar))) {
@@ -472,6 +493,9 @@ export default {
           if (phone !== undefined) {
             await trx('employees').where('directus_user', userId).update({ phone: phone || null });
             await trx('contractors').where('directus_user', userId).update({ phone: phone || null });
+          }
+          if (birthday !== undefined) {
+            await trx('employees').where('directus_user', userId).update({ birthday });
           }
           if (update.email) {
             await trx('contractors').where('directus_user', userId).update({ email: update.email });

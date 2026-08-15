@@ -516,6 +516,7 @@ const notificationTopicChoices = [
   { id: 'procurement', title: 'Закупки', description: 'Новые заявки и изменение закупочных задач.', icon: 'local_shipping' },
   { id: 'mail', title: 'Новые письма', description: 'Входящие письма в доступных вам почтовых папках.', icon: 'mail' },
   { id: 'finance', title: 'Финансы', description: 'Оплаты, задолженности и финансовые события.', icon: 'payments' },
+  { id: 'birthdays', title: 'Дни рождения', description: 'Напоминания о днях рождения коллег за неделю и в сам день.', icon: 'cake' },
 ];
 
 const tableSortOptions = [
@@ -846,10 +847,11 @@ const adminConfigs = {
     endpoint: '/items/employees',
     title: 'Сотрудники',
     sort: 'full_name',
-    fields: 'id,full_name,phone,public_position,position,salary_fixed,order_percent,is_active,directus_user',
+    fields: 'id,full_name,phone,birthday,public_position,position,salary_fixed,order_percent,is_active,directus_user',
     columns: [
       { key: 'full_name', label: 'ФИО', type: 'text', required: true, wide: true },
       { key: 'phone', label: 'Телефон', type: 'text' },
+      { key: 'birthday', label: 'Дата рождения', type: 'date' },
       { key: 'position', label: 'Должность', type: 'relation', options: 'employeePositions' },
       { key: 'public_position', label: 'Публичная должность', type: 'text', wide: true },
       { key: 'salary_fixed', label: 'Оклад', type: 'money' },
@@ -1357,11 +1359,12 @@ export const CostingModule = {
           procurement: true,
           mail: false,
           finance: true,
+          birthdays: true,
         },
       },
       notificationTopicChoices,
       profileData: null,
-      profileForm: { email: '', phone: '' },
+      profileForm: { email: '', phone: '', birthday: '' },
       appearanceThemes,
       appearanceTheme: 'graphite',
       appearanceThemeSaving: false,
@@ -4519,11 +4522,11 @@ export const CostingModule = {
     },
 
     notificationKindLabel(kind) {
-      return ({ order: 'Заказ', item: 'Позиция', task: 'Задача', procurement: 'Закупка', mail: 'Почта', system: 'Система' })[kind] || 'Система';
+      return ({ order: 'Заказ', item: 'Позиция', task: 'Задача', procurement: 'Закупка', mail: 'Почта', birthday: 'День рождения', system: 'Система' })[kind] || 'Система';
     },
 
     notificationKindIcon(kind) {
-      return ({ order: 'assignment', item: 'inventory_2', task: 'task_alt', procurement: 'local_shipping', mail: 'mail', system: 'notifications' })[kind] || 'notifications';
+      return ({ order: 'assignment', item: 'inventory_2', task: 'task_alt', procurement: 'local_shipping', mail: 'mail', birthday: 'cake', system: 'notifications' })[kind] || 'notifications';
     },
 
     notificationDate(value) {
@@ -4640,6 +4643,7 @@ export const CostingModule = {
         this.profileForm = {
           email: this.profileData?.user?.email || '',
           phone: this.profileData?.user?.phone || '',
+          birthday: this.profileData?.person?.birthday || '',
         };
         if (this.profileData?.user?.symbolika_theme) this.applyAppearanceTheme(this.profileData.user.symbolika_theme);
         if (this.profileData?.person?.employee_id) {
@@ -4664,12 +4668,14 @@ export const CostingModule = {
           body: JSON.stringify({
             email: String(this.profileForm.email || '').trim(),
             phone: String(this.profileForm.phone || '').trim(),
+            birthday: this.profileData?.person?.employee_id ? String(this.profileForm.birthday || '').trim() : undefined,
           }),
         });
         this.profileData = payload?.data || this.profileData;
         this.profileForm = {
           email: this.profileData?.user?.email || '',
           phone: this.profileData?.user?.phone || '',
+          birthday: this.profileData?.person?.birthday || '',
         };
         this.profileSavedMessage = 'Контактные данные сохранены';
       } catch (error) {
@@ -24112,6 +24118,10 @@ export const CostingModule = {
                 <label class="symbolika-costing-label">
                   Email
                   <input v-model.trim="profileForm.email" class="symbolika-costing-input" type="email" placeholder="mail@example.ru" autocomplete="email" required />
+                </label>
+                <label v-if="profileData.person.employee_id" class="symbolika-costing-label">
+                  Дата рождения
+                  <input v-model="profileForm.birthday" class="symbolika-costing-input" type="date" autocomplete="bday" />
                 </label>
                 <div class="symbolika-profile-contact-actions">
                   <span v-if="profileSavedMessage" class="symbolika-profile-saved"><v-icon name="check_circle" small />{{ profileSavedMessage }}</span>

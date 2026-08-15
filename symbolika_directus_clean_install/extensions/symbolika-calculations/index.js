@@ -1,7 +1,7 @@
 import webPush from 'web-push';
 import nodemailer from 'nodemailer';
 
-export default ({ filter, action }, { database, logger, env }) => {
+export default ({ filter, action, schedule }, { database, logger, env }) => {
   const num = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
   const round = (v) => Math.round(num(v) * 100) / 100;
   const isEmpty = (v) => v === null || v === undefined || v === '';
@@ -24,6 +24,7 @@ export default ({ filter, action }, { database, logger, env }) => {
     procurement: true,
     mail: false,
     finance: true,
+    birthdays: true,
   };
 
   const prevOrders = new Map();
@@ -309,6 +310,7 @@ export default ({ filter, action }, { database, logger, env }) => {
     if (collection === 'screen_printing_work') return `/admin/symbolika-production?item=${encodeURIComponent(item)}`;
     if (collection === 'office_issue' || collection === 'office_items_in_office') return `/admin/symbolika-orders?order=${encodeURIComponent(item)}`;
     if (collection === 'customers' || collection === 'customer_companies') return '/admin/symbolika-orders';
+    if (collection === 'employees') return '/admin/symbolika-notifications-module';
     return '/admin/symbolika-orders';
   }
 
@@ -753,8 +755,8 @@ export default ({ filter, action }, { database, logger, env }) => {
   }
 
   async function notifyUser(recipient, subject, message, collection = null, item = null, topic = 'system') {
-    if (!recipient || !subject) return;
-    if (!await employeeTopicEnabled(recipient, topic)) return;
+    if (!recipient || !subject) return null;
+    if (!await employeeTopicEnabled(recipient, topic)) return null;
 
     const inserted = await database('directus_notifications').insert({
       status: 'inbox',
@@ -772,6 +774,7 @@ export default ({ filter, action }, { database, logger, env }) => {
         logger.warn({ recipient, notificationId, error: error?.message || error }, '[Symbolika employee notification] delivery pipeline failed');
       }
     }
+    return notificationId ?? null;
   }
 
   async function notifyUsers(recipients, subject, message, collection = null, item = null, topic = 'system') {
@@ -781,6 +784,96 @@ export default ({ filter, action }, { database, logger, env }) => {
       await notifyUser(recipient, subject, message, collection, item, topic);
     }
   }
+
+  function moscowToday() {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date()).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+    return { year: Number(parts.year), month: Number(parts.month), day: Number(parts.day) };
+  }
+
+  function birthdayOccurrence(birthday, year) {
+    const match = String(birthday || '').slice(0, 10).match(/^\d{4}-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    return new Date(Date.UTC(year, Number(match[1]) - 1, Number(match[2])));
+  }
+
+  function formatBirthdayDate(birthday) {
+    const occurrence = birthdayOccurrence(birthday, 2000);
+    return occurrence ? new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' }).format(occurrence) : '';
+  }
+
+  async function runBirthdayNotifications() {
+    const today = moscowToday();
+    const todayUtc = new Date(Date.UTC(today.year, today.month - 1, today.day));
+    const employees = await database('employees as e')
+      .join('directus_users as u', 'u.id', 'e.directus_user')
+      .where('e.is_active', true)
+      .where('u.status', 'active')
+      .whereNotNull('e.birthday')
+      .select('e.id', 'e.full_name', 'e.birthday');
+    const recipients = await database('employees as e')
+      .join('directus_users as u', 'u.id', 'e.directus_user')
+      .where('e.is_active', true)
+      .where('u.status', 'active')
+      .whereNotNull('e.directus_user')
+      .distinct('e.directus_user as user');
+
+    let sent = 0;
+    for (const employee of employees) {
+      let occurrence = birthdayOccurrence(employee.birthday, today.year);
+      if (!occurrence) continue;
+      if (occurrence < todayUtc) occurrence = birthdayOccurrence(employee.birthday, today.year + 1);
+      const daysUntil = Math.round((occurrence - todayUtc) / 86400000);
+      if (![0, 7].includes(daysUntil)) continue;
+      const birthdayYear = occurrence.getUTCFullYear();
+      const subject = daysUntil === 0
+        ? `Сегодня день рождения у ${employee.full_name}`
+        : `Через неделю день рождения у ${employee.full_name}`;
+      const message = daysUntil === 0
+        ? `Сегодня, ${formatBirthdayDate(employee.birthday)}, день рождения у нашего коллеги ${employee.full_name}.`
+        : `${formatBirthdayDate(employee.birthday)} день рождения у нашего коллеги ${employee.full_name}.`;
+
+      for (const recipient of recipients) {
+        if (!await employeeTopicEnabled(recipient.user, 'birthdays')) continue;
+        const inserted = await database('symbolika_birthday_notification_log')
+          .insert({
+            birthday_employee: employee.id,
+            birthday_year: birthdayYear,
+            reminder_days: daysUntil,
+            recipient: recipient.user,
+            created_at: database.fn.now(),
+          })
+          .onConflict(['birthday_employee', 'birthday_year', 'reminder_days', 'recipient'])
+          .ignore()
+          .returning('id');
+        const logId = inserted?.[0]?.id ?? inserted?.[0];
+        if (!logId) continue;
+        try {
+          const notificationId = await notifyUser(recipient.user, subject, message, 'employees', employee.id, 'birthdays');
+          await database('symbolika_birthday_notification_log').where('id', logId).update({ notification: notificationId });
+          sent += 1;
+        } catch (error) {
+          await database('symbolika_birthday_notification_log').where('id', logId).delete();
+          throw error;
+        }
+      }
+    }
+    await recordAutomationRun('employee_birthdays', 'Дни рождения сотрудников', 'ok', { sent, date: `${today.year}-${String(today.month).padStart(2, '0')}-${String(today.day).padStart(2, '0')}` });
+  }
+
+  async function safelyRunBirthdayNotifications() {
+    try {
+      await runBirthdayNotifications();
+    } catch (error) {
+      logger.error({ error: error?.message || error }, '[Symbolika birthdays] notification run failed');
+      await recordAutomationRun('employee_birthdays', 'Дни рождения сотрудников', 'error', {}, error);
+    }
+  }
+
+  if (typeof schedule === 'function') schedule('5 * * * *', safelyRunBirthdayNotifications);
+  const birthdayStartupTimer = setTimeout(safelyRunBirthdayNotifications, 15000);
+  birthdayStartupTimer.unref?.();
 
   async function notifyManager(employeeId, subject, message, collection = null, item = null, topic = 'system') {
     const userId = await getEmployeeUserId(employeeId);

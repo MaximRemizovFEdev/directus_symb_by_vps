@@ -89,7 +89,10 @@ CREATE TABLE IF NOT EXISTS symbolika_employee_notification_settings (
 );
 
 ALTER TABLE symbolika_employee_notification_settings
-  ADD COLUMN IF NOT EXISTS topics jsonb NOT NULL DEFAULT '{"order_status":true,"item_status":true,"new_tasks":true,"task_updates":true,"production":true,"procurement":true,"mail":false,"finance":true}'::jsonb;
+  ADD COLUMN IF NOT EXISTS topics jsonb NOT NULL DEFAULT '{"order_status":true,"item_status":true,"new_tasks":true,"task_updates":true,"production":true,"procurement":true,"mail":false,"finance":true,"birthdays":true}'::jsonb;
+
+ALTER TABLE symbolika_employee_notification_settings
+  ALTER COLUMN topics SET DEFAULT '{"order_status":true,"item_status":true,"new_tasks":true,"task_updates":true,"production":true,"procurement":true,"mail":false,"finance":true,"birthdays":true}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS symbolika_employee_notification_deliveries (
   id bigserial PRIMARY KEY,
@@ -220,7 +223,20 @@ ALTER TABLE office_issue_archive ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE office_items_in_office ADD COLUMN IF NOT EXISTS order_link integer;
 
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS phone character varying(255);
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS birthday date;
 ALTER TABLE directus_users ADD COLUMN IF NOT EXISTS phone character varying(255);
+
+CREATE TABLE IF NOT EXISTS symbolika_birthday_notification_log (
+  id bigserial PRIMARY KEY,
+  birthday_employee integer NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  birthday_year integer NOT NULL,
+  reminder_days integer NOT NULL,
+  recipient uuid NOT NULL REFERENCES directus_users(id) ON DELETE CASCADE,
+  notification bigint,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (birthday_employee, birthday_year, reminder_days, recipient),
+  CHECK (reminder_days IN (0, 7))
+);
 
 UPDATE directus_users u
 SET phone = e.phone
@@ -3940,6 +3956,20 @@ INSERT INTO directus_fields (
   false, false, 4, 'full',
   '[{"language":"ru-RU","translation":"РўРµР»РµС„РѕРЅ"}]'::json,
   false, true
+);
+
+DELETE FROM directus_fields
+WHERE collection = 'employees'
+  AND field = 'birthday';
+
+INSERT INTO directus_fields (
+  collection, field, special, interface, options, display, display_options,
+  readonly, hidden, sort, width, translations, required, searchable
+) VALUES (
+  'employees', 'birthday', NULL, 'datetime', '{"includeSeconds":false,"use24":true}'::json, 'datetime', '{"format":"dd.MM.yyyy"}'::json,
+  false, false, 6, 'half',
+  json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0430\0442\0430 \0440\043e\0436\0434\0435\043d\0438\044f'))::json,
+  false, false
 );
 
 UPDATE directus_fields
