@@ -1091,9 +1091,11 @@ export default {
         const actor = await actorContext(req, res);
         if (!actor) return;
         if (!actor.is_admin) return apiError(res, 403, 'Подписи сотрудников может настраивать только администратор или управляющий.');
+        const employeeId = Number(req.params.id);
+        if (!Number.isInteger(employeeId) || employeeId <= 0) return apiError(res, 400, 'Некорректный идентификатор сотрудника.');
         const employee = await database('employees as e')
           .leftJoin('directus_users as u', 'u.id', 'e.directus_user')
-          .where('e.id', Number(req.params.id))
+          .where('e.id', employeeId)
           .first('e.id', 'e.full_name', 'e.email_signature_settings', 'e.public_position', 'e.phone', 'u.email');
         if (!employee) return apiError(res, 404, 'Сотрудник не найден.');
         const signature = sanitizeSignatureHtml(req.body?.signature) || null;

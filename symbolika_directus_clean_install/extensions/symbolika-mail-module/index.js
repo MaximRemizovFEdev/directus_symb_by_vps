@@ -428,10 +428,11 @@ const MailWorkspace = {
     },
 
     openSignatureDialog(employee = null) {
-      this.signatureTargetEmployee = employee || null;
-      this.signatureForm = employee?.email_signature ?? this.actor?.signature_custom ?? '';
-      this.signatureSettings = { ...(employee?.signature_settings || this.actor?.signature_settings || {}) };
-      this.signatureDefaults = { ...(employee?.signature_defaults || this.actor?.signature_defaults || {}) };
+      const targetEmployee = employee && Number.isInteger(Number(employee.id)) ? employee : null;
+      this.signatureTargetEmployee = targetEmployee;
+      this.signatureForm = targetEmployee?.email_signature ?? this.actor?.signature_custom ?? '';
+      this.signatureSettings = { ...(targetEmployee?.signature_settings || this.actor?.signature_settings || {}) };
+      this.signatureDefaults = { ...(targetEmployee?.signature_defaults || this.actor?.signature_defaults || {}) };
       this.signatureLinkVisible = false;
       this.signatureLinkForm = { text: '', url: 'https://' };
       this.showSignatureDialog = true;
@@ -486,6 +487,9 @@ const MailWorkspace = {
       if (this.$refs.signatureEditor) this.signatureForm = this.$refs.signatureEditor.innerHTML;
       this.signatureSaving = true;
       try {
+        if (this.signatureTargetEmployee && !Number.isInteger(Number(this.signatureTargetEmployee.id))) {
+          throw new Error('Не удалось определить сотрудника для сохранения подписи. Закройте окно и откройте его снова.');
+        }
         const endpoint = this.signatureTargetEmployee
           ? `/symbolika-mail/employees/${this.signatureTargetEmployee.id}/signature`
           : '/symbolika-mail/signature';
@@ -1189,7 +1193,7 @@ const MailWorkspace = {
               <button type="button" class="symbolika-mail-icon-button" :disabled="syncing" title="Получить новые письма" @click="syncMailbox(false)">
                 <v-icon name="sync" small />
               </button>
-              <button type="button" class="symbolika-mail-icon-button" title="Моя подпись" @click="openSignatureDialog"><v-icon name="draw" small /></button>
+              <button type="button" class="symbolika-mail-icon-button" title="Моя подпись" @click="openSignatureDialog()"><v-icon name="draw" small /></button>
               <button v-if="actor?.is_admin" type="button" class="symbolika-mail-icon-button" title="Настройки почты" @click="openSettingsDialog">
                 <v-icon name="settings" small />
               </button>
