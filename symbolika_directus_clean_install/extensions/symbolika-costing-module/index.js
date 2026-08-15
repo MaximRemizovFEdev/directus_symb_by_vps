@@ -811,8 +811,7 @@ const adminConfigs = {
       { key: 'section', label: 'Участок', type: 'select', choices: [
         { value: 'production', text: 'Производство' },
         { value: 'screen_printing', text: 'Шелкография' },
-        { value: 'textile', text: 'Текстиль' },
-        { value: 'merch', text: 'Сувенирка' },
+        { value: 'office', text: 'Офис' },
         { value: 'general', text: 'Общее' },
       ] },
       { key: 'supplier', label: 'Поставщик', type: 'relation', options: 'procurementSuppliers', allowOther: true, allowProposal: true },

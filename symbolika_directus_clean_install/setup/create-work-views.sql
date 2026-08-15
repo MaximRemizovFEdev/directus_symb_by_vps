@@ -695,6 +695,12 @@ SET request_source = CASE
       ELSE purchase_source_type
     END;
 
+-- Procurement sections describe the responsible internal department, not the
+-- kind of purchased product. Keep legacy requests visible under Production.
+UPDATE procurement_requests
+SET section = 'production'
+WHERE section IN ('textile', 'merch');
+
 ALTER TABLE procurement_batches ADD COLUMN IF NOT EXISTS batch_number character varying(64) NOT NULL DEFAULT concat('PO-', lpad(nextval('procurement_batch_number_seq')::text, 5, '0'));
 ALTER TABLE procurement_batches ADD COLUMN IF NOT EXISTS supplier integer REFERENCES contractors(id) ON DELETE SET NULL;
 ALTER TABLE procurement_batches ADD COLUMN IF NOT EXISTS purchase_source_type character varying(64) NOT NULL DEFAULT 'supplier';
@@ -9535,7 +9541,12 @@ BEGIN
   purchase_task_title := concat('Закупить: ', COALESCE(NULLIF(request_row.product_name, ''), 'позиция'));
   purchase_task_description := concat_ws(E'\n',
     concat('Количество: ', trim(to_char(COALESCE(request_row.quantity, 0), 'FM999999990.###')), ' ', COALESCE(request_row.unit, 'шт.')),
-    concat('Участок: ', COALESCE(request_row.section, 'general')),
+    concat('Участок: ', CASE COALESCE(request_row.section, 'general')
+      WHEN 'production' THEN 'Производство'
+      WHEN 'screen_printing' THEN 'Шелкография'
+      WHEN 'office' THEN 'Офис'
+      ELSE 'Общее'
+    END),
     concat('Поставщик: ', COALESCE(request_row.supplier_name, 'не выбран')),
     CASE WHEN request_row.order_number IS NOT NULL THEN concat('Заказ: ', request_row.order_number) END,
     CASE WHEN request_row.auto_generated THEN 'Источник: минимальный остаток склада' ELSE 'Источник: ручная заявка' END,
@@ -9808,11 +9819,7 @@ BEGIN
   FROM contractors
   WHERE id = item_row.contractor_1;
 
-  source_section := CASE
-    WHEN COALESCE(supplier_row.supplies_textile_blanks, false) THEN 'textile'
-    WHEN COALESCE(supplier_row.supplies_merch_blanks, false) THEN 'merch'
-    ELSE 'general'
-  END;
+  source_section := 'production';
 
   computed_pickup_deadline := CASE
     WHEN supplier_row.default_pickup_days IS NOT NULL THEN current_date + supplier_row.default_pickup_days
@@ -14042,6 +14049,17 @@ WHERE collection = 'contractors'
   AND action = 'read'
   AND fields <> '*'
   AND position('supplier_kind' in fields) = 0;
+
+UPDATE directus_fields
+SET interface = 'select-dropdown',
+    options = json_build_object('choices', json_build_array(
+      json_build_object('text', 'Производство', 'value', 'production'),
+      json_build_object('text', 'Шелкография', 'value', 'screen_printing'),
+      json_build_object('text', 'Офис', 'value', 'office'),
+      json_build_object('text', 'Общее', 'value', 'general')
+    ))::json
+WHERE collection = 'procurement_requests'
+  AND field = 'section';
 
 COMMIT;
 
