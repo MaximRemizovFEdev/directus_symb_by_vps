@@ -5,11 +5,15 @@ import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const MAIL_ROLES = new Set(['Administrator', 'Управляющий', 'Менеджер']);
 const ADMIN_ROLES = new Set(['Administrator', 'Управляющий']);
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const MAIL_ATTACHMENT_ROOT = '/directus/uploads/symbolika-mail';
+const BRAND_LOGO_FILE = fileURLToPath(new URL('./assets/symbolika-logo.png', import.meta.url));
+const BRAND_LOGO_URL = 'https://symbcorp.ru/symbolika-mail/brand-logo.png';
+const LEGACY_BRAND_LOGO_URL = 'https://static.tildacdn.com/tild6465-3739-4736-b565-653037393965/2.png';
 
 function cleanText(value, max = 5000) {
   return String(value ?? '').trim().slice(0, max);
@@ -77,7 +81,7 @@ const SIGNATURE_DEFAULTS = Object.freeze({
   vk_url: 'https://vk.com/universymbols',
   slogan_line_1: 'Создаём бренд. Печатаем идеи.',
   slogan_line_2: 'Работаем с вниманием к деталям.',
-  logo_url: 'https://static.tildacdn.com/tild6465-3739-4736-b565-653037393965/2.png',
+  logo_url: BRAND_LOGO_URL,
 });
 
 function jsonObject(value) {
@@ -118,11 +122,13 @@ function signatureSettings(employee, email, input = undefined) {
     address: text('address', 500), map_url: safeUrl(text('map_url', 1500), defaults.map_url),
     vk_label: text('vk_label', 255), vk_url: safeUrl(text('vk_url', 1500), defaults.vk_url),
     slogan_line_1: text('slogan_line_1', 500), slogan_line_2: text('slogan_line_2', 500),
-    logo_url: safeUrl(text('logo_url', 1500), defaults.logo_url),
+    logo_url: safeUrl(text('logo_url', 1500), defaults.logo_url) === LEGACY_BRAND_LOGO_URL
+      ? BRAND_LOGO_URL
+      : safeUrl(text('logo_url', 1500), defaults.logo_url),
   };
 }
 
-function brandedSignatureHtml(employee, email) {
+function legacyBrandedSignatureHtml(employee, email) {
   const settings = signatureSettings(employee, email);
   const phoneLink = settings.phone.replace(/[^+\d]/g, '');
   const contactRow = (icon, content, href = '') => content ? `<tr><td style="padding:5px 10px 5px 0;vertical-align:middle"><span style="display:inline-block;width:26px;height:26px;border-radius:50%;background:#f97316;color:#fff;text-align:center;line-height:26px;font-size:13px">${icon}</span></td><td style="padding:5px 0;border-bottom:1px solid #46515e;color:#f5f7fa;font-size:13px;line-height:18px">${href ? `<a href="${escapeHtml(href)}" style="color:#f5f7fa;text-decoration:none">${escapeHtml(content)}</a>` : escapeHtml(content)}</td></tr>` : '';
@@ -132,6 +138,19 @@ function brandedSignatureHtml(employee, email) {
 <td class="symb-cell symb-person" style="width:235px;padding:25px 28px;border-left:2px solid #f97316;vertical-align:middle"><div style="color:#f5f7fa;font-size:22px;font-weight:800;line-height:27px">${escapeHtml(settings.full_name)}</div><div style="margin-top:5px;color:#f97316;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase">${escapeHtml(settings.position)}</div><div style="width:38px;height:2px;margin:15px 0;background:#f97316"></div><div style="color:#c3c9d1;font-size:12px;font-style:italic;line-height:18px">${escapeHtml(settings.slogan_line_1)}${settings.slogan_line_2 ? `<br>${escapeHtml(settings.slogan_line_2)}` : ''}</div></td>
 <td class="symb-cell" style="padding:20px 24px;vertical-align:middle"><table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%">${contactRow('☎', settings.phone, phoneLink ? `tel:${phoneLink}` : '')}${contactRow('✉', settings.email, settings.email ? `mailto:${settings.email}` : '')}${contactRow('◎', settings.website_label, settings.website_url)}${contactRow('◉', settings.address, settings.map_url)}${contactRow('VK', settings.vk_label, settings.vk_url)}</table></td>
 </tr></table>${custom ? `<div style="max-width:760px;margin-top:10px;font-family:Arial,sans-serif;font-size:12px;color:#66717f">${custom}</div>` : ''}`;
+}
+
+function brandedSignatureHtml(employee, email) {
+  const settings = signatureSettings(employee, email);
+  const logoUrl = settings.logo_url === LEGACY_BRAND_LOGO_URL ? BRAND_LOGO_URL : settings.logo_url;
+  const phoneLink = settings.phone.replace(/[^+\d]/g, '');
+  const contactRow = (icon, content, href = '') => content ? `<tr><td style="padding:3px 7px 3px 0;vertical-align:middle"><span style="display:inline-block;width:20px;height:20px;border-radius:50%;background:#f97316;color:#fff;text-align:center;line-height:20px;font-size:9px;font-weight:700">${icon}</span></td><td style="padding:3px 0;border-bottom:1px solid #46515e;color:#f5f7fa;font-size:11px;line-height:14px">${href ? `<a href="${escapeHtml(href)}" style="color:#f5f7fa;text-decoration:none">${escapeHtml(content)}</a>` : escapeHtml(content)}</td></tr>` : '';
+  const custom = sanitizeSignatureHtml(employee?.email_signature);
+  return `<style>@media only screen and (max-width:480px){.symb-signature .symb-slogan{display:none!important}.symb-signature .symb-brand{width:82px!important;padding:10px!important}.symb-signature .symb-person{width:125px!important;padding:10px 12px!important}.symb-signature .symb-contacts{padding:8px 10px!important}}</style><table role="presentation" class="symb-signature" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;margin-top:14px;border:1px solid #39434f;border-radius:11px;background:#171c22;color:#f5f7fa;font-family:Arial,sans-serif"><tr>
+<td class="symb-cell symb-brand" style="width:112px;padding:14px;vertical-align:middle;text-align:center">${logoUrl ? `<img src="${escapeHtml(logoUrl)}" width="104" alt="Символика" style="display:block;width:104px;max-width:100%;height:auto;margin:0 auto">` : '<div style="font-size:18px;font-weight:800">Символика</div>'}</td>
+<td class="symb-cell symb-person" style="width:168px;padding:14px 16px;border-left:2px solid #f97316;vertical-align:middle"><div style="color:#f5f7fa;font-size:17px;font-weight:800;line-height:20px">${escapeHtml(settings.full_name)}</div><div style="margin-top:4px;color:#f97316;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase">${escapeHtml(settings.position)}</div><div style="width:30px;height:2px;margin:9px 0;background:#f97316"></div><div class="symb-slogan" style="color:#c3c9d1;font-size:10px;font-style:italic;line-height:14px">${escapeHtml(settings.slogan_line_1)}${settings.slogan_line_2 ? `<br>${escapeHtml(settings.slogan_line_2)}` : ''}</div></td>
+<td class="symb-cell symb-contacts" style="padding:10px 14px;vertical-align:middle"><table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%">${contactRow('&#9742;', settings.phone, phoneLink ? `tel:${phoneLink}` : '')}${contactRow('&#9993;', settings.email, settings.email ? `mailto:${settings.email}` : '')}${contactRow('www', settings.website_label, settings.website_url)}${contactRow('&#9679;', settings.address, settings.map_url)}${contactRow('VK', settings.vk_label, settings.vk_url)}</table></td>
+</tr></table>${custom ? `<div style="max-width:600px;margin-top:8px;font-family:Arial,sans-serif;font-size:11px;color:#66717f">${custom}</div>` : ''}`;
 }
 
 function boolEnv(value, fallback = false) {
@@ -207,6 +226,15 @@ export default {
   id: 'symbolika-mail',
   handler: (router, { database, env, logger }) => {
     let smtpTransport = null;
+
+    router.get('/brand-logo.png', (req, res, next) => {
+      res.set({
+        'Content-Type': 'image/png',
+        'Cache-Control': 'public, max-age=604800, immutable',
+        'Cross-Origin-Resource-Policy': 'cross-origin',
+      });
+      createReadStream(BRAND_LOGO_FILE).on('error', next).pipe(res);
+    });
 
     const mailMode = () => cleanText(env?.SYMBOLIKA_MAIL_MODE || 'mock', 20).toLowerCase();
 

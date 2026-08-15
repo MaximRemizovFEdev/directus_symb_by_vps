@@ -982,19 +982,19 @@ const MailWorkspace = {
         .symbolika-mail-signature-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
         .symbolika-mail-signature-grid .is-wide { grid-column: 1 / -1; }
         .symbolika-mail-signature-live > strong { display: block; margin-block-end: 12px; }
-        .symbolika-mail-signature-card { display: grid; grid-template-columns: minmax(145px, .7fr) minmax(180px, .9fr) minmax(210px, 1.1fr); overflow: hidden; min-block-size: 250px; border: 1px solid #3d4855; border-radius: 14px; background: #171c22; color: #f5f7fa; box-shadow: 0 14px 34px rgb(0 0 0 / .22); }
-        .symbolika-mail-signature-brand, .symbolika-mail-signature-person, .symbolika-mail-signature-contacts { display: flex; flex-direction: column; justify-content: center; min-inline-size: 0; padding: 20px; }
-        .symbolika-mail-signature-brand img { display: block; inline-size: 100%; max-inline-size: 175px; block-size: auto; margin: auto; }
-        .symbolika-mail-signature-brand b { font-size: 21px; text-align: center; }
+        .symbolika-mail-signature-card { display: grid; grid-template-columns: minmax(100px, .62fr) minmax(150px, .82fr) minmax(190px, 1.15fr); overflow: hidden; min-block-size: 168px; border: 1px solid #3d4855; border-radius: 11px; background: #171c22; color: #f5f7fa; box-shadow: 0 8px 22px rgb(0 0 0 / .18); }
+        .symbolika-mail-signature-brand, .symbolika-mail-signature-person, .symbolika-mail-signature-contacts { display: flex; flex-direction: column; justify-content: center; min-inline-size: 0; padding: 14px; }
+        .symbolika-mail-signature-brand img { display: block; inline-size: 100%; max-inline-size: 108px; block-size: auto; margin: auto; }
+        .symbolika-mail-signature-brand b { font-size: 18px; text-align: center; }
         .symbolika-mail-signature-person { border-inline-start: 2px solid #f97316; }
-        .symbolika-mail-signature-person h3 { margin: 0; color: #f5f7fa; font-size: clamp(18px, 2vw, 24px); line-height: 1.08; overflow-wrap: anywhere; }
-        .symbolika-mail-signature-person > b { margin-block-start: 6px; color: #f97316; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
-        .symbolika-mail-signature-person i { inline-size: 38px; block-size: 2px; margin-block: 15px; background: #f97316; }
-        .symbolika-mail-signature-person p { margin: 0; color: #c3c9d1; font-size: 11px; font-style: italic; line-height: 1.55; }
-        .symbolika-mail-signature-contacts { gap: 4px; }
-        .symbolika-mail-signature-contacts a { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 8px; min-block-size: 34px; color: #f5f7fa; text-decoration: none; }
+        .symbolika-mail-signature-person h3 { margin: 0; color: #f5f7fa; font-size: clamp(16px, 1.6vw, 19px); line-height: 1.08; overflow-wrap: anywhere; }
+        .symbolika-mail-signature-person > b { margin-block-start: 4px; color: #f97316; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+        .symbolika-mail-signature-person i { inline-size: 30px; block-size: 2px; margin-block: 9px; background: #f97316; }
+        .symbolika-mail-signature-person p { margin: 0; color: #c3c9d1; font-size: 10px; font-style: italic; line-height: 1.4; }
+        .symbolika-mail-signature-contacts { gap: 2px; }
+        .symbolika-mail-signature-contacts a { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: center; gap: 6px; min-block-size: 26px; color: #f5f7fa; text-decoration: none; }
         .symbolika-mail-signature-contacts a > b { color: #f97316; }
-        .symbolika-mail-signature-contacts a span { padding-block: 7px; border-block-end: 1px solid #46515e; font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
+        .symbolika-mail-signature-contacts a span { padding-block: 4px; border-block-end: 1px solid #46515e; font-size: 10px; line-height: 1.3; overflow-wrap: anywhere; }
         .symbolika-mail-editor-shell { overflow: hidden; border: 1px solid var(--theme--border-color); border-radius: 12px; background: var(--theme--background); }
         .symbolika-mail-editor-toolbar { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px; border-block-end: 1px solid var(--theme--border-color-subdued); background: var(--theme--background-subdued); }
         .symbolika-mail-editor-tool { display: inline-grid; place-items: center; min-inline-size: 34px; block-size: 32px; padding: 0 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--theme--foreground); font-size: 12px; font-weight: 800; cursor: pointer; }
