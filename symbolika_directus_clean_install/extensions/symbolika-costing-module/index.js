@@ -19470,6 +19470,32 @@ export const CostingModule = {
           grid-column: 1 / -1;
         }
 
+        .symbolika-costing-detail-field.symbolika-costing-shipping-comment {
+          border-color: color-mix(in srgb, var(--symbolika-accent) 24%, var(--symbolika-line));
+          background: linear-gradient(135deg, color-mix(in srgb, var(--symbolika-accent) 5%, var(--symbolika-panel)), var(--symbolika-panel));
+        }
+
+        .symbolika-costing-shipping-comment .symbolika-costing-detail-value {
+          inline-size: 100%;
+        }
+
+        .symbolika-costing-comment.symbolika-costing-shipping-comment-input {
+          display: block;
+          inline-size: 100%;
+          min-block-size: 92px;
+          max-block-size: 220px;
+          box-sizing: border-box;
+          padding: 13px 14px;
+          font-size: 13px;
+          font-weight: 600;
+          line-height: 1.5;
+          resize: vertical;
+        }
+
+        .symbolika-costing-shipping-comment-input::placeholder {
+          color: color-mix(in srgb, var(--symbolika-muted) 78%, transparent);
+        }
+
         .symbolika-costing-detail-disclosure {
           border: 1px solid var(--symbolika-line);
           border-radius: var(--symbolika-radius);
@@ -30209,12 +30235,12 @@ export const CostingModule = {
                 <span v-else>{{ shippingTitle(detail.row) }}</span>
               </div>
             </div>
-            <div v-if="detail.row.shipping_method && detail.row.shipping_method !== 'office_pickup'" class="symbolika-costing-detail-field symbolika-costing-detail-wide">
+            <div v-if="detail.row.shipping_method && detail.row.shipping_method !== 'office_pickup'" class="symbolika-costing-detail-field symbolika-costing-detail-wide symbolika-costing-shipping-comment">
               <div class="symbolika-costing-detail-label">Комментарий по отгрузке</div>
               <div class="symbolika-costing-detail-value">
                 <textarea
                   v-if="canEditOrderShipping(detail.row)"
-                  class="symbolika-costing-textarea"
+                  class="symbolika-costing-comment symbolika-costing-shipping-comment-input"
                   :class="savingWorkClass('orders', detail.row, 'shipping_comment')"
                   :value="detail.row.shipping_comment || ''"
                   placeholder="Адрес, получатель, телефон, транспортная компания или другие детали"
