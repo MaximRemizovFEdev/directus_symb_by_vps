@@ -18,6 +18,11 @@ function cleanText(value, maxLength) {
   return String(value ?? '').trim().slice(0, maxLength);
 }
 
+function dateOnly(value) {
+  const match = String(value ?? '').match(/^(\d{4}-\d{2}-\d{2})/);
+  return match?.[1] || null;
+}
+
 function publicUser(row) {
   return {
     id: row.id,
@@ -124,7 +129,7 @@ export default {
           contractor_id: row.contractor_id || null,
           name: row.employee_name || row.contractor_name || [row.first_name, row.last_name].filter(Boolean).join(' ') || row.email,
           position: row.position_name || (row.contractor_id ? 'Контрагент' : row.role_name) || '',
-          birthday: row.employee_birthday || null,
+          birthday: dateOnly(row.employee_birthday),
         },
         salary,
         salary_history: salaryHistory,
@@ -437,7 +442,11 @@ export default {
         const userId = requireUser(req, res);
         if (!userId) return;
 
-        const current = await database('directus_users').where('id', userId).select('id', 'email', 'avatar').first();
+        const current = await database('directus_users as u')
+          .leftJoin('employees as e', 'e.directus_user', 'u.id')
+          .where('u.id', userId)
+          .select('u.id', 'u.email', 'u.avatar', 'e.id as employee_id')
+          .first();
         if (!current) return res.status(404).json({ errors: [{ message: 'Профиль не найден.' }] });
 
         const update = {};
@@ -459,6 +468,9 @@ export default {
 
         let birthday;
         if (Object.prototype.hasOwnProperty.call(req.body || {}, 'birthday')) {
+          if (!current.employee_id) {
+            return res.status(409).json({ errors: [{ message: 'Дата рождения доступна только для связанного сотрудника.' }] });
+          }
           const value = cleanText(req.body.birthday, 10);
           if (value) {
             const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -495,7 +507,8 @@ export default {
             await trx('contractors').where('directus_user', userId).update({ phone: phone || null });
           }
           if (birthday !== undefined) {
-            await trx('employees').where('directus_user', userId).update({ birthday });
+            const updated = await trx('employees').where('id', current.employee_id).update({ birthday });
+            if (updated !== 1) throw new Error('Не удалось сохранить дату рождения сотрудника.');
           }
           if (update.email) {
             await trx('contractors').where('directus_user', userId).update({ email: update.email });

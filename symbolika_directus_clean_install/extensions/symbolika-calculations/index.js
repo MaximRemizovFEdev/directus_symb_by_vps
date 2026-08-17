@@ -74,6 +74,53 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     maximumFractionDigits: 2,
   }).format(num(value));
 
+  const TASK_STATUS_LABELS = {
+    new: 'Новая',
+    in_work: 'В работе',
+    needs_revision: 'Нужны правки',
+    waiting: 'Ждёт ответа',
+    done: 'Готово',
+    cancelled: 'Отменена',
+  };
+
+  const TASK_PRIORITY_LABELS = {
+    low: 'Низкий',
+    normal: 'Обычный',
+    high: 'Важный',
+    urgent: 'Срочно',
+  };
+
+  function formatNotificationDate(value) {
+    const date = toDateOnly(value);
+    const match = String(date || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return match ? `${match[3]}.${match[2]}.${match[1]}` : (date || 'не указан');
+  }
+
+  function notificationText(value, limit = 500) {
+    const plain = String(value || '')
+      .replace(/<br\s*\/?\s*>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\r/g, '')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    if (!plain || plain.length <= limit) return plain;
+    return `${plain.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
+  }
+
+  function customerLabel(row) {
+    return row?.company_name || row?.customer_name || 'не указан';
+  }
+
+  function compactPushMessage(message) {
+    const lines = String(message || '').split('\n').map((line) => line.trim()).filter(Boolean);
+    return notificationText(lines.slice(0, 4).join(' · '), 280);
+  }
+
+  function notificationSubject(subject) {
+    return notificationText(subject, 240);
+  }
+
   async function storeEventBeforeDelta(collection, itemId, previousRow, userId = null) {
     if (!collection || !itemId || !previousRow) return;
 
@@ -627,7 +674,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
 
     const payload = JSON.stringify({
       title: subject,
-      body: message || '',
+      body: compactPushMessage(message),
       url: getNotificationUrl(collection, item),
       tag: collection && item != null ? `${collection}:${item}` : undefined,
     });
@@ -757,19 +804,21 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
   async function notifyUser(recipient, subject, message, collection = null, item = null, topic = 'system') {
     if (!recipient || !subject) return null;
     if (!await employeeTopicEnabled(recipient, topic)) return null;
+    const safeSubject = notificationSubject(subject);
+    const safeMessage = notificationText(message, 4000);
 
     const inserted = await database('directus_notifications').insert({
       status: 'inbox',
       recipient,
-      subject,
-      message,
+      subject: safeSubject,
+      message: safeMessage,
       collection,
       item: item == null ? null : String(item),
     }).returning('id');
     const notificationId = inserted?.[0]?.id ?? inserted?.[0];
     if (notificationId != null) {
       try {
-        await deliverEmployeeNotification(notificationId, recipient, subject, message, collection, item);
+        await deliverEmployeeNotification(notificationId, recipient, safeSubject, safeMessage, collection, item);
       } catch (error) {
         logger.warn({ recipient, notificationId, error: error?.message || error }, '[Symbolika employee notification] delivery pipeline failed');
       }
@@ -880,28 +929,130 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     await notifyUser(userId, subject, message, collection, item, topic);
   }
 
+  async function getTaskNotificationContext(taskId) {
+    if (!taskId) return null;
+    return await database('symbolika_tasks as t')
+      .leftJoin('employees as assignee', 'assignee.id', 't.assigned_to')
+      .leftJoin('employees as author', 'author.id', 't.created_by_employee')
+      .leftJoin('orders as o', 'o.id', 't.related_order')
+      .leftJoin('orders_items as oi', 'oi.id', 't.related_order_item')
+      .leftJoin('customers as c', 'c.id', 't.related_customer')
+      .leftJoin('customer_companies as cc', 'cc.id', 't.related_company')
+      .leftJoin('customers as order_customer', 'order_customer.id', 'o.customer')
+      .leftJoin('customer_companies as order_company', 'order_company.id', 'o.customer_company')
+      .where('t.id', taskId)
+      .select(
+        't.*',
+        'assignee.full_name as assignee_name',
+        'author.full_name as author_name',
+        'o.order_number',
+        'oi.product_name as item_name',
+        'oi.quantity as item_quantity',
+        'c.name as customer_name',
+        'cc.name as company_name',
+        'order_customer.name as order_customer_name',
+        'order_company.name as order_company_name',
+      )
+      .first();
+  }
+
+  function buildTaskNotificationMessage(task, { includeResult = false } = {}) {
+    if (!task) return '';
+    const lines = [];
+    const description = notificationText(task.description, 600);
+    if (description) lines.push(`Что сделать: ${description}`);
+    lines.push(`Приоритет: ${TASK_PRIORITY_LABELS[task.priority] || task.priority || 'Обычный'}`);
+    if (task.due_date) lines.push(`Срок: ${formatNotificationDate(task.due_date)}`);
+
+    const relation = [];
+    if (task.order_number) relation.push(`заказ ${task.order_number}`);
+    const relatedCustomer = task.company_name || task.customer_name || task.order_company_name || task.order_customer_name;
+    if (relatedCustomer) relation.push(relatedCustomer);
+    if (relation.length) lines.push(`Связь: ${relation.join(' · ')}`);
+    if (task.item_name) {
+      const quantity = num(task.item_quantity) > 0 ? ` · ${formatCustomerQuantity(task.item_quantity)} шт.` : '';
+      lines.push(`Позиция: ${task.item_name}${quantity}`);
+    }
+    if (task.author_name) lines.push(`Поставил: ${task.author_name}`);
+    if (task.assignee_name) lines.push(`Исполнитель: ${task.assignee_name}`);
+    if (task.source_url) lines.push(`Исходник: ${task.source_url}`);
+    if (includeResult && task.result_url) lines.push(`Результат: ${task.result_url}`);
+    return lines.join('\n');
+  }
+
   async function notifyTaskParticipants(task, prevTask = null) {
     if (!task?.id) return;
-    const title = task.title || `Задача #${task.id}`;
+    const context = await getTaskNotificationContext(task.id) || task;
+    const title = context.title || `Задача #${task.id}`;
+    const taskTopic = task.task_type === 'procurement' ? 'procurement' : 'new_tasks';
+    const updateTopic = task.task_type === 'procurement' ? 'procurement' : 'task_updates';
     const assigneeChanged = !prevTask || Number(task.assigned_to || 0) !== Number(prevTask.assigned_to || 0);
     if (task.assigned_to && assigneeChanged) {
+      const assigneeUser = await getEmployeeUserId(task.assigned_to);
+      const subject = notificationSubject(`Новая задача · ${title}`);
+      const alreadyNotified = assigneeUser
+        ? await database('directus_notifications')
+          .where({ recipient: assigneeUser, collection: 'symbolika_tasks', item: String(task.id), subject })
+          .first('id')
+        : null;
+      if (assigneeUser && !alreadyNotified) {
+        await notifyUser(
+          assigneeUser,
+          subject,
+          buildTaskNotificationMessage(context),
+          'symbolika_tasks',
+          task.id,
+          taskTopic,
+        );
+      }
+    }
+
+    if (!prevTask) return;
+    const statusChanged = task.status !== prevTask.status;
+    const dueDateChanged = toDateOnly(task.due_date) !== toDateOnly(prevTask.due_date);
+    const becameUrgent = task.priority === 'urgent' && prevTask.priority !== 'urgent';
+    const importantStatus = ['waiting', 'done', 'cancelled'].includes(task.status);
+    const assigneeNeedsUpdate = task.assigned_to
+      && Number(task.assigned_to) !== Number(task.created_by_employee)
+      && !assigneeChanged
+      && ((statusChanged && task.status === 'needs_revision') || dueDateChanged || becameUrgent);
+    if (assigneeNeedsUpdate) {
+      const assigneeChanges = [];
+      if (statusChanged && task.status === 'needs_revision') assigneeChanges.push('Статус: Нужны правки');
+      if (dueDateChanged) assigneeChanges.push(`Новый срок: ${formatNotificationDate(task.due_date)}`);
+      if (becameUrgent) assigneeChanges.push('Приоритет: Срочно');
       await notifyManager(
         task.assigned_to,
-        `Новая задача: ${title}`,
-        [task.description, task.due_date ? `Срок: ${toDateOnly(task.due_date)}` : ''].filter(Boolean).join('\n'),
+        `Важное изменение задачи · ${title}`,
+        [...assigneeChanges, buildTaskNotificationMessage(context)].filter(Boolean).join('\n'),
         'symbolika_tasks',
         task.id,
-        'new_tasks',
+        updateTopic,
       );
     }
-    if (prevTask && task.status !== prevTask.status && task.created_by_employee) {
+    if (task.created_by_employee && Number(task.created_by_employee) !== Number(task.assigned_to) && ((statusChanged && importantStatus) || dueDateChanged || becameUrgent)) {
+      const changes = [];
+      if (statusChanged && importantStatus) {
+        changes.push(`Статус: ${TASK_STATUS_LABELS[prevTask.status] || prevTask.status || '-'} → ${TASK_STATUS_LABELS[task.status] || task.status || '-'}`);
+      }
+      if (dueDateChanged) changes.push(`Новый срок: ${formatNotificationDate(task.due_date)}`);
+      if (becameUrgent) changes.push('Приоритет: Срочно');
+      const statusSubject = task.status === 'done'
+        ? 'Задача выполнена'
+        : task.status === 'waiting'
+          ? 'По задаче ждут ответа'
+          : task.status === 'needs_revision'
+            ? 'Задаче нужны правки'
+            : task.status === 'cancelled'
+              ? 'Задача отменена'
+              : 'Важное изменение задачи';
       await notifyManager(
         task.created_by_employee,
-        `Изменился статус задачи: ${title}`,
-        `Статус: ${prevTask.status || '-'} → ${task.status || '-'}.`,
+        `${statusSubject} · ${title}`,
+        [...changes, buildTaskNotificationMessage(context, { includeResult: true })].filter(Boolean).join('\n'),
         'symbolika_tasks',
         task.id,
-        'task_updates',
+        updateTopic,
       );
     }
   }
@@ -983,10 +1134,14 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     const order = await database('orders').where({ id: item.order }).first();
     if (!order?.manager_employee) return;
     const orderLabel = order.order_number || `#${order.id}`;
+    const taskContext = await getTaskNotificationContext(task.id);
     await notifyManager(
       order.manager_employee,
-      'Макет готов',
-      `Дизайнер завершил макет для заказа ${orderLabel}, позиция «${item.product_name || item.id}». Заказ можно запускать в работу.`,
+      `Макет готов · ${orderLabel} · ${item.product_name || item.id}`,
+      [
+        'Дизайнер завершил работу. Позицию можно проверить и запустить в работу.',
+        taskContext ? buildTaskNotificationMessage(taskContext, { includeResult: true }) : '',
+      ].filter(Boolean).join('\n'),
       'orders_items',
       item.id,
       'item_status'
@@ -1003,11 +1158,36 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     const orderLabel = order.order_number || `#${order.id}`;
     const prevStatus = await getOrderStatusName(prevOrder.order_status);
     const nextStatus = await getOrderStatusName(order.order_status);
+    const normalizedStatus = String(nextStatus || '').trim().toLowerCase();
+    const importantStatuses = ['готов', 'доставлен', 'отменен', 'доработка макета'];
+    if (!importantStatuses.includes(normalizedStatus)) return;
+
+    const context = await database('orders as o')
+      .leftJoin('customers as c', 'c.id', 'o.customer')
+      .leftJoin('customer_companies as cc', 'cc.id', 'o.customer_company')
+      .where('o.id', order.id)
+      .select('o.*', 'c.name as customer_name', 'cc.name as company_name')
+      .first();
+    const items = await database('orders_items')
+      .where({ order: order.id })
+      .whereNot({ item_status: 'cancelled' })
+      .orderBy('id')
+      .select('product_name', 'quantity');
+    const itemSummary = items.slice(0, 5)
+      .map((row) => `${row.product_name || 'Позиция'} — ${formatCustomerQuantity(row.quantity)} шт.`)
+      .join('; ');
+    const lines = [
+      `Статус: ${prevStatus} → ${nextStatus}`,
+      `Заказчик: ${customerLabel(context)}`,
+      context?.deadline ? `Срок заказа: ${formatNotificationDate(context.deadline)}` : '',
+      itemSummary ? `Позиции: ${itemSummary}${items.length > 5 ? `; ещё ${items.length - 5}` : ''}` : '',
+      normalizedStatus === 'готов' ? `К оплате: ${formatCustomerMoney(context?.payment_due)}` : '',
+    ].filter(Boolean);
 
     await notifyUser(
       managerUserId,
-      `\u0418\u0437\u043c\u0435\u043d\u0438\u043b\u0441\u044f \u0441\u0442\u0430\u0442\u0443\u0441 \u0437\u0430\u043a\u0430\u0437\u0430 ${orderLabel}`,
-      `\u0421\u0442\u0430\u0442\u0443\u0441: ${prevStatus} \u2192 ${nextStatus}.`,
+      `Заказ ${orderLabel} · ${nextStatus}`,
+      lines.join('\n'),
       'orders',
       order.id,
       'order_status'
@@ -1015,7 +1195,10 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
   }
 
   async function notifyManagerItemSentToWork(item, prevItem = null) {
-    if (!item?.id || !isItemVisibleForWork(item) || isItemVisibleForWork(prevItem)) return;
+    if (!item?.id) return;
+    const sentToWork = isItemVisibleForWork(item) && !isItemVisibleForWork(prevItem);
+    const becameReady = String(item.item_status || '') === 'ready' && String(prevItem?.item_status || '') !== 'ready';
+    if (!sentToWork && !becameReady) return;
 
     const order = item.order
       ? await database('orders').where({ id: item.order }).select('id', 'order_number', 'manager_employee').first()
@@ -1025,10 +1208,13 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
 
     const orderLabel = order?.order_number || (order?.id ? `#${order.id}` : await getOrderLabel(item.order));
     const productName = item.product_name || `#${item.id}`;
+    const context = await getItemNotificationContext(item);
     await notifyManager(
       managerEmployee,
-      `\u041f\u043e\u0437\u0438\u0446\u0438\u044f \u0437\u0430\u043f\u0443\u0449\u0435\u043d\u0430 \u0432 \u0440\u0430\u0431\u043e\u0442\u0443: ${orderLabel}`,
-      `\u041f\u043e\u0437\u0438\u0446\u0438\u044f \u00ab${productName}\u00bb \u043f\u0435\u0440\u0435\u0434\u0430\u043d\u0430 \u0432 \u0440\u0430\u0431\u043e\u0442\u0443.`,
+      becameReady
+        ? `Позиция готова · ${orderLabel} · ${productName}`
+        : `Позиция запущена · ${orderLabel} · ${productName}`,
+      buildItemNotificationMessage(context, { includeTechnicalTask: false, includeLayout: false }),
       'orders_items',
       item.id,
       'item_status'
@@ -1082,22 +1268,46 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     return ['sent_to_work', 'in_work'].includes(status);
   }
 
-  async function buildWorkAssignmentMessage(item, target) {
-    const orderLabel = await getOrderLabel(item.order);
-    const productName = item.product_name || '\u041f\u043e\u0437\u0438\u0446\u0438\u044f';
-    const quantity = item.quantity || '-';
-    const techTask = item.technical_task_text || '-';
-    const layoutUrl = item.url || '-';
-    const adminUrl = getPublicUrl(getNotificationUrl(target.collection, item.id));
+  async function getItemNotificationContext(item) {
+    if (!item?.id) return item || null;
+    return await database('orders_items as oi')
+      .leftJoin('orders as o', 'o.id', 'oi.order')
+      .leftJoin('customers as c', 'c.id', 'o.customer')
+      .leftJoin('customer_companies as cc', 'cc.id', 'o.customer_company')
+      .leftJoin('employees as manager', 'manager.id', 'o.manager_employee')
+      .where('oi.id', item.id)
+      .select(
+        'oi.*',
+        'o.order_number',
+        'o.deadline as order_deadline',
+        'c.name as customer_name',
+        'cc.name as company_name',
+        'manager.full_name as manager_name',
+      )
+      .first() || item;
+  }
 
-    return [
-      `\u0417\u0430\u043a\u0430\u0437: ${orderLabel}`,
-      `\u041f\u043e\u0437\u0438\u0446\u0438\u044f: ${productName}`,
-      `\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e: ${quantity}`,
-      `\u0422\u0417: ${techTask}`,
-      `\u0421\u0441\u044b\u043b\u043a\u0430 \u043d\u0430 \u043c\u0430\u043a\u0435\u0442: ${layoutUrl}`,
-      `\u0412 \u0441\u0438\u0441\u0442\u0435\u043c\u0435: ${adminUrl}`,
-    ].join('\n');
+  function buildItemNotificationMessage(item, { includeTechnicalTask = true, includeLayout = true } = {}) {
+    if (!item) return '';
+    const lines = [
+      `Заказ: ${item.order_number || (item.order ? `#${item.order}` : 'не указан')}`,
+      `Заказчик: ${customerLabel(item)}`,
+      `Позиция: ${item.product_name || `#${item.id}`} · ${formatCustomerQuantity(item.quantity)} шт.`,
+      `Срок: ${formatNotificationDate(item.deadline || item.order_deadline)}`,
+      item.manager_name ? `Менеджер: ${item.manager_name}` : '',
+    ];
+    const techTask = notificationText(item.technical_task_text, 700);
+    if (includeTechnicalTask && techTask) lines.push(`ТЗ: ${techTask}`);
+    if (includeLayout) {
+      const layoutLinks = [item.url, item.designer_source_url].filter(Boolean);
+      lines.push(layoutLinks.length ? `Макет: ${layoutLinks.join(' | ')}` : 'Макет: не прикреплён');
+    }
+    return lines.filter(Boolean).join('\n');
+  }
+
+  async function buildWorkAssignmentMessage(item, target) {
+    const context = await getItemNotificationContext(item);
+    return buildItemNotificationMessage(context);
   }
 
   async function getItemContractors(item) {
@@ -1132,9 +1342,10 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     if (!shouldNotify) return;
 
     const recipients = await getRoleUserIds(target.roleName);
-    const orderLabel = await getOrderLabel(item.order);
+    const context = await getItemNotificationContext(item);
+    const orderLabel = context?.order_number || await getOrderLabel(item.order);
     const message = await buildWorkAssignmentMessage(item, target);
-    const subject = `\u041d\u043e\u0432\u044b\u0439 \u0437\u0430\u043a\u0430\u0437 \u0434\u043b\u044f ${target.roleName}: ${orderLabel}`;
+    const subject = `Новая позиция в работу · ${target.roleName} · ${orderLabel}`;
 
     await notifyUsers(
       recipients,
@@ -1147,7 +1358,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
 
     const vkSent = await sendVkMessage(
       target.vkChannel,
-      `${subject}\n\n${message}`
+      `${subject}\n\n${message}\n\nОткрыть в системе: ${getPublicUrl(getNotificationUrl(target.collection, item.id))}`
     );
 
     // The marker is a delivery lock. If VK rejected the message, remove it so
@@ -1190,16 +1401,18 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       : [];
     const wholeOrderCancelled = orderItems.length > 0
       && orderItems.every((row) => String(row.item_status || '') === 'cancelled');
+    const context = await getItemNotificationContext(item);
     const subject = isRequest
       ? `\u0417\u0430\u043f\u0440\u043e\u0441 \u043d\u0430 \u043e\u0442\u043c\u0435\u043d\u0443 \u043f\u043e\u0437\u0438\u0446\u0438\u0438: ${orderLabel}`
       : wholeOrderCancelled
         ? `\u0417\u0430\u043a\u0430\u0437 \u043e\u0442\u043c\u0435\u043d\u0435\u043d: ${orderLabel}`
         : `\u041f\u043e\u0437\u0438\u0446\u0438\u044f \u043e\u0442\u043c\u0435\u043d\u0435\u043d\u0430: ${orderLabel}`;
-    const message = isRequest
+    const actionMessage = isRequest
       ? `\u041c\u0435\u043d\u0435\u0434\u0436\u0435\u0440 \u0437\u0430\u043f\u0440\u043e\u0441\u0438\u043b \u043e\u0442\u043c\u0435\u043d\u0443 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u00ab${productName}\u00bb. \u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0435 \u043e\u0442\u043c\u0435\u043d\u0443, \u0435\u0441\u043b\u0438 \u043f\u043e\u0437\u0438\u0446\u0438\u044f \u0435\u0449\u0451 \u043d\u0435 \u043e\u0442\u043f\u0435\u0447\u0430\u0442\u0430\u043d\u0430.`
       : wholeOrderCancelled
         ? `\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u043b\u043e \u043e\u0442\u043c\u0435\u043d\u0443 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u00ab${productName}\u00bb. \u0412\u0441\u0435 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430 \u043e\u0442\u043c\u0435\u043d\u0435\u043d\u044b.`
         : `\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u043b\u043e \u043e\u0442\u043c\u0435\u043d\u0443 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u00ab${productName}\u00bb.`;
+    const message = [actionMessage, buildItemNotificationMessage(context, { includeTechnicalTask: false, includeLayout: false })].join('\n');
 
     if (!isRequest && (item.manager_employee || order?.manager_employee)) {
       await notifyManager(
@@ -1234,7 +1447,10 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
         item.id,
         'production'
       );
-      const vkSent = await sendVkMessage(target.vkChannel, `${subject}\n\n${message}`);
+      const vkSent = await sendVkMessage(
+        target.vkChannel,
+        `${subject}\n\n${message}\n\nОткрыть в системе: ${getPublicUrl(getNotificationUrl(target.collection, item.id))}`,
+      );
       if (!vkSent) {
         await database('symbolika_work_assignment_notifications').where({ item: item.id, channel }).delete();
       }
@@ -1284,11 +1500,15 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
 
     const orderLabel = await getOrderLabel(item.order);
     const productName = item.product_name || '\u041f\u043e\u0437\u0438\u0446\u0438\u044f';
+    const context = await getItemNotificationContext(item);
 
     await notifyManager(
       item.manager_employee,
-      `\u041d\u0443\u0436\u043d\u0430 \u0434\u043e\u0440\u0430\u0431\u043e\u0442\u043a\u0430 \u043c\u0430\u043a\u0435\u0442\u0430`,
-      `${orderLabel}: ${productName}. \u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e \u043f\u043e\u043c\u0435\u0442\u0438\u043b\u043e \u0441\u0442\u0430\u0442\u0443\u0441 "\u0414\u043e\u0440\u0430\u0431\u043e\u0442\u043a\u0430 \u043c\u0430\u043a\u0435\u0442\u0430".`,
+      `Доработка макета · ${orderLabel} · ${productName}`,
+      [
+        'Производство вернуло макет на доработку. Нужно уточнить правки и заменить макет.',
+        buildItemNotificationMessage(context, { includeTechnicalTask: false, includeLayout: true }),
+      ].join('\n'),
       'orders_items',
       item.id,
       'item_status'
@@ -1833,15 +2053,26 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     const next = { ...payload };
     const userId = context?.accountability?.user || meta?.accountability?.user;
 
-    if (next.order && userId) {
-      const actor = await getEmployeeActorByUser(userId);
-      const canCreateForAnotherManager = ['Administrator', '\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u044e\u0449\u0438\u0439'].includes(actor?.role_name);
-      if (actor?.id && !canCreateForAnotherManager) {
-        const targetOrder = await database('orders').where({ id: next.order }).select('manager_employee').first();
-        if (!targetOrder || Number(targetOrder.manager_employee) !== Number(actor.id)) {
-          throw new Error('\u041f\u043e\u0437\u0438\u0446\u0438\u044e \u043c\u043e\u0436\u043d\u043e \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0442\u043e\u043b\u044c\u043a\u043e \u0432 \u0441\u0432\u043e\u0439 \u0437\u0430\u043a\u0430\u0437.');
+    if (next.order) {
+      const targetOrder = await database('orders')
+        .where({ id: next.order })
+        .select('manager_employee')
+        .first();
+
+      if (userId) {
+        const actor = await getEmployeeActorByUser(userId);
+        const canCreateForAnotherManager = ['Administrator', '\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u044e\u0449\u0438\u0439'].includes(actor?.role_name);
+        if (actor?.id && !canCreateForAnotherManager) {
+          if (!targetOrder || Number(targetOrder.manager_employee) !== Number(actor.id)) {
+            throw new Error('\u041f\u043e\u0437\u0438\u0446\u0438\u044e \u043c\u043e\u0436\u043d\u043e \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0442\u043e\u043b\u044c\u043a\u043e \u0432 \u0441\u0432\u043e\u0439 \u0437\u0430\u043a\u0430\u0437.');
+          }
         }
       }
+
+      // The manager-scoped read permission on orders_items is evaluated while
+      // Directus builds the POST response. Set ownership before the insert so
+      // the freshly created item remains visible and its id is returned.
+      next.manager_employee = targetOrder?.manager_employee || null;
     }
 
     if (isEmpty(next.deadline) && next.order) {
@@ -2164,9 +2395,17 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
   // TASK NOTIFICATIONS
   action('items.create', async ({ collection, key }) => {
     try {
-      if (collection !== 'symbolika_tasks') return;
-      const task = await database('symbolika_tasks').where({ id: key }).first();
-      await notifyTaskParticipants(task);
+      if (collection === 'symbolika_tasks') {
+        const task = await database('symbolika_tasks').where({ id: key }).first();
+        await notifyTaskParticipants(task);
+        return;
+      }
+      if (collection === 'procurement_requests') {
+        const request = await database('procurement_requests').where({ id: key }).select('task_order_id').first();
+        if (!request?.task_order_id) return;
+        const task = await database('symbolika_tasks').where({ id: request.task_order_id }).first();
+        await notifyTaskParticipants(task);
+      }
     } catch (error) {
       logger.error(error);
     }

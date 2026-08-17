@@ -138,7 +138,9 @@
   const symbolikaDefaultModulePath = '/admin/symbolika-orders';
   const serviceNavigationState = {
     roleName: null,
+    userId: null,
     loading: false,
+    pending: null,
   };
   const contentNavigationState = {
     installed: false,
@@ -185,21 +187,27 @@
     }
   }
 
-  async function loadCurrentRoleName() {
-    if (serviceNavigationState.roleName || serviceNavigationState.loading) return serviceNavigationState.roleName;
+  async function loadCurrentRoleName(force = false) {
+    if (!force && serviceNavigationState.roleName) return serviceNavigationState.roleName;
+    if (serviceNavigationState.loading && serviceNavigationState.pending) return serviceNavigationState.pending;
     serviceNavigationState.loading = true;
-    try {
-      const response = await fetch('/users/me?fields=role.name', { credentials: 'include' });
-      if (!response.ok) return null;
-      const payload = await response.json();
-      serviceNavigationState.roleName = payload?.data?.role?.name || null;
-      return serviceNavigationState.roleName;
-    } catch (error) {
-      console.warn('[Symbolika service navigation]', error);
-      return null;
-    } finally {
-      serviceNavigationState.loading = false;
-    }
+    serviceNavigationState.pending = (async () => {
+      try {
+        const response = await fetch('/users/me?fields=id,role.name', { credentials: 'include' });
+        if (!response.ok) return null;
+        const payload = await response.json();
+        serviceNavigationState.userId = payload?.data?.id || null;
+        serviceNavigationState.roleName = payload?.data?.role?.name || null;
+        return serviceNavigationState.roleName;
+      } catch (error) {
+        console.warn('[Symbolika service navigation]', error);
+        return null;
+      } finally {
+        serviceNavigationState.loading = false;
+        serviceNavigationState.pending = null;
+      }
+    })();
+    return serviceNavigationState.pending;
   }
 
   function getNavigationCollectionFromLink(link) {
@@ -359,7 +367,11 @@
 
     const schedule = () => {
       window.setTimeout(() => {
-        applyStandardContentVisibility();
+        loadCurrentRoleName(true).then(() => {
+          applyServiceNavigationVisibility();
+          applyStandardContentVisibility();
+          applyRoleModuleVisibility();
+        });
       }, 0);
     };
 

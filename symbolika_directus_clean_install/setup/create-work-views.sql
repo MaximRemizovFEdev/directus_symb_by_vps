@@ -40,6 +40,7 @@ DROP TRIGGER IF EXISTS symbolika_recalc_order_status_from_items ON orders_items;
 DROP TRIGGER IF EXISTS symbolika_apply_order_status_to_items ON orders;
 DROP TRIGGER IF EXISTS symbolika_validate_order_workflow_transition ON orders;
 DROP TRIGGER IF EXISTS symbolika_keep_order_commission_manager ON orders;
+DROP TRIGGER IF EXISTS symbolika_set_item_manager ON orders_items;
 DROP TRIGGER IF EXISTS symbolika_set_item_commission_manager ON orders_items;
 DROP TRIGGER IF EXISTS symbolika_transfer_customer_manager ON customers;
 DROP TRIGGER IF EXISTS symbolika_transfer_company_manager ON customer_companies;
@@ -327,6 +328,23 @@ $$;
 CREATE TRIGGER symbolika_keep_order_commission_manager
 BEFORE UPDATE OF commission_manager_employee ON orders
 FOR EACH ROW EXECUTE FUNCTION symbolika_keep_order_commission_manager();
+
+CREATE OR REPLACE FUNCTION symbolika_set_item_manager()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  SELECT o.manager_employee
+    INTO NEW.manager_employee
+    FROM orders o
+   WHERE o.id = NEW."order";
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER symbolika_set_item_manager
+BEFORE INSERT OR UPDATE OF "order" ON orders_items
+FOR EACH ROW EXECUTE FUNCTION symbolika_set_item_manager();
 
 CREATE OR REPLACE FUNCTION symbolika_set_item_commission_manager()
 RETURNS trigger
@@ -12763,7 +12781,7 @@ WITH self_sales_policies(policy) AS (
       'date,deadline,customer,customer_company,order_status,comment,shipping_method,shipping_comment,payment_type,order_items,payment_on_receipt,office_status'),
     ('orders_items', 'create', '{}'::json,
       NULL::json, '{"production_status":7}'::json,
-      'order,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url'),
+      'order,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url,manager_employee'),
     ('orders_items', 'read', '{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}'::json,
       NULL::json, NULL::json,
       'id,order,order_link,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,production_status,deadline,production_comment,technical_task_text,manager_employee,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url,layout_revision_url_snapshot,layout_disk_path,layout_disk_name,layout_disk_size,layout_disk_mime_type,layout_disk_uploaded_at,layout_preview_url,layout_preview_disk_path,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at'),
@@ -13905,6 +13923,24 @@ WHERE collection = 'orders_items'
     '00000000-0000-4000-8000-000000000202'
   );
 
+-- The create hook copies the manager from the parent order before Directus
+-- builds the response. Allow this server-controlled field in create payloads;
+-- the database trigger overwrites it as well, so clients cannot spoof ownership.
+UPDATE directus_permissions
+SET fields = concat_ws(',', NULLIF(fields, ''), 'manager_employee')
+WHERE collection = 'orders_items'
+  AND action = 'create'
+  AND fields IS NOT NULL
+  AND fields <> '*'
+  AND NOT ('manager_employee' = ANY(string_to_array(fields, ',')))
+  AND policy IN (
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202',
+    '00000000-0000-4000-8000-000000000204',
+    '00000000-0000-4000-8000-000000000206',
+    '00000000-0000-4000-8000-000000000208'
+  );
+
 -- Coordinated cancellation: managers request it on the item, the workshop
 -- confirms it with the final production status "Отменен".
 UPDATE directus_fields
@@ -13956,7 +13992,7 @@ WITH workshop_sales_policies(policy) AS (
     ('orders_items', 'create', '{}'::json,
       '{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}'::json,
       '{"production_status":7}'::json,
-      'order,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url'),
+      'order,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url,manager_employee'),
     ('orders_items', 'read', '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json, NULL::json, NULL::json,
       'id,order,order_link,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,production_status,deadline,production_comment,technical_task_text,manager_employee,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url,layout_revision_url_snapshot,layout_disk_path,layout_disk_name,layout_disk_size,layout_disk_mime_type,layout_disk_uploaded_at,layout_preview_url,layout_preview_disk_path,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at'),
     ('orders_items', 'update', '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,

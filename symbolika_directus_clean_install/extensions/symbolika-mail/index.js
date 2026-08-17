@@ -402,6 +402,26 @@ export default {
       return smtpTransport;
     };
 
+    const smtpEnvelopeSender = () => cleanText(
+      env?.SYMBOLIKA_SMTP_USER || env?.EMAIL_SMTP_USER || env?.SYMBOLIKA_EMAIL_FROM,
+      255,
+    ).toLowerCase();
+
+    const smtpErrorMessage = (error, fromAlias) => {
+      const code = cleanText(error?.code, 40).toUpperCase();
+      const responseCode = Number(error?.responseCode || 0);
+      if (code === 'EAUTH' || responseCode === 535) {
+        return 'Почтовый сервер отклонил авторизацию. Проверьте логин и пароль SMTP.';
+      }
+      if (['ECONNECTION', 'ETIMEDOUT', 'ESOCKET', 'ECONNREFUSED'].includes(code)) {
+        return 'Не удалось соединиться с почтовым сервером. Повторите отправку позже.';
+      }
+      if ([550, 551, 553].includes(responseCode)) {
+        return `Почтовый сервер не разрешил отправку от ${fromAlias}. Проверьте, что этот адрес создан как псевдоним общего ящика.`;
+      }
+      return 'Почтовый сервер не принял письмо. Повторите попытку или обратитесь к администратору.';
+    };
+
     const persistAttachments = async (parsed) => {
       const sourceAttachments = parsed.attachments || [];
       if (!sourceAttachments.length) return [];
@@ -734,15 +754,30 @@ export default {
         if (mailMode() === 'imap') {
           const transport = smtpSender();
           if (!transport) return apiError(res, 503, 'SMTP не настроен. Проверьте серверные переменные почты.');
-          const result = await transport.sendMail({
-            from: { name: actor.name, address: fromAlias },
-            replyTo: fromAlias,
-            to,
-            subject,
-            text: deliveredBody,
-            html: deliveredHtml,
-            inReplyTo: replyThread?.external_thread_id?.startsWith('<') ? replyThread.external_thread_id : undefined,
-          });
+          const envelopeFrom = smtpEnvelopeSender();
+          if (!EMAIL_PATTERN.test(envelopeFrom)) return apiError(res, 503, 'Для SMTP не настроен адрес авторизованного ящика.');
+          let result;
+          try {
+            result = await transport.sendMail({
+              from: { name: actor.name, address: fromAlias },
+              replyTo: fromAlias,
+              envelope: { from: envelopeFrom, to },
+              to,
+              subject,
+              text: deliveredBody,
+              html: deliveredHtml,
+              inReplyTo: replyThread?.external_thread_id?.startsWith('<') ? replyThread.external_thread_id : undefined,
+            });
+          } catch (error) {
+            logger.error({
+              err: error,
+              smtp_code: cleanText(error?.code, 40),
+              smtp_response_code: Number(error?.responseCode || 0) || null,
+              from_alias: fromAlias,
+              envelope_from: envelopeFrom,
+            }, 'Symbolika mail SMTP send failed');
+            return apiError(res, 502, smtpErrorMessage(error, fromAlias));
+          }
           messageId = result?.messageId || messageId;
           delivered = true;
         }

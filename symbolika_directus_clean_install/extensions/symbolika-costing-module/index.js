@@ -508,10 +508,10 @@ const appearanceThemes = [
 ];
 
 const notificationTopicChoices = [
-  { id: 'order_status', title: 'Статусы заказов', description: 'Изменение статуса закреплённых за вами заказов.', icon: 'assignment' },
-  { id: 'item_status', title: 'Позиции и макеты', description: 'Доработки макета и важные изменения позиций.', icon: 'inventory_2' },
+  { id: 'order_status', title: 'Важные статусы заказов', description: 'Готовность, доставка, отмена и возврат макета.', icon: 'assignment' },
+  { id: 'item_status', title: 'Позиции и макеты', description: 'Запуск, готовность, доработка и отмена позиции.', icon: 'inventory_2' },
   { id: 'new_tasks', title: 'Новые задачи', description: 'Назначение новой задачи лично вам.', icon: 'add_task' },
-  { id: 'task_updates', title: 'Изменения задач', description: 'Статус и завершение поставленных вами задач.', icon: 'task_alt' },
+  { id: 'task_updates', title: 'Важные изменения задач', description: 'Новый срок, срочность, правки, ожидание, завершение или отмена.', icon: 'task_alt' },
   { id: 'production', title: 'Производство', description: 'Новые позиции, переданные на ваш участок.', icon: 'precision_manufacturing' },
   { id: 'procurement', title: 'Закупки', description: 'Новые заявки и изменение закупочных задач.', icon: 'local_shipping' },
   { id: 'mail', title: 'Новые письма', description: 'Входящие письма в доступных вам почтовых папках.', icon: 'mail' },
@@ -4643,7 +4643,7 @@ export const CostingModule = {
         this.profileForm = {
           email: this.profileData?.user?.email || '',
           phone: this.profileData?.user?.phone || '',
-          birthday: this.profileData?.person?.birthday || '',
+          birthday: this.profileBirthdayInput(this.profileData?.person?.birthday),
         };
         if (this.profileData?.user?.symbolika_theme) this.applyAppearanceTheme(this.profileData.user.symbolika_theme);
         if (this.profileData?.person?.employee_id) {
@@ -4663,19 +4663,22 @@ export const CostingModule = {
       this.profileSavedMessage = '';
       this.error = '';
       try {
+        const profilePayload = {
+          email: String(this.profileForm.email || '').trim(),
+          phone: String(this.profileForm.phone || '').trim(),
+        };
+        if (this.profileData?.person?.employee_id) {
+          profilePayload.birthday = this.profileBirthdayInput(this.profileForm.birthday);
+        }
         const payload = await this.request('/symbolika-profile', {
           method: 'PATCH',
-          body: JSON.stringify({
-            email: String(this.profileForm.email || '').trim(),
-            phone: String(this.profileForm.phone || '').trim(),
-            birthday: this.profileData?.person?.employee_id ? String(this.profileForm.birthday || '').trim() : undefined,
-          }),
+          body: JSON.stringify(profilePayload),
         });
         this.profileData = payload?.data || this.profileData;
         this.profileForm = {
           email: this.profileData?.user?.email || '',
           phone: this.profileData?.user?.phone || '',
-          birthday: this.profileData?.person?.birthday || '',
+          birthday: this.profileBirthdayInput(this.profileData?.person?.birthday),
         };
         this.profileSavedMessage = 'Контактные данные сохранены';
       } catch (error) {
@@ -4683,6 +4686,11 @@ export const CostingModule = {
       } finally {
         this.profileSaving = false;
       }
+    },
+
+    profileBirthdayInput(value) {
+      const match = String(value || '').match(/^(\d{4}-\d{2}-\d{2})/);
+      return match?.[1] || '';
     },
 
     async uploadProfileAvatar(event) {
@@ -6349,6 +6357,35 @@ export const CostingModule = {
       }
 
       return payload;
+    },
+
+    createdRecordId(payload) {
+      const data = payload?.data;
+      const value = Array.isArray(data) ? data[0] : data;
+      const id = value && typeof value === 'object' ? value.id : value;
+      const numericId = Number(id || 0);
+      return Number.isFinite(numericId) && numericId > 0 ? numericId : null;
+    },
+
+    async recoverCreatedOrderItemId(orderId, sourceItem, claimedIds = []) {
+      const params = new URLSearchParams({
+        fields: 'id,product_name,quantity,price_per_unit',
+        sort: 'id',
+        limit: '-1',
+      });
+      params.set('filter[order][_eq]', String(orderId));
+      const payload = await this.request(`/items/orders_items?${params.toString()}`);
+      const claimed = new Set((claimedIds || []).map((id) => Number(id)));
+      const productName = String(sourceItem?.product_name || '').trim();
+      const quantity = this.parseMoney(sourceItem?.quantity);
+      const price = this.parseMoney(sourceItem?.price_per_unit);
+      const match = (payload?.data || []).find((row) => (
+        !claimed.has(Number(row.id))
+        && String(row.product_name || '').trim() === productName
+        && this.parseMoney(row.quantity) === quantity
+        && this.parseMoney(row.price_per_unit) === price
+      ));
+      return match ? Number(match.id) : null;
     },
 
     async loadEventRows(options = {}) {
@@ -9538,8 +9575,10 @@ export const CostingModule = {
       this.error = '';
 
       try {
+        let orderId = Number(form._created_order_id || 0) || null;
         let companyId = form.customer_company ? Number(form.customer_company) : null;
-        if (!companyId && newCompanyName) {
+        if (form._created_company_id) companyId = Number(form._created_company_id);
+        if (!orderId && !companyId && newCompanyName) {
           const companyBody = {
             name: newCompanyName,
             phone: String(form.new_company_phone || '').trim() || null,
@@ -9549,16 +9588,18 @@ export const CostingModule = {
           const orderManagerId = Number(form.manager_employee || this.currentEmployeeId || 0);
           if (orderManagerId) companyBody.manager = orderManagerId;
 
-          const companyPayload = await this.request('/items/customer_companies', {
+          const companyPayload = await this.request('/items/customer_companies?fields=id', {
             method: 'POST',
             body: JSON.stringify(companyBody),
           });
-          companyId = companyPayload?.data?.id;
+          companyId = this.createdRecordId(companyPayload);
           if (!companyId) throw new Error('Directus не вернул ID новой компании.');
+          form._created_company_id = companyId;
         }
 
         let customerId = form.customer ? Number(form.customer) : null;
-        if (!customerId) {
+        if (form._created_customer_id) customerId = Number(form._created_customer_id);
+        if (!orderId && !customerId) {
           const customerBody = {
             name: newCustomerName,
             phone: String(form.new_customer_phone || '').trim() || null,
@@ -9569,12 +9610,13 @@ export const CostingModule = {
           const orderManagerId = Number(form.manager_employee || this.currentEmployeeId || 0);
           if (orderManagerId) customerBody.manager = orderManagerId;
 
-          const customerPayload = await this.request('/items/customers', {
+          const customerPayload = await this.request('/items/customers?fields=id', {
             method: 'POST',
             body: JSON.stringify(customerBody),
           });
-          customerId = customerPayload?.data?.id;
+          customerId = this.createdRecordId(customerPayload);
           if (!customerId) throw new Error('Directus не вернул ID нового клиента.');
+          form._created_customer_id = customerId;
         }
 
         const orderBody = {
@@ -9593,18 +9635,24 @@ export const CostingModule = {
         const orderManagerId = Number(form.manager_employee || this.currentEmployeeId || 0);
         if (orderManagerId) orderBody.manager_employee = orderManagerId;
 
-        const orderPayload = await this.request('/items/orders', {
-          method: 'POST',
-          body: JSON.stringify(orderBody),
-        });
-
-        const orderId = orderPayload?.data?.id;
-        if (!orderId) throw new Error('Directus не вернул ID нового заказа.');
-
-        const createdItems = await Promise.all(items.map(async (item) => {
-          const payload = await this.request('/items/orders_items', {
+        if (!orderId) {
+          const orderPayload = await this.request('/items/orders?fields=id', {
             method: 'POST',
-            body: JSON.stringify({
+            body: JSON.stringify(orderBody),
+          });
+          orderId = this.createdRecordId(orderPayload);
+          if (!orderId) throw new Error('Directus не вернул ID нового заказа.');
+          form._created_order_id = orderId;
+        }
+
+        const createdItems = [];
+        for (const item of items) {
+          const sourceItem = item._source_item || item;
+          let id = Number(sourceItem._created_item_id || 0) || null;
+          if (!id) {
+            const payload = await this.request('/items/orders_items?fields=id', {
+              method: 'POST',
+              body: JSON.stringify({
               order: orderId,
               product_name: item.product_name,
               quantity: item.quantity,
@@ -9625,12 +9673,19 @@ export const CostingModule = {
               needs_designer_help: !!item.needs_designer_help,
               designer_comment: item.needs_designer_help ? (item.designer_comment || null) : null,
               designer_source_url: item.needs_designer_help ? (item.designer_source_url || null) : null,
-            }),
-          });
-          const id = payload?.data?.id;
-          if (!id) throw new Error(`Directus не вернул ID позиции «${item.product_name}».`);
-          return { id, item };
-        }));
+              }),
+            });
+            id = this.createdRecordId(payload);
+            if (!id) {
+              id = await this.recoverCreatedOrderItemId(orderId, item, createdItems.map((created) => created.id));
+            }
+            if (!id) {
+              throw new Error(`Заказ создан, но не удалось подтвердить позицию «${item.product_name}». Повторная отправка не создаст новый заказ.`);
+            }
+            sourceItem._created_item_id = id;
+          }
+          createdItems.push({ id, item });
+        }
 
         const failedLayouts = [];
         for (const created of createdItems) {

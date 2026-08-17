@@ -248,6 +248,12 @@ input[type="week"]::-webkit-calendar-picker-indicator {
   display: none !important;
 }
 
+[data-symbolika-role-module="hidden"],
+[data-symbolika-standard-content-navigation="hidden"],
+[data-symbolika-service-navigation="hidden"] {
+  display: none !important;
+}
+
 /* Directus requests the project image without an auth token. Keep the global
    module rail tidy even when that protected asset cannot be downloaded. */
 .module-bar-logo:has(.custom-logo[src*="/assets/"]) {
