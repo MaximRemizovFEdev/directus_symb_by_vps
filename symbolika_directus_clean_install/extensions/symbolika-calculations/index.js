@@ -1532,16 +1532,6 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     return num(emp?.order_percent);
   }
 
-  async function getTaxPercent(orderId) {
-    if (!orderId) return 0;
-
-    const order = await database('orders').where({ id: orderId }).first();
-    if (!order?.payment_type) return 0;
-
-    const pt = await database('payment_types').where({ id: order.payment_type }).first();
-    return num(pt?.tax_percent);
-  }
-
   async function assignManagerToCustomerAndCompany(order) {
     if (!order?.manager_employee) return;
 
@@ -1880,12 +1870,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     const manager_employee = order?.manager_employee || null;
     const commission_manager_employee = order?.commission_manager_employee || null;
 
-    let manager_percent = await getManagerPercent(item.order);
-    let tax_percent = item.tax_percent;
-
-    if (isEmpty(tax_percent) || num(tax_percent) === 0) {
-      tax_percent = await getTaxPercent(item.order);
-    }
+    const manager_percent = await getManagerPercent(item.order);
 
     let shipping_method = item.shipping_method;
     let office_status = item.office_status;
@@ -1909,7 +1894,11 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
 
     const order_sum = round(quantity * price);
     const manager_commission_sum = round(order_sum * num(manager_percent) / 100);
-    const tax_sum = round(order_sum * num(tax_percent) / 100);
+    // Tax is owned by recalc_order_payment_totals(): it is based on the
+    // payment types that were actually received and allocated to the order.
+    // Keep the current value here so an item recalculation cannot replace a
+    // mixed-payment tax with the order's nominal payment type.
+    const tax_sum = round(num(item.tax_sum));
 
     const profit_sum = round(order_sum - total_cost - manager_commission_sum - tax_sum);
     const margin_percent = order_sum > 0 ? round(profit_sum / order_sum * 100) : 0;
@@ -1918,7 +1907,6 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       manager_employee,
       commission_manager_employee,
       manager_percent,
-      tax_percent,
       shipping_method,
       office_status,
       contractor_1_cost,
