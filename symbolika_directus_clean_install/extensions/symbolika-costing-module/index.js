@@ -22076,7 +22076,7 @@ export const CostingModule = {
         }
 
         .symbolika-costing-event-list.is-compact .symbolika-costing-event {
-          grid-template-columns: 30px minmax(0, 1fr) 16px;
+          grid-template-columns: 30px minmax(0, 1fr) 32px;
           gap: 8px;
           padding: 10px;
         }
@@ -22085,6 +22085,21 @@ export const CostingModule = {
           inline-size: 28px;
           block-size: 28px;
           border-radius: 8px;
+        }
+
+        .symbolika-costing-event-list.is-compact .symbolika-costing-event-actions {
+          inline-size: 32px;
+          justify-content: center;
+        }
+
+        .symbolika-costing-event-list.is-compact .symbolika-costing-event-rollback {
+          justify-content: center;
+          inline-size: 32px;
+          min-inline-size: 32px;
+          block-size: 32px;
+          min-block-size: 32px;
+          padding: 0;
+          font-size: 0;
         }
 
         .symbolika-costing-task-events {
@@ -31940,7 +31955,7 @@ export const CostingModule = {
                   >
                     <v-icon name="undo" small />Откатить
                   </button>
-                  <v-icon name="chevron_right" small class="symbolika-costing-event-open" />
+                  <v-icon v-if="!canRollbackEvent(event)" name="chevron_right" small class="symbolika-costing-event-open" />
                 </span>
               </div>
             </div>
