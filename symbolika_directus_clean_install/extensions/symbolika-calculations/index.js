@@ -31,6 +31,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
   const prevItems = new Map();
   const prevTasks = new Map();
   const prevPayments = new Map();
+  const deletedPayments = new Map();
   const prevContractorPayments = new Map();
   let pushConfigured = false;
   let pushTableReady = false;
@@ -2152,6 +2153,16 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     return payload;
   });
 
+  // CAPTURE PAYMENT BEFORE DELETE SO CUSTOMER AND COMPANY TOTALS CAN BE RECALCULATED.
+  filter('items.delete', async (keys, meta) => {
+    if (meta.collection !== 'order_payments') return keys;
+    for (const id of keys || []) {
+      const row = await database('order_payments').where({ id }).first();
+      if (row) deletedPayments.set(String(id), row);
+    }
+    return keys;
+  });
+
   // AFTER CREATE ORDER
   action('items.create', async (meta, context) => {
     try {
@@ -2343,6 +2354,15 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
         await notifyOrderStatusChanged(orderAfterRecalc, orderBeforeRecalc);
         if (!orderStatusChanged) await notifyManagerItemSentToWork(item, prevItem);
         await notifyCustomerOrderReady(orderId);
+
+        const previousOrderId = Number(prevItem?.order || 0);
+        if (previousOrderId && previousOrderId !== Number(orderId || 0)) {
+          const previousOrderBeforeRecalc = await database('orders').where({ id: previousOrderId }).first();
+          await recalcOrder(previousOrderId);
+          const previousOrderAfterRecalc = await database('orders').where({ id: previousOrderId }).first();
+          await notifyOrderStatusChanged(previousOrderAfterRecalc, previousOrderBeforeRecalc);
+          await notifyCustomerOrderReady(previousOrderId);
+        }
       }
     } catch (error) {
       logger.error(error);
@@ -2534,6 +2554,29 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
         await recalcPayment(key, prevPayment);
 
         const updatedPayment = await database('order_payments').where({ id: key }).first();
+        if (updatedPayment?.order && updatedPayment.allocation_mode === 'to_order') {
+          const allocations = await database('payment_allocations')
+            .where({ payment: key })
+            .orderBy('id', 'asc');
+          if (allocations.length) {
+            await database('payment_allocations').where({ id: allocations[0].id }).update({
+              amount: updatedPayment.amount,
+              order: updatedPayment.order,
+            });
+            if (allocations.length > 1) {
+              await database('payment_allocations')
+                .whereIn('id', allocations.slice(1).map((row) => row.id))
+                .delete();
+            }
+          } else if (num(updatedPayment.amount) > 0) {
+            await database('payment_allocations').insert({
+              payment: key,
+              order: updatedPayment.order,
+              amount: updatedPayment.amount,
+              comment: '\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u043e\u0435 \u0440\u0430\u0441\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u0438\u0435',
+            });
+          }
+        }
         if (updatedPayment?.order) {
           await recalcOrder(updatedPayment.order);
         }
@@ -2541,6 +2584,23 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
         if (prevPayment?.order && prevPayment.order !== updatedPayment?.order) {
           await recalcOrder(prevPayment.order);
         }
+      }
+    } catch (error) {
+      logger.error(error);
+    }
+  });
+
+  // ORDER PAYMENTS DELETE
+  action('items.delete', async ({ collection, keys }) => {
+    if (collection !== 'order_payments') return;
+    try {
+      for (const key of keys || []) {
+        const payment = deletedPayments.get(String(key)) || null;
+        deletedPayments.delete(String(key));
+        if (!payment) continue;
+        await recalcCustomerBalance(payment.customer);
+        await recalcCompanyBalance(payment.customer_company);
+        if (payment.order) await recalcOrder(payment.order);
       }
     } catch (error) {
       logger.error(error);

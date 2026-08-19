@@ -4621,6 +4621,15 @@ DELETE FROM directus_permissions
    AND action = 'update';
 
 DELETE FROM directus_permissions
+ WHERE policy IN (
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202',
+    '00000000-0000-4000-8000-000000000203'
+  )
+   AND collection = 'order_payments'
+   AND action = 'delete';
+
+DELETE FROM directus_permissions
  WHERE policy = '00000000-0000-4000-8000-000000000201'
    AND collection IN ('customers', 'customer_companies', 'customer_company_links');
 
@@ -4652,6 +4661,12 @@ VALUES
   ('payment_allocations', 'update', '{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}'::json, NULL, NULL, 'payment,order,amount,comment', '00000000-0000-4000-8000-000000000202'),
   ('order_payments', 'update', '{"order":{"shipping_method":{"_eq":"office_pickup"}}}'::json, NULL, NULL, 'order,customer,customer_company,amount,payment_date,payment_type,payment_direction,allocation_mode,comment', '00000000-0000-4000-8000-000000000203'),
   ('payment_allocations', 'update', '{"order":{"shipping_method":{"_eq":"office_pickup"}}}'::json, NULL, NULL, 'payment,order,amount,comment', '00000000-0000-4000-8000-000000000203');
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+VALUES
+  ('order_payments', 'delete', '{"access_manager_user":{"_eq":"$CURRENT_USER"}}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000201'),
+  ('order_payments', 'delete', '{"access_manager_user":{"_eq":"$CURRENT_USER"}}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000202'),
+  ('order_payments', 'delete', '{"access_shipping_method":{"_eq":"office_pickup"}}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000203');
 
 UPDATE directus_permissions
    SET fields = '*'
@@ -6864,6 +6879,10 @@ BEGIN
     RETURN OLD;
   END IF;
 
+  IF TG_OP = 'UPDATE' AND OLD."order" IS DISTINCT FROM NEW."order" THEN
+    PERFORM sync_my_order_buckets(OLD."order");
+  END IF;
+
   PERFORM sync_my_order_buckets(NEW."order");
   RETURN NEW;
 END;
@@ -6997,7 +7016,35 @@ BEGIN
     RETURN OLD;
   END IF;
 
+  IF TG_OP = 'UPDATE' AND OLD."order" IS DISTINCT FROM NEW."order" THEN
+    PERFORM sync_orders_overview(OLD."order");
+  END IF;
+
   PERFORM sync_orders_overview(NEW."order");
+  RETURN NEW;
+END;
+$$;
+
+-- An item move can update the destination order from an earlier AFTER trigger
+-- before the overview trigger itself runs. Remove the stale source summary row
+-- in BEFORE UPDATE so rebuilding the destination cannot collide on item id.
+CREATE OR REPLACE FUNCTION prepare_orders_overview_item_move_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF OLD."order" IS DISTINCT FROM NEW."order" THEN
+    DELETE FROM orders_overview_items WHERE id = OLD.id;
+    DELETE FROM office_issue_items WHERE id = OLD.id;
+    DELETE FROM office_issue_archive_items WHERE id = OLD.id;
+    DELETE FROM office_items_in_office WHERE id = OLD.id;
+    DELETE FROM production_work WHERE id = OLD.id;
+    DELETE FROM screen_printing_work WHERE id = OLD.id;
+    DELETE FROM contractor_work WHERE id = OLD.id;
+    DELETE FROM my_orders_in_work_items WHERE id = OLD.id;
+    DELETE FROM my_orders_completed_items WHERE id = OLD.id;
+    DELETE FROM my_orders_unpaid_items WHERE id = OLD.id;
+  END IF;
   RETURN NEW;
 END;
 $$;
@@ -7011,6 +7058,12 @@ CREATE TRIGGER symbolika_sync_orders_overview_item
 AFTER INSERT OR UPDATE OR DELETE ON orders_items
 FOR EACH ROW
 EXECUTE FUNCTION sync_orders_overview_item_trigger();
+
+DROP TRIGGER IF EXISTS symbolika_prepare_orders_overview_item_move ON orders_items;
+CREATE TRIGGER symbolika_prepare_orders_overview_item_move
+BEFORE UPDATE OF "order" ON orders_items
+FOR EACH ROW
+EXECUTE FUNCTION prepare_orders_overview_item_move_trigger();
 
 CREATE TRIGGER symbolika_sync_my_order_buckets_order
 AFTER INSERT OR UPDATE OR DELETE ON orders

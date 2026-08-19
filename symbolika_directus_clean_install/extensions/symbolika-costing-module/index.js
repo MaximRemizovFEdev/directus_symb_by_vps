@@ -1377,6 +1377,9 @@ export const CostingModule = {
       expandedOrderItems: {},
       expandedClientRows: {},
       paymentDialog: null,
+      paymentDeleteDialog: null,
+      itemReorganizeDialog: null,
+      orderMergeDialog: null,
       orderIssueDialog: null,
       newOrderDialog: null,
       estimateDialog: null,
@@ -1587,6 +1590,10 @@ export const CostingModule = {
 
     canManageGiftCertificates() {
       return ['Administrator', 'Управляющий'].includes(this.currentRoleName);
+    },
+
+    canManageOrderPayments() {
+      return ['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName);
     },
 
     visibleGiftCertificates() {
@@ -3157,6 +3164,7 @@ export const CostingModule = {
     canRefreshCurrentArea() {
       return [
         'all_orders', 'my_orders', 'orders_archive',
+        'deadlines', 'costing', 'items_archive', 'office', 'finance',
         'order_economics',
         'production', 'screen', 'contractor_work', 'production_archive',
         'admin_procurement',
@@ -4902,6 +4910,27 @@ export const CostingModule = {
             requests.push(this.loadRows({ silent: true }));
           }
           await Promise.all(requests);
+        } else if (this.activeTab === 'deadlines') {
+          const requests = [this.loadDeadlineRows()];
+          if (!['Производство', 'Шелкография', 'Дизайнер'].includes(this.currentRoleName)) {
+            requests.push(this.loadRows({ silent: true }));
+          }
+          await Promise.all(requests);
+        } else if (['costing', 'items_archive'].includes(this.activeTab)) {
+          await this.loadRows();
+        } else if (this.activeTab === 'office') {
+          await Promise.all([
+            this.loadOfficeRows(),
+            this.loadOfficeIssueRows(),
+            this.loadOfficeArchiveRows(),
+            this.loadOfficeArchiveItems(),
+          ]);
+        } else if (this.activeTab === 'finance') {
+          await Promise.all([
+            this.loadFinanceRows(),
+            this.loadFinanceItemRows(),
+            this.loadManagerFinanceSummary(),
+          ]);
         } else if (this.activeTab === 'order_economics') {
           await Promise.all([this.loadOrderEconomicsRows(), this.loadRows({ silent: true }), this.loadContractors()]);
         } else if (this.activeTab === 'production') {
@@ -5491,6 +5520,10 @@ export const CostingModule = {
     async closeDetail() {
       const parentOrder = this.detailParentOrder;
       const returnToParentOrder = this.detailReturnsToParentOrder;
+      const closingRow = this.detail?.row || null;
+      const orderId = Number(this.entityId(this.orderId(closingRow))
+        || this.entityId(this.orderId(parentOrder))
+        || 0);
       this.detail = null;
       this.detailOrderItems = [];
       this.detailOrderItemsOrderId = null;
@@ -5499,8 +5532,30 @@ export const CostingModule = {
       this.detailItemForm = null;
       this.detailParentOrder = null;
       this.detailReturnsToParentOrder = false;
-      if (parentOrder && returnToParentOrder) await this.openDetail('order', parentOrder);
-      else this.updateOrderLinkUrl(null);
+
+      if (orderId) {
+        const nextItems = { ...this.expandedOrderItems };
+        delete nextItems[String(orderId)];
+        this.expandedOrderItems = nextItems;
+      }
+
+      await this.refreshCurrentArea();
+
+      if (parentOrder && returnToParentOrder) {
+        const refreshedParent = orderId ? await this.findLinkedOrder(orderId) : null;
+        await this.openDetail('order', refreshedParent || parentOrder);
+        return;
+      }
+
+      if (orderId && this.expandedOrderRows[String(orderId)]) {
+        const refreshedOrder = await this.findLinkedOrder(orderId);
+        if (refreshedOrder) {
+          await this.loadDetailOrderItems(refreshedOrder);
+          this.detailOrderItems = [];
+          this.detailOrderItemsOrderId = null;
+        }
+      }
+      this.updateOrderLinkUrl(null);
     },
 
     openParentOrderDetail(row) {
@@ -5650,6 +5705,10 @@ export const CostingModule = {
           'payment_type.name',
           'gift_certificate.id',
           'gift_certificate.code',
+          'gift_certificate.customer',
+          'gift_certificate.nominal_amount',
+          'gift_certificate.remaining_amount',
+          'gift_certificate.valid_until',
           'allocated_amount',
           'unallocated_amount',
           'comment',
@@ -5784,8 +5843,11 @@ export const CostingModule = {
     openPaymentDialog(row, options = {}) {
       this.paymentDialog = {
         row,
+        editingPaymentId: null,
+        originalAmount: 0,
         mode: 'money',
         amount: this.moneyInput(this.officePaymentDue(row)),
+        paymentDate: this.todayInput(),
         paymentType: row.payment_type || '',
         comment: row.payment_comment || '',
         certificateCode: '',
@@ -5795,11 +5857,73 @@ export const CostingModule = {
         source: options.source || '',
         returnToOrderIssue: Boolean(options.returnToOrderIssue),
         orderIssueOrderId: options.orderIssueOrderId || null,
+        saving: false,
       };
     },
 
+    openEditPaymentDialog(payment) {
+      if (!payment || !this.detail?.row) return;
+      const certificate = payment.gift_certificate?.id ? payment.gift_certificate : null;
+      this.paymentDialog = {
+        row: this.detail.row,
+        editingPaymentId: Number(payment.id),
+        originalAmount: this.parseMoney(payment.amount),
+        mode: certificate ? 'certificate' : 'money',
+        amount: this.moneyInput(payment.amount),
+        paymentDate: payment.payment_date || this.todayInput(),
+        paymentType: this.entityId(payment.payment_type) || '',
+        comment: payment.comment || '',
+        certificateCode: certificate?.code || '',
+        certificate,
+        certificateChecking: false,
+        certificateError: '',
+        source: 'order_payment_edit',
+        returnToOrderIssue: false,
+        orderIssueOrderId: null,
+        saving: false,
+      };
+    },
+
+    openDeletePaymentDialog(payment) {
+      if (!payment) return;
+      this.paymentDeleteDialog = { payment, saving: false };
+    },
+
+    closeDeletePaymentDialog() {
+      if (this.paymentDeleteDialog?.saving) return;
+      this.paymentDeleteDialog = null;
+    },
+
     closePaymentDialog() {
+      if (this.paymentDialog?.saving) return;
       this.paymentDialog = null;
+    },
+
+    async refreshCurrentOrderAfterPaymentChange() {
+      await this.loadAllowedData();
+      if (!this.detail || !this.detailIsOrder(this.detail.row)) return;
+      const orderId = Number(this.entityId(this.orderId(this.detail.row)) || 0);
+      const order = orderId ? await this.findLinkedOrder(orderId) : null;
+      if (order) this.detail.row = await this.hydrateOrderDetailRow(order);
+      await Promise.all([
+        this.loadDetailOrderItems(this.detail.row),
+        this.loadDetailPayments(this.detail.row),
+      ]);
+    },
+
+    async deleteOrderPayment() {
+      const dialog = this.paymentDeleteDialog;
+      if (!dialog?.payment?.id || dialog.saving) return;
+      dialog.saving = true;
+      this.error = '';
+      try {
+        await this.request(`/items/order_payments/${dialog.payment.id}`, { method: 'DELETE' });
+        this.paymentDeleteDialog = null;
+        await this.refreshCurrentOrderAfterPaymentChange();
+      } catch (error) {
+        this.error = error?.message || 'Не удалось удалить оплату.';
+        if (this.paymentDeleteDialog) this.paymentDeleteDialog.saving = false;
+      }
     },
 
     showsOrderCompletion(row) {
@@ -6250,12 +6374,13 @@ export const CostingModule = {
 
     async saveOfficePayment() {
       if (!this.paymentDialog?.row) return;
-      const { row, amount, paymentType, comment, returnToOrderIssue, orderIssueOrderId, mode } = this.paymentDialog;
+      const { row, amount, paymentDate, paymentType, comment, returnToOrderIssue, orderIssueOrderId, mode, editingPaymentId } = this.paymentDialog;
       const isOfficeIssue = this.paymentDialog.source === 'office_issue'
         || (row?.office_payment_due !== undefined && (this.activeTab === 'office' || row?.office_issue !== undefined));
       const orderId = this.entityId(this.orderId(row));
-      const key = `${isOfficeIssue ? 'office_issue' : 'order_payments'}:${row.id || orderId}:payment`;
+      const key = `${editingPaymentId ? 'order_payment_edit' : (isOfficeIssue ? 'office_issue' : 'order_payments')}:${editingPaymentId || row.id || orderId}:payment`;
       this.saving = { ...this.saving, [key]: true };
+      this.paymentDialog.saving = true;
       this.error = '';
 
       try {
@@ -6265,15 +6390,29 @@ export const CostingModule = {
         if (mode === 'certificate') {
           certificate = this.paymentDialog.certificate || await this.lookupGiftCertificate();
           if (!certificate) throw new Error(this.paymentDialog.certificateError || 'Проверьте код сертификата.');
-          if (paymentAmount > this.parseMoney(certificate.remaining_amount)) {
+          const availableCertificateAmount = this.parseMoney(certificate.remaining_amount)
+            + (editingPaymentId ? this.parseMoney(this.paymentDialog.originalAmount) : 0);
+          if (paymentAmount > availableCertificateAmount) {
             throw new Error('Сумма превышает остаток сертификата.');
           }
-          if (paymentAmount > this.officePaymentDue(row)) {
+          const availableOrderAmount = this.officePaymentDue(row)
+            + (editingPaymentId ? this.parseMoney(this.paymentDialog.originalAmount) : 0);
+          if (paymentAmount > availableOrderAmount) {
             throw new Error('Сертификатом нельзя оплатить больше остатка по заказу.');
           }
         }
 
-        if (isOfficeIssue && mode !== 'certificate') {
+        if (editingPaymentId) {
+          await this.request(`/items/order_payments/${editingPaymentId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              amount: paymentAmount,
+              payment_date: paymentDate || this.todayInput(),
+              payment_type: mode === 'certificate' ? null : (paymentType ? Number(paymentType) : null),
+              comment: comment || null,
+            }),
+          });
+        } else if (isOfficeIssue && mode !== 'certificate') {
           await this.request(`/items/office_issue/${row.id}`, {
             method: 'PATCH',
             body: JSON.stringify({
@@ -6291,7 +6430,7 @@ export const CostingModule = {
               customer: this.entityId(row.customer) ? Number(this.entityId(row.customer)) : null,
               customer_company: this.entityId(row.customer_company) ? Number(this.entityId(row.customer_company)) : null,
               amount: paymentAmount,
-              payment_date: this.todayInput(),
+              payment_date: paymentDate || this.todayInput(),
               payment_type: mode === 'certificate' ? null : (paymentType ? Number(paymentType) : null),
               gift_certificate: certificate?.id ? Number(certificate.id) : null,
               payment_direction: 'incoming',
@@ -6313,6 +6452,7 @@ export const CostingModule = {
           };
         }
 
+        this.paymentDialog.saving = false;
         this.closePaymentDialog();
         await Promise.all([
           this.loadAllowedData(),
@@ -6321,7 +6461,7 @@ export const CostingModule = {
           this.loadOfficeArchiveRows(),
           this.loadOfficeArchiveItems(),
         ]);
-        if (this.detail && this.detailIsOrder(this.detail.row)) await this.loadDetailPayments(this.detail.row);
+        if (this.detail && this.detailIsOrder(this.detail.row)) await this.refreshCurrentOrderAfterPaymentChange();
         if (returnToOrderIssue
           && this.orderIssueDialog?.order
           && Number(this.orderIssueDialog.order.id) === Number(orderIssueOrderId)) {
@@ -6330,6 +6470,7 @@ export const CostingModule = {
         }
       } catch (error) {
         this.error = error.message;
+        if (this.paymentDialog) this.paymentDialog.saving = false;
       } finally {
         const next = { ...this.saving };
         delete next[key];
@@ -8639,6 +8780,76 @@ export const CostingModule = {
         .slice(0, 500);
     },
 
+    customerSuggestionLabel(customer) {
+      if (!customer) return '';
+      return [customer.name, customer.phone, customer.email]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+        .join(' · ');
+    },
+
+    companySuggestionLabel(company) {
+      if (!company) return '';
+      return [company.name, company.phone, company.email]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+        .join(' · ');
+    },
+
+    autocompleteEntityByQuery(rows, query, labelMethod) {
+      const normalized = String(query || '').trim().toLocaleLowerCase('ru-RU');
+      if (!normalized) return null;
+      const exactLabel = (rows || []).find((row) => (
+        String(labelMethod.call(this, row) || '').trim().toLocaleLowerCase('ru-RU') === normalized
+      ));
+      if (exactLabel) return exactLabel;
+      const exactNameRows = (rows || []).filter((row) => (
+        String(row?.name || '').trim().toLocaleLowerCase('ru-RU') === normalized
+      ));
+      return exactNameRows.length === 1 ? exactNameRows[0] : null;
+    },
+
+    syncPartyAutocomplete(dialog, type) {
+      if (!dialog) return;
+      const isCustomer = type === 'customer';
+      const queryKey = isCustomer ? 'customer_query' : 'company_query';
+      const idKey = isCustomer ? 'customer' : 'customer_company';
+      const rows = isCustomer ? this.customers : this.companies;
+      const labelMethod = isCustomer ? this.customerSuggestionLabel : this.companySuggestionLabel;
+      const query = String(dialog[queryKey] || '').trim();
+      if (!query) {
+        dialog[idKey] = '';
+        return;
+      }
+      const selected = this.autocompleteEntityByQuery(rows, query, labelMethod);
+      dialog[idKey] = selected?.id ? String(selected.id) : '';
+      if (!selected) return;
+      dialog[queryKey] = labelMethod.call(this, selected);
+
+      if (isCustomer) {
+        const companyId = typeof selected.company === 'object' ? selected.company?.id : selected.company;
+        const company = companyId
+          ? this.companies.find((item) => Number(item.id) === Number(companyId))
+          : null;
+        if (company && !dialog.customer_company) {
+          dialog.customer_company = String(company.id);
+          dialog.company_query = this.companySuggestionLabel(company);
+        }
+      }
+    },
+
+    hydratePartyAutocomplete(dialog) {
+      if (!dialog) return;
+      if (dialog.customer && !String(dialog.customer_query || '').trim()) {
+        const customer = this.customers.find((item) => Number(item.id) === Number(dialog.customer));
+        if (customer) dialog.customer_query = this.customerSuggestionLabel(customer);
+      }
+      if (dialog.customer_company && !String(dialog.company_query || '').trim()) {
+        const company = this.companies.find((item) => Number(item.id) === Number(dialog.customer_company));
+        if (company) dialog.company_query = this.companySuggestionLabel(company);
+      }
+    },
+
     feedbackEntityContext() {
       const row = this.detail?.row || null;
       const type = this.detail?.type || '';
@@ -8778,9 +8989,12 @@ export const CostingModule = {
         saving: false,
         date: restored.date || date,
         manager_employee: restored.manager_employee || this.currentEmployeeId || '',
+        customer_query: restored.customer_query || '',
+        company_query: restored.company_query || '',
         items: (restored.items?.length ? restored.items : [this.newOrderItem(restored.deadline || '')])
           .map((item) => ({ ...this.newOrderItem(restored.deadline || ''), ...item, _mobile_extra_open: false })),
       };
+      this.hydratePartyAutocomplete(this.newOrderDialog);
       this.orderDraftPrompt = null;
       this.mobileOrderExtrasOpen = false;
     },
@@ -8808,6 +9022,8 @@ export const CostingModule = {
         manager_employee: this.currentEmployeeId || '',
         customer: '',
         customer_company: '',
+        customer_query: '',
+        company_query: '',
         create_customer: false,
         create_company: false,
         new_customer_name: '',
@@ -8886,6 +9102,8 @@ export const CostingModule = {
       const companyId = typeof customer?.company === 'object' ? customer.company?.id : customer?.company;
       if (companyId && !this.newOrderDialog.customer_company) {
         this.newOrderDialog.customer_company = String(companyId);
+        const company = this.companies.find((item) => Number(item.id) === Number(companyId));
+        if (company) this.newOrderDialog.company_query = this.companySuggestionLabel(company);
       }
     },
 
@@ -8894,6 +9112,7 @@ export const CostingModule = {
       this.newOrderDialog.create_customer = !this.newOrderDialog.create_customer;
       if (this.newOrderDialog.create_customer) {
         this.newOrderDialog.customer = '';
+        this.newOrderDialog.customer_query = '';
       } else {
         this.newOrderDialog.new_customer_name = '';
         this.newOrderDialog.new_customer_phone = '';
@@ -8909,6 +9128,7 @@ export const CostingModule = {
       this.newOrderDialog.create_company = !this.newOrderDialog.create_company;
       if (this.newOrderDialog.create_company) {
         this.newOrderDialog.customer_company = '';
+        this.newOrderDialog.company_query = '';
       } else {
         this.newOrderDialog.new_company_name = '';
         this.newOrderDialog.new_company_phone = '';
@@ -9785,6 +10005,8 @@ export const CostingModule = {
         deadline: row?.deadline ? this.dateOnly(row.deadline) : '',
         customer: this.entityId(row?.customer),
         customer_company: this.entityId(row?.customer_company),
+        customer_query: row?.customer ? this.customerSuggestionLabel(row.customer) : '',
+        company_query: row?.customer_company ? this.companySuggestionLabel(row.customer_company) : '',
         create_customer: false,
         create_company: false,
         new_customer_name: '',
@@ -9814,6 +10036,7 @@ export const CostingModule = {
           url: item.url || '',
         })) : [this.newEstimateItem(row?.deadline ? this.dateOnly(row.deadline) : '')],
       };
+      this.hydratePartyAutocomplete(this.estimateDialog);
     },
 
     closeEstimateDialog() {
@@ -9837,6 +10060,8 @@ export const CostingModule = {
       const companyId = typeof customer?.company === 'object' ? customer.company?.id : customer?.company;
       if (companyId && !this.estimateDialog.customer_company) {
         this.estimateDialog.customer_company = String(companyId);
+        const company = this.companies.find((item) => Number(item.id) === Number(companyId));
+        if (company) this.estimateDialog.company_query = this.companySuggestionLabel(company);
       }
     },
 
@@ -9845,6 +10070,7 @@ export const CostingModule = {
       this.estimateDialog.create_customer = !this.estimateDialog.create_customer;
       if (this.estimateDialog.create_customer) {
         this.estimateDialog.customer = '';
+        this.estimateDialog.customer_query = '';
       } else {
         this.estimateDialog.new_customer_name = '';
         this.estimateDialog.new_customer_phone = '';
@@ -9860,6 +10086,7 @@ export const CostingModule = {
       this.estimateDialog.create_company = !this.estimateDialog.create_company;
       if (this.estimateDialog.create_company) {
         this.estimateDialog.customer_company = '';
+        this.estimateDialog.company_query = '';
       } else {
         this.estimateDialog.new_company_name = '';
         this.estimateDialog.new_company_phone = '';
@@ -13004,6 +13231,198 @@ export const CostingModule = {
       return ['new', 'approval'].includes(status);
     },
 
+    canReorganizeOrderItem(item) {
+      if (!this.canCreateOrders || this.isLimitedProductionItem(item)) return false;
+      if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) return true;
+      return this.orderBelongsToCurrentEmployee(item);
+    },
+
+    canMergeOrder(order) {
+      if (!this.canCreateOrders || !this.detailIsOrder(order)) return false;
+      if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) return true;
+      return this.orderBelongsToCurrentEmployee(order);
+    },
+
+    orderMergeCandidateLabel(order) {
+      const number = String(order?.order_number || `#${order?.id || ''}`).trim();
+      const date = this.formatDate(order?.date);
+      const items = `${Number(order?.items_count || 0)} поз.`;
+      const amount = this.formatMoney(order?.order_sum || 0);
+      return [number, date, items, amount].filter(Boolean).join(' · ');
+    },
+
+    availableOrderMergeTargets() {
+      const dialog = this.orderMergeDialog;
+      if (!dialog) return [];
+      const query = String(dialog.search || '').trim().toLowerCase();
+      if (!query) return dialog.sourceOrders || [];
+      return (dialog.sourceOrders || []).filter((order) => this.orderMergeCandidateLabel(order).toLowerCase().includes(query));
+    },
+
+    async openOrderMergeDialog(order) {
+      if (!this.canMergeOrder(order)) return;
+      const targetOrderId = this.entityId(this.orderId(order));
+      if (!targetOrderId) return;
+
+      this.error = '';
+      this.orderMergeDialog = {
+        targetOrder: order,
+        targetOrderId: Number(targetOrderId),
+        sourceOrderId: '',
+        sourceOrders: [],
+        search: '',
+        loading: true,
+        saving: false,
+      };
+      try {
+        const payload = await this.request(`/symbolika-order-items/orders/${targetOrderId}/merge-targets`);
+        if (!this.orderMergeDialog) return;
+        this.orderMergeDialog.sourceOrders = payload?.data || [];
+      } catch (error) {
+        this.error = error.message || 'Не удалось загрузить заказы для объединения.';
+        this.orderMergeDialog = null;
+      } finally {
+        if (this.orderMergeDialog) this.orderMergeDialog.loading = false;
+      }
+    },
+
+    closeOrderMergeDialog() {
+      if (this.orderMergeDialog?.saving) return;
+      this.orderMergeDialog = null;
+    },
+
+    async submitOrderMerge() {
+      const dialog = this.orderMergeDialog;
+      if (!dialog || dialog.saving) return;
+      const sourceOrderId = Number(dialog.sourceOrderId || 0);
+      if (!sourceOrderId) {
+        this.error = 'Выберите заказ, который нужно присоединить.';
+        return;
+      }
+
+      const source = dialog.sourceOrders.find((order) => Number(order.id) === sourceOrderId);
+      const targetNumber = this.orderNumber(dialog.targetOrder);
+      const sourceNumber = source?.order_number || `#${sourceOrderId}`;
+      if (!window.confirm(`Объединить ${sourceNumber} с ${targetNumber}? Позиции и оплаты перейдут в ${targetNumber}, а ${sourceNumber} будет удалён.`)) return;
+
+      dialog.saving = true;
+      this.error = '';
+      try {
+        const payload = await this.request(`/symbolika-order-items/orders/${dialog.targetOrderId}/merge`, {
+          method: 'POST',
+          body: JSON.stringify({ source_order: sourceOrderId }),
+        });
+        const movedItems = Number(payload?.data?.moved_items || 0);
+        const targetOrderId = Number(dialog.targetOrderId);
+        this.orderMergeDialog = null;
+        this.detail = null;
+        this.detailOrderItems = [];
+        this.detailOrderItemsOrderId = null;
+        this.detailPayments = [];
+        this.detailPaymentsOrderId = null;
+        this.expandedOrderItems = {};
+        await this.loadAllowedData();
+        this.feedbackSavedMessage = `Заказы объединены. Перенесено позиций: ${movedItems}.`;
+        await this.openLinkedOrderById(targetOrderId);
+      } catch (error) {
+        this.error = error.message || 'Не удалось объединить заказы.';
+        if (this.orderMergeDialog) this.orderMergeDialog.saving = false;
+      }
+    },
+
+    itemReorganizeOrderLabel(order) {
+      const number = String(order?.order_number || `#${order?.id || ''}`).trim();
+      const customer = String(order?.company_name || order?.customer_name || 'Без заказчика').trim();
+      const date = this.formatDate(order?.date);
+      return [number, customer, date].filter(Boolean).join(' · ');
+    },
+
+    availableItemReorganizeTargets() {
+      const dialog = this.itemReorganizeDialog;
+      if (!dialog) return [];
+      const query = String(dialog.search || '').trim().toLowerCase();
+      return (dialog.targetOrders || []).filter((order) => {
+        if (dialog.mode === 'move' && Number(order.id) === Number(dialog.sourceOrderId)) return false;
+        if (!query) return true;
+        return this.itemReorganizeOrderLabel(order).toLowerCase().includes(query);
+      });
+    },
+
+    async openItemReorganizeDialog(item, mode = 'duplicate') {
+      if (!this.canReorganizeOrderItem(item)) return;
+      const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
+      const sourceOrderId = this.entityId(this.orderId(item));
+      if (!itemId || !sourceOrderId) return;
+
+      this.error = '';
+      this.itemReorganizeDialog = {
+        item,
+        mode: mode === 'move' ? 'move' : 'duplicate',
+        sourceOrderId: Number(sourceOrderId),
+        targetOrderId: mode === 'move' ? '' : String(sourceOrderId),
+        targetOrders: [],
+        search: '',
+        loading: true,
+        saving: false,
+      };
+      try {
+        const payload = await this.request('/symbolika-order-items/targets');
+        if (!this.itemReorganizeDialog) return;
+        this.itemReorganizeDialog.targetOrders = payload?.data || [];
+        if (this.itemReorganizeDialog.mode === 'duplicate'
+          && !this.itemReorganizeDialog.targetOrders.some((order) => Number(order.id) === Number(sourceOrderId))) {
+          this.itemReorganizeDialog.targetOrderId = '';
+        }
+      } catch (error) {
+        this.error = error.message || 'Не удалось загрузить доступные заказы.';
+        this.itemReorganizeDialog = null;
+      } finally {
+        if (this.itemReorganizeDialog) this.itemReorganizeDialog.loading = false;
+      }
+    },
+
+    closeItemReorganizeDialog() {
+      if (this.itemReorganizeDialog?.saving) return;
+      this.itemReorganizeDialog = null;
+    },
+
+    async submitItemReorganize() {
+      const dialog = this.itemReorganizeDialog;
+      if (!dialog || dialog.saving) return;
+      const itemId = this.entityId(dialog.item?.order_item) || this.entityId(dialog.item?.id);
+      const targetOrderId = Number(dialog.targetOrderId || 0);
+      if (!itemId || !targetOrderId) {
+        this.error = 'Выберите заказ назначения.';
+        return;
+      }
+      if (dialog.mode === 'move' && targetOrderId === Number(dialog.sourceOrderId)) {
+        this.error = 'Для переноса выберите другой заказ.';
+        return;
+      }
+
+      dialog.saving = true;
+      this.error = '';
+      try {
+        const payload = await this.request(`/symbolika-order-items/${itemId}/${dialog.mode}`, {
+          method: 'POST',
+          body: JSON.stringify({ target_order: targetOrderId }),
+        });
+        const resultId = Number(payload?.data?.id || 0);
+        const productName = String(dialog.item?.product_name || 'Позиция').trim();
+        const actionText = dialog.mode === 'move' ? 'перенесена' : 'продублирована';
+        this.itemReorganizeDialog = null;
+        this.expandedOrderItems = {};
+        this.detailOrderItems = [];
+        this.detailOrderItemsOrderId = null;
+        await this.loadAllowedData();
+        this.feedbackSavedMessage = `Позиция «${productName}» ${actionText}.`;
+        if (resultId) await this.openLinkedPositionById(resultId);
+      } catch (error) {
+        this.error = error.message || 'Не удалось выполнить действие с позицией.';
+        if (this.itemReorganizeDialog) this.itemReorganizeDialog.saving = false;
+      }
+    },
+
     async deleteOrderItem(item) {
       const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
       if (!itemId || !this.canDeleteOrderItem(item)) return;
@@ -15164,6 +15583,71 @@ export const CostingModule = {
 
         .symbolika-costing-modal-head h2 {
           margin: 2px 0 0;
+        }
+
+        .symbolika-costing-item-reorganize-modal {
+          inline-size: min(620px, 92vw);
+        }
+
+        .symbolika-costing-item-reorganize-title {
+          margin: 7px 0 0;
+          color: var(--theme--foreground-subdued);
+          font-weight: 750;
+        }
+
+        .symbolika-costing-item-reorganize-switch {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+          margin-block-end: 16px;
+          padding: 5px;
+          border: 1px solid var(--theme--border-color);
+          border-radius: 12px;
+          background: var(--theme--background-subdued);
+        }
+
+        .symbolika-costing-item-reorganize-switch button {
+          min-block-size: 42px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          border: 1px solid transparent;
+          border-radius: 9px;
+          color: var(--theme--foreground-subdued);
+          background: transparent;
+          font: inherit;
+          font-weight: 800;
+          cursor: pointer;
+        }
+
+        .symbolika-costing-item-reorganize-switch button.is-active {
+          border-color: color-mix(in srgb, var(--theme--primary) 58%, var(--theme--border-color));
+          color: var(--theme--foreground);
+          background: color-mix(in srgb, var(--theme--primary) 13%, var(--theme--background));
+        }
+
+        .symbolika-costing-item-reorganize-modal > .symbolika-costing-label + .symbolika-costing-label {
+          margin-block-start: 12px;
+        }
+
+        .symbolika-costing-item-reorganize-note {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          margin-block-start: 16px;
+          padding: 12px 14px;
+          border: 1px solid color-mix(in srgb, var(--theme--primary) 38%, var(--theme--border-color));
+          border-radius: 10px;
+          color: var(--theme--foreground-subdued);
+          background: color-mix(in srgb, var(--theme--primary) 7%, var(--theme--background));
+          font-size: 13px;
+          line-height: 1.45;
+        }
+
+        .symbolika-costing-item-reorganize-note .v-icon {
+          flex: 0 0 auto;
+          color: var(--theme--primary);
         }
 
         .symbolika-costing-issue-modal {
@@ -17733,6 +18217,11 @@ export const CostingModule = {
           grid-template-columns: 72px 78px minmax(82px, 1fr) 86px;
         }
 
+        .symbolika-costing-detail-payment-head.has-actions,
+        .symbolika-costing-detail-payment-row.has-actions {
+          grid-template-columns: 72px 78px minmax(82px, 1fr) 86px 72px;
+        }
+
         .symbolika-costing-detail-payment-row {
           border-block-start: 1px solid color-mix(in srgb, var(--theme--border-color) 56%, transparent);
           font-size: 12px;
@@ -17744,6 +18233,49 @@ export const CostingModule = {
           color: var(--theme--foreground-subdued);
           font-size: 11px;
           font-weight: 700;
+        }
+
+        .symbolika-costing-detail-payment-actions {
+          display: flex;
+          gap: 5px;
+          justify-content: flex-end;
+        }
+
+        .symbolika-costing-detail-payment-actions .symbolika-costing-icon-button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          inline-size: 28px;
+          block-size: 28px;
+          min-inline-size: 28px;
+          padding: 0;
+          border: 1px solid color-mix(in srgb, var(--theme--border-color) 74%, transparent);
+          border-radius: 8px;
+          background: color-mix(in srgb, var(--theme--background-accent) 68%, transparent);
+          color: var(--theme--foreground-subdued);
+          cursor: pointer;
+        }
+
+        .symbolika-costing-detail-payment-actions .symbolika-costing-icon-button:hover {
+          border-color: color-mix(in srgb, var(--theme--primary) 72%, transparent);
+          color: var(--theme--primary);
+        }
+
+        .symbolika-costing-detail-payment-actions .symbolika-costing-icon-button.is-danger:hover,
+        .symbolika-costing-danger-button {
+          border-color: color-mix(in srgb, #ef4444 72%, transparent);
+          background: color-mix(in srgb, #ef4444 16%, var(--theme--background-accent));
+          color: #fb7185;
+        }
+
+        .symbolika-costing-confirm-modal {
+          max-inline-size: 480px;
+        }
+
+        .symbolika-costing-confirm-modal > p {
+          margin: 14px 0 6px;
+          color: var(--theme--foreground-subdued);
+          line-height: 1.55;
         }
 
         .symbolika-costing-empty-compact {
@@ -23500,6 +24032,12 @@ export const CostingModule = {
         <datalist id="symbolika-product-name-suggestions">
           <option v-for="name in productNameSuggestions" :key="name" :value="name"></option>
         </datalist>
+        <datalist id="symbolika-customer-suggestions">
+          <option v-for="customer in customers" :key="customer.id" :value="customerSuggestionLabel(customer)"></option>
+        </datalist>
+        <datalist id="symbolika-company-suggestions">
+          <option v-for="company in companies" :key="company.id" :value="companySuggestionLabel(company)"></option>
+        </datalist>
         <div v-if="mobileViewport && mobileNavigationOpen" class="symbolika-costing-mobile-nav-backdrop" @click.self="mobileNavigationOpen = false">
           <nav class="symbolika-costing-mobile-nav-panel" aria-label="Мобильная навигация рабочего центра">
             <div class="symbolika-costing-mobile-nav-head">
@@ -28544,12 +29082,16 @@ export const CostingModule = {
               <label class="symbolika-costing-label">
                 Клиент
                 <div class="symbolika-costing-field-with-action">
-                  <select v-model="estimateDialog.customer" class="symbolika-costing-select" :disabled="estimateDialog.create_customer" @change="syncEstimateCustomer">
-                    <option value="">Без клиента</option>
-                    <option v-for="customer in customers" :key="customer.id" :value="customer.id">
-                      {{ customer.name }}{{ customer.phone ? ' · ' + customer.phone : '' }}
-                    </option>
-                  </select>
+                  <input
+                    v-model="estimateDialog.customer_query"
+                    class="symbolika-costing-input"
+                    list="symbolika-customer-suggestions"
+                    autocomplete="off"
+                    placeholder="Начните вводить имя или телефон"
+                    :disabled="estimateDialog.create_customer"
+                    @input="syncPartyAutocomplete(estimateDialog, 'customer')"
+                    @change="syncPartyAutocomplete(estimateDialog, 'customer')"
+                  />
                   <button type="button" class="symbolika-costing-inline-button" @click="toggleEstimateCustomer">
                     {{ estimateDialog.create_customer ? 'Выбрать' : 'Новый' }}
                   </button>
@@ -28559,12 +29101,16 @@ export const CostingModule = {
               <label class="symbolika-costing-label">
                 Компания
                 <div class="symbolika-costing-field-with-action">
-                  <select v-model="estimateDialog.customer_company" class="symbolika-costing-select" :disabled="estimateDialog.create_company">
-                    <option value="">Без компании</option>
-                    <option v-for="company in companies" :key="company.id" :value="company.id">
-                      {{ company.name }}
-                    </option>
-                  </select>
+                  <input
+                    v-model="estimateDialog.company_query"
+                    class="symbolika-costing-input"
+                    list="symbolika-company-suggestions"
+                    autocomplete="off"
+                    placeholder="Начните вводить название"
+                    :disabled="estimateDialog.create_company"
+                    @input="syncPartyAutocomplete(estimateDialog, 'company')"
+                    @change="syncPartyAutocomplete(estimateDialog, 'company')"
+                  />
                   <button type="button" class="symbolika-costing-inline-button" @click="toggleEstimateCompany">
                     {{ estimateDialog.create_company ? 'Выбрать' : 'Новая' }}
                   </button>
@@ -28991,12 +29537,16 @@ export const CostingModule = {
               <label class="symbolika-costing-label">
                 Клиент *
                 <div class="symbolika-costing-field-with-action">
-                  <select v-model="newOrderDialog.customer" class="symbolika-costing-select" :disabled="newOrderDialog.create_customer" @change="syncNewOrderCustomer">
-                    <option value="">Выберите клиента</option>
-                    <option v-for="customer in customers" :key="customer.id" :value="customer.id">
-                      {{ customer.name }}{{ customer.phone ? ' · ' + customer.phone : '' }}
-                    </option>
-                  </select>
+                  <input
+                    v-model="newOrderDialog.customer_query"
+                    class="symbolika-costing-input"
+                    list="symbolika-customer-suggestions"
+                    autocomplete="off"
+                    placeholder="Начните вводить имя или телефон"
+                    :disabled="newOrderDialog.create_customer"
+                    @input="syncPartyAutocomplete(newOrderDialog, 'customer')"
+                    @change="syncPartyAutocomplete(newOrderDialog, 'customer')"
+                  />
                   <button type="button" class="symbolika-costing-inline-button" @click="toggleNewOrderCustomer">
                     {{ newOrderDialog.create_customer ? 'Выбрать' : 'Новый' }}
                   </button>
@@ -29006,12 +29556,16 @@ export const CostingModule = {
               <label class="symbolika-costing-label">
                 Компания
                 <div class="symbolika-costing-field-with-action">
-                <select v-model="newOrderDialog.customer_company" class="symbolika-costing-select" :disabled="newOrderDialog.create_company">
-                  <option value="">Без компании</option>
-                  <option v-for="company in companies" :key="company.id" :value="company.id">
-                    {{ company.name }}
-                  </option>
-                </select>
+                <input
+                  v-model="newOrderDialog.company_query"
+                  class="symbolika-costing-input"
+                  list="symbolika-company-suggestions"
+                  autocomplete="off"
+                  placeholder="Начните вводить название"
+                  :disabled="newOrderDialog.create_company"
+                  @input="syncPartyAutocomplete(newOrderDialog, 'company')"
+                  @change="syncPartyAutocomplete(newOrderDialog, 'company')"
+                />
                 <button type="button" class="symbolika-costing-inline-button" @click="toggleNewOrderCompany">
                   {{ newOrderDialog.create_company ? 'Выбрать' : 'Новая' }}
                 </button>
@@ -29895,8 +30449,8 @@ export const CostingModule = {
 
         <div v-if="paymentDialog" class="symbolika-costing-modal-backdrop" @click.self="closePaymentDialog">
           <div class="symbolika-costing-modal">
-            <h2>{{ paymentDialog.returnToOrderIssue ? 'Оплата перед выдачей' : 'Принять оплату' }}</h2>
-            <div class="symbolika-costing-segments symbolika-costing-payment-mode">
+            <h2>{{ paymentDialog.editingPaymentId ? 'Редактировать оплату' : (paymentDialog.returnToOrderIssue ? 'Оплата перед выдачей' : 'Принять оплату') }}</h2>
+            <div v-if="!paymentDialog.editingPaymentId" class="symbolika-costing-segments symbolika-costing-payment-mode">
               <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': paymentDialog.mode === 'money' }" @click="paymentDialog.mode = 'money'; paymentDialog.certificate = null; paymentDialog.certificateError = ''">
                 Обычная оплата
               </button>
@@ -29921,6 +30475,10 @@ export const CostingModule = {
                   inputmode="decimal"
                 />
               </label>
+              <label class="symbolika-costing-label">
+                Дата оплаты
+                <input v-model="paymentDialog.paymentDate" type="date" class="symbolika-costing-input" />
+              </label>
               <label v-if="paymentDialog.mode === 'money'" class="symbolika-costing-label">
                 Тип оплаты
                 <select v-model="paymentDialog.paymentType" class="symbolika-costing-select">
@@ -29930,7 +30488,7 @@ export const CostingModule = {
                   </option>
                 </select>
               </label>
-              <label v-if="paymentDialog.mode === 'certificate' && paymentDialogCustomerCertificates().length" class="symbolika-costing-label">
+              <label v-if="paymentDialog.mode === 'certificate' && !paymentDialog.editingPaymentId && paymentDialogCustomerCertificates().length" class="symbolika-costing-label">
                 Сертификат клиента
                 <select class="symbolika-costing-select" :value="paymentDialog.certificate?.id || ''" @change="selectPaymentGiftCertificate">
                   <option value="">Выберите сертификат</option>
@@ -29939,7 +30497,7 @@ export const CostingModule = {
                   </option>
                 </select>
               </label>
-              <div v-if="paymentDialog.mode === 'certificate'" class="symbolika-costing-label symbolika-costing-certificate-code-field">
+              <div v-if="paymentDialog.mode === 'certificate' && !paymentDialog.editingPaymentId" class="symbolika-costing-label symbolika-costing-certificate-code-field">
                 Код сертификата
                 <div class="symbolika-costing-inline-form">
                   <input
@@ -29968,12 +30526,144 @@ export const CostingModule = {
               </label>
             </div>
             <div class="symbolika-costing-modal-actions">
-              <button type="button" class="symbolika-costing-mini-button" @click="closePaymentDialog">
+              <button type="button" class="symbolika-costing-mini-button" :disabled="paymentDialog.saving" @click="closePaymentDialog">
                 {{ paymentDialog.returnToOrderIssue ? 'Назад к выдаче' : 'Отмена' }}
               </button>
-              <button type="button" class="symbolika-costing-button" @click="saveOfficePayment">
+              <button type="button" class="symbolika-costing-button" :disabled="paymentDialog.saving" @click="saveOfficePayment">
                 <v-icon name="payments" small />
-                Сохранить оплату
+                {{ paymentDialog.saving ? 'Сохраняю…' : 'Сохранить оплату' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="paymentDeleteDialog" class="symbolika-costing-modal-backdrop" @click.self="closeDeletePaymentDialog">
+          <div class="symbolika-costing-modal symbolika-costing-confirm-modal">
+            <h2>Удалить оплату?</h2>
+            <p>
+              Оплата на сумму <strong>{{ formatMoney(paymentDeleteDialog.payment.amount) }}</strong>
+              будет удалена. Оплаченная сумма и остаток заказа пересчитаются автоматически.
+            </p>
+            <div class="symbolika-costing-modal-actions">
+              <button type="button" class="symbolika-costing-mini-button" :disabled="paymentDeleteDialog.saving" @click="closeDeletePaymentDialog">Отмена</button>
+              <button type="button" class="symbolika-costing-button symbolika-costing-danger-button" :disabled="paymentDeleteDialog.saving" @click="deleteOrderPayment">
+                <v-icon name="delete" small />
+                {{ paymentDeleteDialog.saving ? 'Удаляю…' : 'Удалить оплату' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="orderMergeDialog" class="symbolika-costing-modal-backdrop" @click.self="closeOrderMergeDialog">
+          <div class="symbolika-costing-modal symbolika-costing-item-reorganize-modal">
+            <div class="symbolika-costing-modal-head">
+              <div>
+                <div class="symbolika-costing-subtle">Основной заказ останется в системе</div>
+                <h2>Объединить заказы</h2>
+                <p class="symbolika-costing-item-reorganize-title">{{ orderNumber(orderMergeDialog.targetOrder) }}</p>
+              </div>
+              <button type="button" class="symbolika-costing-close" :disabled="orderMergeDialog.saving" @click="closeOrderMergeDialog">
+                <v-icon name="close" />
+              </button>
+            </div>
+
+            <label class="symbolika-costing-label">
+              Найти второй заказ
+              <input v-model="orderMergeDialog.search" class="symbolika-costing-input" type="search" placeholder="Номер, дата или сумма" autocomplete="off" />
+            </label>
+            <label class="symbolika-costing-label">
+              Присоединить заказ *
+              <select v-model="orderMergeDialog.sourceOrderId" class="symbolika-costing-select" :disabled="orderMergeDialog.loading">
+                <option value="">{{ orderMergeDialog.loading ? 'Загружаем заказы…' : 'Выберите заказ того же клиента' }}</option>
+                <option v-for="order in availableOrderMergeTargets()" :key="order.id" :value="String(order.id)">
+                  {{ orderMergeCandidateLabel(order) }}
+                </option>
+              </select>
+            </label>
+
+            <div v-if="!orderMergeDialog.loading && !orderMergeDialog.sourceOrders.length" class="symbolika-costing-item-reorganize-note">
+              <v-icon name="info" small />
+              <span>Других активных заказов этого клиента с тем же плательщиком нет.</span>
+            </div>
+            <div v-else class="symbolika-costing-item-reorganize-note">
+              <v-icon name="merge" small />
+              <span>Позиции, оплаты, задачи, закупки и история перейдут в основной заказ. Второй заказ после объединения будет удалён.</span>
+            </div>
+
+            <div class="symbolika-costing-modal-actions">
+              <button type="button" class="symbolika-costing-mini-button" :disabled="orderMergeDialog.saving" @click="closeOrderMergeDialog">Отмена</button>
+              <button
+                type="button"
+                class="symbolika-costing-button"
+                :disabled="orderMergeDialog.saving || orderMergeDialog.loading || !orderMergeDialog.sourceOrderId"
+                @click="submitOrderMerge"
+              >
+                <v-icon name="merge" small />
+                {{ orderMergeDialog.saving ? 'Объединяем…' : 'Объединить' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="itemReorganizeDialog" class="symbolika-costing-modal-backdrop" @click.self="closeItemReorganizeDialog">
+          <div class="symbolika-costing-modal symbolika-costing-item-reorganize-modal">
+            <div class="symbolika-costing-modal-head">
+              <div>
+                <div class="symbolika-costing-subtle">Позиция заказа</div>
+                <h2>{{ itemReorganizeDialog.mode === 'move' ? 'Перенести в другой заказ' : 'Дублировать позицию' }}</h2>
+                <p class="symbolika-costing-item-reorganize-title">{{ itemReorganizeDialog.item.product_name || 'Без названия' }}</p>
+              </div>
+              <button type="button" class="symbolika-costing-close" :disabled="itemReorganizeDialog.saving" @click="closeItemReorganizeDialog">
+                <v-icon name="close" />
+              </button>
+            </div>
+
+            <div class="symbolika-costing-item-reorganize-switch" role="tablist" aria-label="Действие с позицией">
+              <button
+                type="button"
+                :class="{ 'is-active': itemReorganizeDialog.mode === 'duplicate' }"
+                @click="itemReorganizeDialog.mode = 'duplicate'; itemReorganizeDialog.targetOrderId = String(itemReorganizeDialog.sourceOrderId)"
+              ><v-icon name="content_copy" small />Дублировать</button>
+              <button
+                type="button"
+                :class="{ 'is-active': itemReorganizeDialog.mode === 'move' }"
+                @click="itemReorganizeDialog.mode = 'move'; itemReorganizeDialog.targetOrderId = ''"
+              ><v-icon name="drive_file_move" small />Перенести</button>
+            </div>
+
+            <label class="symbolika-costing-label">
+              Найти заказ
+              <input v-model="itemReorganizeDialog.search" class="symbolika-costing-input" type="search" placeholder="Номер или заказчик" autocomplete="off" />
+            </label>
+            <label class="symbolika-costing-label">
+              Заказ назначения *
+              <select v-model="itemReorganizeDialog.targetOrderId" class="symbolika-costing-select" :disabled="itemReorganizeDialog.loading">
+                <option value="">{{ itemReorganizeDialog.loading ? 'Загружаем заказы…' : 'Выберите заказ' }}</option>
+                <option v-for="order in availableItemReorganizeTargets()" :key="order.id" :value="String(order.id)">
+                  {{ itemReorganizeOrderLabel(order) }}
+                </option>
+              </select>
+            </label>
+
+            <div v-if="itemReorganizeDialog.mode === 'duplicate'" class="symbolika-costing-item-reorganize-note">
+              <v-icon name="info" small />
+              <span>Создадим новую незапущенную позицию с теми же параметрами и ТЗ. Макеты, превью и вложения не копируются — у дубликата будут собственные файлы.</span>
+            </div>
+            <div v-else class="symbolika-costing-item-reorganize-note">
+              <v-icon name="info" small />
+              <span>Позиция сохранит статусы, ТЗ, макеты, вложения, задачи и закупочные связи. Суммы обоих заказов пересчитаются.</span>
+            </div>
+
+            <div class="symbolika-costing-modal-actions">
+              <button type="button" class="symbolika-costing-mini-button" :disabled="itemReorganizeDialog.saving" @click="closeItemReorganizeDialog">Отмена</button>
+              <button
+                type="button"
+                class="symbolika-costing-button"
+                :disabled="itemReorganizeDialog.saving || itemReorganizeDialog.loading || !itemReorganizeDialog.targetOrderId"
+                @click="submitItemReorganize"
+              >
+                <v-icon :name="itemReorganizeDialog.mode === 'move' ? 'drive_file_move' : 'content_copy'" small />
+                {{ itemReorganizeDialog.saving ? 'Сохраняем…' : (itemReorganizeDialog.mode === 'move' ? 'Перенести' : 'Создать дубликат') }}
               </button>
             </div>
           </div>
@@ -30190,6 +30880,10 @@ export const CostingModule = {
               </div>
             </div>
             <div class="symbolika-costing-detail-head-actions">
+              <button v-if="detailIsOrder(detail.row) && canMergeOrder(detail.row)" type="button" class="symbolika-costing-copy-link" @click="openOrderMergeDialog(detail.row)">
+                <v-icon name="merge" small />
+                Объединить
+              </button>
               <button v-if="detailIsOrder(detail.row)" type="button" class="symbolika-costing-copy-link" @click="copyOrderLink(detail.row)">
                 <v-icon :name="copiedOrderLinkId === Number(entityId(orderId(detail.row))) ? 'check' : 'link'" small />
                 {{ copiedOrderLinkId === Number(entityId(orderId(detail.row))) ? 'Скопировано' : 'Ссылка' }}
@@ -30360,17 +31054,26 @@ export const CostingModule = {
               <div class="symbolika-costing-detail-value">
                 <div v-if="detailPaymentsLoading" class="symbolika-costing-subtle">Загружаем оплаты...</div>
                 <div v-else-if="detailPayments.length" class="symbolika-costing-detail-payment-table">
-                  <div class="symbolika-costing-detail-payment-head">
+                  <div class="symbolika-costing-detail-payment-head" :class="{ 'has-actions': canManageOrderPayments() }">
                     <span>Дата</span>
                     <span>Сумма</span>
                     <span>Тип</span>
                     <span>Распределено</span>
+                    <span v-if="canManageOrderPayments()">Действия</span>
                   </div>
-                  <div v-for="payment in detailPayments" :key="'detail-payment-' + payment.id" class="symbolika-costing-detail-payment-row">
+                  <div v-for="payment in detailPayments" :key="'detail-payment-' + payment.id" class="symbolika-costing-detail-payment-row" :class="{ 'has-actions': canManageOrderPayments() }">
                     <span>{{ formatDate(payment.payment_date) }}</span>
                     <strong>{{ formatMoney(payment.amount) }}</strong>
                     <span>{{ payment.gift_certificate?.code ? 'Сертификат · ' + payment.gift_certificate.code : (relatedName(payment.payment_type) || '-') }}</span>
                     <span>{{ formatMoney(payment.allocated_amount) }}</span>
+                    <span v-if="canManageOrderPayments()" class="symbolika-costing-detail-payment-actions">
+                      <button type="button" class="symbolika-costing-icon-button" title="Редактировать оплату" @click="openEditPaymentDialog(payment)">
+                        <v-icon name="edit" small />
+                      </button>
+                      <button type="button" class="symbolika-costing-icon-button is-danger" title="Удалить оплату" @click="openDeletePaymentDialog(payment)">
+                        <v-icon name="delete" small />
+                      </button>
+                    </span>
                     <small v-if="payment.comment">{{ payment.comment }}</small>
                   </div>
                 </div>
@@ -31168,6 +31871,22 @@ export const CostingModule = {
                 </button>
                 <button v-if="currentRoleName !== 'Контрагент'" type="button" class="symbolika-costing-mini-button symbolika-costing-item-parent-button" @click="openParentOrderDetail(detail.row)">
                   <v-icon name="open_in_new" small />Показать заказ
+                </button>
+                <button
+                  v-if="canReorganizeOrderItem(detail.row)"
+                  type="button"
+                  class="symbolika-costing-mini-button"
+                  @click="openItemReorganizeDialog(detail.row, 'duplicate')"
+                >
+                  <v-icon name="content_copy" small />Дублировать
+                </button>
+                <button
+                  v-if="canReorganizeOrderItem(detail.row)"
+                  type="button"
+                  class="symbolika-costing-mini-button"
+                  @click="openItemReorganizeDialog(detail.row, 'move')"
+                >
+                  <v-icon name="drive_file_move" small />Перенести в заказ
                 </button>
                 <button
                   v-if="canDeleteOrderItem(detail.row)"
