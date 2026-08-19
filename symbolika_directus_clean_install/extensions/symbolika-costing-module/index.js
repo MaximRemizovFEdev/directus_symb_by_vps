@@ -31054,19 +31054,19 @@ export const CostingModule = {
               <div class="symbolika-costing-detail-value">
                 <div v-if="detailPaymentsLoading" class="symbolika-costing-subtle">Загружаем оплаты...</div>
                 <div v-else-if="detailPayments.length" class="symbolika-costing-detail-payment-table">
-                  <div class="symbolika-costing-detail-payment-head" :class="{ 'has-actions': canManageOrderPayments() }">
+                  <div class="symbolika-costing-detail-payment-head" :class="{ 'has-actions': canManageOrderPayments }">
                     <span>Дата</span>
                     <span>Сумма</span>
                     <span>Тип</span>
                     <span>Распределено</span>
-                    <span v-if="canManageOrderPayments()">Действия</span>
+                    <span v-if="canManageOrderPayments">Действия</span>
                   </div>
-                  <div v-for="payment in detailPayments" :key="'detail-payment-' + payment.id" class="symbolika-costing-detail-payment-row" :class="{ 'has-actions': canManageOrderPayments() }">
+                  <div v-for="payment in detailPayments" :key="'detail-payment-' + payment.id" class="symbolika-costing-detail-payment-row" :class="{ 'has-actions': canManageOrderPayments }">
                     <span>{{ formatDate(payment.payment_date) }}</span>
                     <strong>{{ formatMoney(payment.amount) }}</strong>
                     <span>{{ payment.gift_certificate?.code ? 'Сертификат · ' + payment.gift_certificate.code : (relatedName(payment.payment_type) || '-') }}</span>
                     <span>{{ formatMoney(payment.allocated_amount) }}</span>
-                    <span v-if="canManageOrderPayments()" class="symbolika-costing-detail-payment-actions">
+                    <span v-if="canManageOrderPayments" class="symbolika-costing-detail-payment-actions">
                       <button type="button" class="symbolika-costing-icon-button" title="Редактировать оплату" @click="openEditPaymentDialog(payment)">
                         <v-icon name="edit" small />
                       </button>
