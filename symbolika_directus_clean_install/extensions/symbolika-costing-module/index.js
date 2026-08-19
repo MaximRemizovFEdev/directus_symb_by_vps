@@ -9463,6 +9463,7 @@ export const CostingModule = {
     },
 
     buildTzContext(item) {
+      const values = this.tzConstructorValues(item);
       const context = {
         product_name: String(item?.product_name || '').trim(),
         quantity: this.formatQuantity(this.parseMoney(item?.quantity)),
@@ -9470,6 +9471,12 @@ export const CostingModule = {
       this.visibleTzFields(item).forEach((field) => {
         context[field.key] = this.tzValueText(item, field);
       });
+
+      const customWidth = String(values.custom_width_mm || '').trim();
+      const customHeight = String(values.custom_height_mm || '').trim();
+      const customSize = customWidth && customHeight ? `${customWidth}×${customHeight} мм` : '';
+      if (customSize && context.format === 'Свой размер') context.format = customSize;
+      if (customSize && context.size === 'Свой размер') context.size = customSize;
       return context;
     },
 
