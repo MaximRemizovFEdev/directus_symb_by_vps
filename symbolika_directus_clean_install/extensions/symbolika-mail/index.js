@@ -142,7 +142,7 @@ function legacyBrandedSignatureHtml(employee, email) {
 function brandedSignatureHtml(employee, email) {
   const settings = signatureSettings(employee, email);
   const phoneLink = settings.phone.replace(/[^+\d]/g, '');
-  const contactRow = (icon, content, href = '') => content ? `<tr><td width="28" style="width:28px;padding:4px 8px 4px 0;vertical-align:middle"><img src="${SIGNATURE_ICON_BASE_URL}/${icon}.svg" width="22" height="22" alt="" style="display:block;width:22px;height:22px;border:0"></td><td style="padding:4px 0;border-bottom:1px solid #46515e;color:#f5f7fa;font-size:12px;line-height:16px;word-break:break-word">${href ? `<a href="${escapeHtml(href)}" style="color:#f5f7fa;text-decoration:none">${escapeHtml(content)}</a>` : escapeHtml(content)}</td></tr>` : '';
+  const contactRow = (icon, content, href = '') => content ? `<tr><td width="24" style="width:24px;padding:4px 6px 4px 0;vertical-align:middle"><img src="${SIGNATURE_ICON_BASE_URL}/${icon}.svg?v=2" width="20" height="20" alt="" style="display:block;width:20px;height:20px;border:0"></td><td style="padding:4px 0;border-bottom:1px solid #46515e;color:#f5f7fa;font-size:12px;line-height:16px;word-break:break-word">${href ? `<a href="${escapeHtml(href)}" style="color:#f5f7fa;text-decoration:none">${escapeHtml(content)}</a>` : escapeHtml(content)}</td></tr>` : '';
   const custom = sanitizeSignatureHtml(employee?.email_signature);
   return `<style>@media only screen and (max-width:560px){.symb-signature .symb-brand{width:24%!important;padding:10px!important}.symb-signature .symb-person{width:31%!important;padding:10px 11px!important}.symb-signature .symb-contacts{width:45%!important;padding:8px 10px!important}.symb-signature .symb-name{font-size:16px!important;line-height:18px!important}.symb-signature .symb-slogan{font-size:9px!important;line-height:12px!important}}</style><table role="presentation" class="symb-signature" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;max-width:100%;margin-top:14px;border:1px solid #39434f;border-radius:12px;background:#171c22;color:#f5f7fa;font-family:Arial,sans-serif;table-layout:fixed"><tr>
 <td class="symb-brand" width="24%" style="width:24%;padding:14px;vertical-align:middle;text-align:center"><img src="${escapeHtml(BRAND_LOGO_URL)}" width="150" alt="Символика" style="display:block;width:100%;max-width:150px;height:auto;margin:0 auto;border:0"></td>
@@ -236,21 +236,20 @@ export default {
 
     router.get('/signature-icon/:name.svg', (req, res) => {
       const icons = {
-        phone: '<path d="M7.2 3.5 5.3 5.4c-.6.6-.7 1.5-.3 2.3 2.2 4.4 5.8 8 10.2 10.2.8.4 1.7.3 2.3-.3l1.9-1.9-3.8-2.5-1.5 1.5c-2.1-1.2-3.8-2.9-5-5l1.5-1.5-2.4-3.7Z" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
-        mail: '<path d="M5 7h14v10H5V7Zm.7.8 6.3 5 6.3-5" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
-        website: '<circle cx="12" cy="12" r="7" fill="none" stroke="white" stroke-width="1.6"/><path d="M5.5 12h13M12 5c2.5 2.3 2.5 11.7 0 14M12 5c-2.5 2.3-2.5 11.7 0 14" fill="none" stroke="white" stroke-width="1.4"/>',
-        location: '<path d="M12 20s6-5.4 6-11a6 6 0 1 0-12 0c0 5.6 6 11 6 11Z" fill="none" stroke="white" stroke-width="1.7"/><circle cx="12" cy="9" r="2" fill="white"/>',
-        vk: '<path d="M7.1 8.2h2.2c.2 2.5 1.2 3.6 2 3.8V8.2h2.1v2.2c1.9-.2 3-2 3-2h2.1s-.6 2.3-2.3 3.5c1.8.9 2.8 3 2.8 3h-2.4s-1.2-2.1-3.2-2.2v2.2h-.3c-4.5 0-5.7-3.1-6-6.7Z" fill="white"/>',
+        phone: '<path d="M7.2 3.5 5.3 5.4c-.6.6-.7 1.5-.3 2.3 2.2 4.4 5.8 8 10.2 10.2.8.4 1.7.3 2.3-.3l1.9-1.9-3.8-2.5-1.5 1.5c-2.1-1.2-3.8-2.9-5-5l1.5-1.5-2.4-3.7Z" fill="none" stroke="#f97316" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>',
+        mail: '<path d="M5 7h14v10H5V7Zm.7.8 6.3 5 6.3-5" fill="none" stroke="#f97316" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>',
+        website: '<circle cx="12" cy="12" r="7" fill="none" stroke="#f97316" stroke-width="1.8"/><path d="M5.5 12h13M12 5c2.5 2.3 2.5 11.7 0 14M12 5c-2.5 2.3-2.5 11.7 0 14" fill="none" stroke="#f97316" stroke-width="1.6"/>',
+        location: '<path d="M12 20s6-5.4 6-11a6 6 0 1 0-12 0c0 5.6 6 11 6 11Z" fill="none" stroke="#f97316" stroke-width="1.9"/><circle cx="12" cy="9" r="2" fill="#f97316"/>',
+        vk: '<path d="M7.1 8.2h2.2c.2 2.5 1.2 3.6 2 3.8V8.2h2.1v2.2c1.9-.2 3-2 3-2h2.1s-.6 2.3-2.3 3.5c1.8.9 2.8 3 2.8 3h-2.4s-1.2-2.1-3.2-2.2v2.2h-.3c-4.5 0-5.7-3.1-6-6.7Z" fill="#f97316"/>',
       };
       const name = cleanText(req.params.name, 30);
       if (!icons[name]) return res.status(404).end();
-      const background = name === 'vk' ? '#0077ff' : '#f97316';
       res.set({
         'Content-Type': 'image/svg+xml; charset=utf-8',
         'Cache-Control': 'public, max-age=604800, immutable',
         'Cross-Origin-Resource-Policy': 'cross-origin',
       });
-      return res.send(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><circle cx="12" cy="12" r="12" fill="${background}"/>${icons[name]}</svg>`);
+      return res.send(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">${icons[name]}</svg>`);
     });
 
     const mailMode = () => cleanText(env?.SYMBOLIKA_MAIL_MODE || 'mock', 20).toLowerCase();

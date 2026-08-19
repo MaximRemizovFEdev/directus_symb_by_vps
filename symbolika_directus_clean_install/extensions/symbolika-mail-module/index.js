@@ -996,8 +996,8 @@ const MailWorkspace = {
         .symbolika-mail-signature-person i { inline-size: 30px; block-size: 2px; margin-block: 9px; background: #f97316; }
         .symbolika-mail-signature-person p { margin: 0; color: #c3c9d1; font-size: 10px; font-style: italic; line-height: 1.4; }
         .symbolika-mail-signature-contacts { gap: 2px; }
-        .symbolika-mail-signature-contacts a { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: center; gap: 6px; min-block-size: 26px; color: #f5f7fa; text-decoration: none; }
-        .symbolika-mail-signature-contacts a > img { display: block; inline-size: 22px; block-size: 22px; object-fit: contain; }
+        .symbolika-mail-signature-contacts a { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 6px; min-block-size: 26px; color: #f5f7fa; text-decoration: none; }
+        .symbolika-mail-signature-contacts a > img { display: block; inline-size: 20px; block-size: 20px; object-fit: contain; }
         .symbolika-mail-signature-contacts a span { padding-block: 4px; border-block-end: 1px solid #46515e; font-size: 10px; line-height: 1.3; overflow-wrap: anywhere; }
         .symbolika-mail-editor-shell { overflow: hidden; border: 1px solid var(--theme--border-color); border-radius: 12px; background: var(--theme--background); }
         .symbolika-mail-editor-toolbar { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px; border-block-end: 1px solid var(--theme--border-color-subdued); background: var(--theme--background-subdued); }
@@ -1393,11 +1393,11 @@ const MailWorkspace = {
                     <div class="symbolika-mail-signature-brand"><img v-if="signatureSettings.logo_url" :src="signatureSettings.logo_url" alt="Символика" /><b v-else>Символика</b></div>
                     <div class="symbolika-mail-signature-person"><h3>{{ signatureSettings.full_name || 'Имя Фамилия' }}</h3><b>{{ signatureSettings.position || 'Должность' }}</b><i></i><p>{{ signatureSettings.slogan_line_1 }}<br v-if="signatureSettings.slogan_line_2" />{{ signatureSettings.slogan_line_2 }}</p></div>
                     <div class="symbolika-mail-signature-contacts">
-                      <a v-if="signatureSettings.phone" :href="'tel:' + signatureSettings.phone"><img src="/symbolika-mail/signature-icon/phone.svg" alt="" /><span>{{ signatureSettings.phone }}</span></a>
-                      <a v-if="signatureSettings.email" :href="'mailto:' + signatureSettings.email"><img src="/symbolika-mail/signature-icon/mail.svg" alt="" /><span>{{ signatureSettings.email }}</span></a>
-                      <a v-if="signatureSettings.website_label" :href="signatureSettings.website_url" target="_blank"><img src="/symbolika-mail/signature-icon/website.svg" alt="" /><span>{{ signatureSettings.website_label }}</span></a>
-                      <a v-if="signatureSettings.address" :href="signatureSettings.map_url" target="_blank"><img src="/symbolika-mail/signature-icon/location.svg" alt="" /><span>{{ signatureSettings.address }}</span></a>
-                      <a v-if="signatureSettings.vk_label" :href="signatureSettings.vk_url" target="_blank"><img src="/symbolika-mail/signature-icon/vk.svg" alt="VK" /><span>{{ signatureSettings.vk_label }}</span></a>
+                      <a v-if="signatureSettings.phone" :href="'tel:' + signatureSettings.phone"><img src="/symbolika-mail/signature-icon/phone.svg?v=2" alt="" /><span>{{ signatureSettings.phone }}</span></a>
+                      <a v-if="signatureSettings.email" :href="'mailto:' + signatureSettings.email"><img src="/symbolika-mail/signature-icon/mail.svg?v=2" alt="" /><span>{{ signatureSettings.email }}</span></a>
+                      <a v-if="signatureSettings.website_label" :href="signatureSettings.website_url" target="_blank"><img src="/symbolika-mail/signature-icon/website.svg?v=2" alt="" /><span>{{ signatureSettings.website_label }}</span></a>
+                      <a v-if="signatureSettings.address" :href="signatureSettings.map_url" target="_blank"><img src="/symbolika-mail/signature-icon/location.svg?v=2" alt="" /><span>{{ signatureSettings.address }}</span></a>
+                      <a v-if="signatureSettings.vk_label" :href="signatureSettings.vk_url" target="_blank"><img src="/symbolika-mail/signature-icon/vk.svg?v=2" alt="VK" /><span>{{ signatureSettings.vk_label }}</span></a>
                     </div>
                   </div>
                 </section>

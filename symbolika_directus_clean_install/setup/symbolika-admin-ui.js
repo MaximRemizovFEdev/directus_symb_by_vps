@@ -1,4 +1,5 @@
 (function () {
+  const symbolikaDocumentTitle = '\u0423\u0447\u0435\u0442\u043d\u0430\u044f \u0441\u0438\u0441\u0442\u0435\u043c\u0430 \u0421\u0438\u043c\u0432\u043e\u043b\u0438\u043a\u0438';
   const exactCountPattern = /^\s*(\d+)\s+(?:Elements?|[\u042d\u044d]\u043b\u0435\u043c\u0435\u043d\u0442(?:\u044b|\u043e\u0432)?)\s*$/i;
   const longRussianDatePattern = /(\d{1,2})\s+(\u044f\u043d\u0432\u0430\u0440\u044f|\u0444\u0435\u0432\u0440\u0430\u043b\u044f|\u043c\u0430\u0440\u0442\u0430|\u0430\u043f\u0440\u0435\u043b\u044f|\u043c\u0430\u044f|\u0438\u044e\u043d\u044f|\u0438\u044e\u043b\u044f|\u0430\u0432\u0433\u0443\u0441\u0442\u0430|\u0441\u0435\u043d\u0442\u044f\u0431\u0440\u044f|\u043e\u043a\u0442\u044f\u0431\u0440\u044f|\u043d\u043e\u044f\u0431\u0440\u044f|\u0434\u0435\u043a\u0430\u0431\u0440\u044f)\s+(\d{4})\s*\u0433\.?(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?/gi;
   const monthNumbers = {
@@ -931,11 +932,17 @@
   }
 
   function scan() {
+    applySymbolikaBranding();
     applyStoredSymbolikaTheme();
     applyDocumentLocale();
     updateCountLabels(document.body);
     normalizeCalendarWeekdays(document.body);
     walk(document.body);
+  }
+
+  function applySymbolikaBranding() {
+    if (document.title !== symbolikaDocumentTitle) document.title = symbolikaDocumentTitle;
+    document.documentElement.setAttribute('data-symbolika-branding', 'ready');
   }
 
   function isContentItemPage() {
@@ -1508,6 +1515,7 @@
       applyHiddenSystemModules();
       applyRoleModuleVisibility();
       applyNotificationCenterShortcut();
+      applySymbolikaBranding();
     });
   });
 
@@ -1517,6 +1525,7 @@
     scan();
   }
 
+  applySymbolikaBranding();
   applyStoredSymbolikaTheme();
   window.addEventListener('symbolika-theme-change', (event) => applySymbolikaTheme(event?.detail?.theme));
   window.addEventListener('storage', (event) => {
@@ -1543,6 +1552,7 @@
     applyStandardContentVisibility();
     applyRoleModuleVisibility();
     applyNotificationCenterShortcut();
+    applySymbolikaBranding();
     attempts += 1;
     if (attempts >= 20) window.clearInterval(interval);
   }, 500);

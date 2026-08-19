@@ -254,24 +254,27 @@ input[type="week"]::-webkit-calendar-picker-indicator {
   display: none !important;
 }
 
-/* Directus requests the project image without an auth token. Keep the global
-   module rail tidy even when that protected asset cannot be downloaded. */
-.module-bar-logo:has(.custom-logo[src*="/assets/"]) {
+/* Independent project branding: the protected Directus project asset may be
+   unavailable before authentication, while this public brand image is stable. */
+.module-bar-logo {
   display: grid !important;
   place-items: center;
+  background: #171c22 !important;
 }
 
-.module-bar-logo:has(.custom-logo[src*="/assets/"]) .custom-logo {
+.module-bar-logo .custom-logo {
   display: none !important;
 }
 
-.module-bar-logo:has(.custom-logo[src*="/assets/"])::before {
-  content: "С";
-  color: #fff;
-  font-size: 22px;
-  font-weight: 900;
-  line-height: 1;
-  letter-spacing: -.04em;
+.module-bar-logo::before {
+  content: "";
+  display: block;
+  width: 30px;
+  height: 32px;
+  background-image: url("/symbolika-mail/brand-logo.png");
+  background-repeat: no-repeat;
+  background-position: 50% top;
+  background-size: 107px auto;
 }
 
 @media (min-width: 1180px) {
