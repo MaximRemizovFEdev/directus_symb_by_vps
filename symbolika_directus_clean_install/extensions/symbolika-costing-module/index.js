@@ -19235,7 +19235,7 @@ export const CostingModule = {
         }
 
         .symbolika-costing-payroll-table col.symbolika-costing-payroll-orders {
-          width: 22% !important;
+          width: 21% !important;
         }
 
         .symbolika-costing-payroll-table col.symbolika-costing-payroll-accruals {
@@ -19243,11 +19243,11 @@ export const CostingModule = {
         }
 
         .symbolika-costing-payroll-table col.symbolika-costing-payroll-payouts {
-          width: 18% !important;
+          width: 16% !important;
         }
 
         .symbolika-costing-payroll-table col.symbolika-costing-payroll-action-col {
-          width: 18% !important;
+          width: 21% !important;
         }
 
         .symbolika-costing-payroll-table th,
@@ -22675,7 +22675,7 @@ export const CostingModule = {
         .symbolika-profile-payslip-actions { display: flex; align-items: center; gap: 8px; }
         .symbolika-payroll-row-actions {
           display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
+          grid-template-columns: repeat(2, minmax(0, 1fr));
           align-items: center;
           gap: 7px;
           inline-size: 100%;
@@ -22688,6 +22688,7 @@ export const CostingModule = {
           padding-inline: 9px;
         }
         .symbolika-payroll-row-actions .symbolika-costing-payroll-action {
+          grid-column: 1 / -1;
           border-color: color-mix(in srgb, var(--symbolika-accent) 65%, transparent);
           background: color-mix(in srgb, var(--symbolika-accent) 14%, transparent);
           color: var(--symbolika-accent);
@@ -22730,12 +22731,12 @@ export const CostingModule = {
             font-size: 0;
           }
           .symbolika-payroll-row-actions {
-            grid-template-columns: 34px 34px 34px;
+            grid-template-columns: 34px 34px;
             justify-content: center;
             gap: 4px;
           }
         }
-        .symbolika-costing-payroll-table { min-inline-size: min(880px, 100%) !important; }
+        .symbolika-costing-payroll-table { min-inline-size: 1180px !important; }
         .symbolika-manager-rank { display: flex; align-items: center; gap: 9px; }
         .symbolika-manager-rank > span { display: grid; place-items: center; inline-size: 25px; block-size: 25px; border-radius: 8px; background: rgba(249,115,22,.13); color: #fb923c; font-size: 11px; font-weight: 850; }
         .symbolika-manager-bar { inline-size: 100%; block-size: 3px; margin-block-start: 6px; overflow: hidden; border-radius: 99px; background: var(--theme--background-normal); }
