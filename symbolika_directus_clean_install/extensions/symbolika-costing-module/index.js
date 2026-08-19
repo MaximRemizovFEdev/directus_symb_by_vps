@@ -4404,6 +4404,43 @@ export const CostingModule = {
       };
     },
 
+    attentionPositions(item) {
+      const row = item?.row || item;
+      const positions = this.detailPositions(row)
+        .filter((position) => String(position?.product_name || '').trim());
+      if (positions.length) return positions;
+      if (String(item?.product_name || '').trim()) {
+        return [{
+          id: item?.row?.id || item?.id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+        }];
+      }
+      return [];
+    },
+
+    attentionPositionsQuantity(item) {
+      return this.attentionPositions(item).reduce((sum, position) => {
+        const quantity = Number(String(position?.quantity ?? '').replace(',', '.'));
+        return sum + (Number.isFinite(quantity) ? quantity : 0);
+      }, 0);
+    },
+
+    attentionPositionsLabel(item) {
+      const positions = this.attentionPositions(item);
+      if (!positions.length) return 'Позиции не найдены';
+      const countLabel = this.pluralRu(positions.length, 'позиция', 'позиции', 'позиций');
+      return `${positions.length} ${countLabel} · ${this.formatQuantity(this.attentionPositionsQuantity(item))} шт.`;
+    },
+
+    attentionPositionsTooltip(item) {
+      const positions = this.attentionPositions(item);
+      if (!positions.length) return 'В заказе нет доступных позиций';
+      return positions.map((position) => (
+        `${position.product_name} — ${this.formatQuantity(position.quantity)} шт.`
+      )).join('\n');
+    },
+
     workQueueItems(list, type, row) {
       const status = this.statusName(row.production_status);
       if (this.isOverdue(row.deadline)) {
@@ -17026,6 +17063,34 @@ export const CostingModule = {
           white-space: nowrap;
         }
 
+        .symbolika-attention-items-summary {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          inline-size: fit-content;
+          max-inline-size: 100%;
+          border: 1px solid color-mix(in srgb, var(--theme--primary) 34%, var(--theme--border-color));
+          border-radius: 999px;
+          background: color-mix(in srgb, var(--theme--primary) 10%, var(--theme--background-normal));
+          color: var(--theme--foreground);
+          padding: 5px 9px;
+          font-size: 12px;
+          font-weight: 820;
+          line-height: 1;
+          cursor: help;
+          white-space: nowrap;
+        }
+
+        .symbolika-attention-items-summary .v-icon {
+          color: var(--theme--primary);
+        }
+
+        .symbolika-attention-items-empty {
+          color: var(--theme--foreground-subdued);
+          font-size: 12px;
+          font-weight: 700;
+        }
+
         .symbolika-costing-cell-money {
           display: grid;
           gap: 3px;
@@ -25413,9 +25478,14 @@ export const CostingModule = {
                   <td>
                     <div class="symbolika-costing-cell-stack">
                       <span class="symbolika-costing-cell-main">{{ item.customer_name || '-' }}</span>
-                      <span class="symbolika-costing-product">{{ item.product_name || '-' }}</span>
+                      <span
+                        v-if="attentionPositions(item).length"
+                        class="symbolika-attention-items-summary"
+                        :title="attentionPositionsTooltip(item)"
+                        tabindex="0"
+                      ><v-icon name="inventory_2" small />{{ attentionPositionsLabel(item) }}</span>
+                      <span v-else class="symbolika-attention-items-empty">Позиции не найдены</span>
                       <span class="symbolika-costing-cell-meta">
-                        {{ formatQuantity(item.quantity) }} шт. ·
                         <a v-if="managerUrl(item.row)" class="symbolika-costing-entity-link" :href="managerUrl(item.row)" @click.prevent="openEntityDetail('manager', item.row)">{{ item.manager_name || detailManagerName(item.row) }}</a>
                         <span v-else>{{ item.customer_company_name || item.manager_name || '-' }}</span>
                       </span>
@@ -25458,9 +25528,14 @@ export const CostingModule = {
                 <td>
                   <div class="symbolika-costing-cell-stack">
                     <span class="symbolika-costing-cell-main">{{ item.customer_name || '-' }}</span>
-                    <span class="symbolika-costing-product">{{ item.product_name || '-' }}</span>
+                    <span
+                      v-if="attentionPositions(item).length"
+                      class="symbolika-attention-items-summary"
+                      :title="attentionPositionsTooltip(item)"
+                      tabindex="0"
+                    ><v-icon name="inventory_2" small />{{ attentionPositionsLabel(item) }}</span>
+                    <span v-else class="symbolika-attention-items-empty">Позиции не найдены</span>
                     <span class="symbolika-costing-cell-meta">
-                      {{ formatQuantity(item.quantity) }} шт. ·
                       <a v-if="managerUrl(item.row)" class="symbolika-costing-entity-link" :href="managerUrl(item.row)" @click.prevent="openEntityDetail('manager', item.row)">{{ item.manager_name || detailManagerName(item.row) }}</a>
                       <span v-else>{{ item.customer_company_name || item.manager_name || '-' }}</span>
                     </span>
