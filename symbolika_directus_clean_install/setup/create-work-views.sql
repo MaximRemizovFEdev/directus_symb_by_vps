@@ -9574,7 +9574,26 @@ BEGIN
       date_updated = now()
   WHERE id = batch_id;
 
+  -- Procurement currently has a single responsible person: the administrator.
+  -- Preserve completed historical tasks, but remove secondary management tasks
+  -- from active work and do not create new duplicates for the manager role.
   managing_task_id := batch_row.management_task_id;
+  IF managing_task_id IS NOT NULL
+     AND managing_task_id IS DISTINCT FROM purchase_task_id THEN
+    UPDATE symbolika_tasks
+    SET status = CASE WHEN status = 'done' THEN status ELSE 'cancelled' END,
+        assigned_to = COALESCE(admin_employee, assigned_to),
+        date_updated = now()
+    WHERE id = managing_task_id;
+
+    UPDATE procurement_batches
+    SET management_task_id = NULL,
+        date_updated = now()
+    WHERE id = batch_id;
+  END IF;
+
+  managing_task_id := NULL;
+  managing_employee := NULL;
   IF managing_employee IS NOT NULL AND managing_employee IS DISTINCT FROM admin_employee THEN
     IF managing_task_id IS NULL THEN
       INSERT INTO symbolika_tasks (
@@ -9612,6 +9631,30 @@ BEGIN
     AND task_order_id IS NOT NULL;
 END;
 $$;
+
+-- Remove the former duplicate procurement task for the manager. The primary
+-- batch task remains assigned to the administrator; completed history stays
+-- completed, while an unfinished duplicate is archived as cancelled.
+UPDATE symbolika_tasks task
+SET status = CASE WHEN task.status = 'done' THEN task.status ELSE 'cancelled' END,
+    assigned_to = COALESCE(
+      (SELECT primary_task.assigned_to
+       FROM symbolika_tasks primary_task
+       WHERE primary_task.id = batch.task_order_id),
+      batch.responsible_employee,
+      task.assigned_to
+    ),
+    date_updated = now()
+FROM procurement_batches batch
+WHERE task.id = batch.management_task_id
+  AND batch.management_task_id IS NOT NULL
+  AND batch.management_task_id IS DISTINCT FROM batch.task_order_id;
+
+UPDATE procurement_batches
+SET management_task_id = NULL,
+    date_updated = now()
+WHERE management_task_id IS NOT NULL
+  AND management_task_id IS DISTINCT FROM task_order_id;
 
 CREATE OR REPLACE FUNCTION refresh_procurement_batch(batch_id integer)
 RETURNS void
