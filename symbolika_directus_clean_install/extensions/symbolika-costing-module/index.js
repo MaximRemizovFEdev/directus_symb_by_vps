@@ -31043,7 +31043,7 @@ export const CostingModule = {
                   <v-icon name="how_to_reg" small />
                   Выдать клиенту
                 </button>
-                <button type="button" class="symbolika-costing-button symbolika-costing-detail-action" @click="openPaymentDialog(detail.row)">
+                <button v-if="officePaymentDue(detail.row) > 0" type="button" class="symbolika-costing-button symbolika-costing-detail-action" @click="openPaymentDialog(detail.row)">
                   <v-icon name="payments" small />
                   Добавить оплату
                 </button>
