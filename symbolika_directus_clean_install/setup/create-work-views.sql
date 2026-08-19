@@ -12994,6 +12994,24 @@ ON CONFLICT (slug) DO UPDATE SET
   is_shared = true,
   is_system = true;
 
+-- Новые исходящие цепочки должны находиться в «Отправленных», даже если
+-- пользователь открыл окно написания из папки «Входящие».
+UPDATE symbolika_mail_threads t
+SET folder_id = sent.id,
+    is_unread = false,
+    date_updated = NOW()
+FROM symbolika_mail_folders sent
+WHERE sent.slug = 'sent'
+  AND t.folder_id <> sent.id
+  AND EXISTS (
+    SELECT 1 FROM symbolika_mail_messages m
+    WHERE m.thread_id = t.id AND m.direction = 'outbound'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM symbolika_mail_messages m
+    WHERE m.thread_id = t.id AND m.direction = 'inbound'
+  );
+
 -- Локальная папка менеджера нужна для отладки интерфейса до подключения IMAP.
 INSERT INTO symbolika_mail_folders (slug, name, imap_name, alias_email, employee, is_shared, sort)
 SELECT

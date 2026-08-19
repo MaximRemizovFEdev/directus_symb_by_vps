@@ -13,6 +13,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const MAIL_ATTACHMENT_ROOT = '/directus/uploads/symbolika-mail';
 const BRAND_LOGO_FILE = fileURLToPath(new URL('./assets/symbolika-logo.png', import.meta.url));
 const BRAND_LOGO_URL = 'https://symbcorp.ru/symbolika-mail/brand-logo.png';
+const SIGNATURE_ICON_BASE_URL = 'https://symbcorp.ru/symbolika-mail/signature-icon';
 const LEGACY_BRAND_LOGO_URL = 'https://static.tildacdn.com/tild6465-3739-4736-b565-653037393965/2.png';
 
 function cleanText(value, max = 5000) {
@@ -76,10 +77,10 @@ const SIGNATURE_DEFAULTS = Object.freeze({
   website_label: 'symb62.ru',
   website_url: 'https://symb62.ru',
   address: 'г. Рязань, ул. Соборная, 46г',
-  map_url: 'https://yandex.ru/maps/?text=%D0%B3.%20%D0%A0%D1%8F%D0%B7%D0%B0%D0%BD%D1%8C%2C%20%D1%83%D0%BB.%20%D0%A1%D0%BE%D0%B1%D0%BE%D1%80%D0%BD%D0%B0%D1%8F%2C%2046%D0%B3',
+  map_url: 'https://yandex.ru/maps/-/CTsI7Q5l',
   vk_label: 'vk.com/universymbols',
   vk_url: 'https://vk.com/universymbols',
-  slogan_line_1: 'Создаём бренд. Печатаем идеи.',
+  slogan_line_1: 'Воплощаем ваши идеи в жизнь.',
   slogan_line_2: 'Работаем с вниманием к деталям.',
   logo_url: BRAND_LOGO_URL,
 });
@@ -118,13 +119,11 @@ function signatureSettings(employee, email, input = undefined) {
   return {
     full_name: text('full_name', 255), position: text('position', 255), phone: text('phone', 64),
     email: EMAIL_PATTERN.test(text('email', 255)) ? text('email', 255).toLowerCase() : defaults.email,
-    website_label: text('website_label', 255), website_url: safeUrl(text('website_url', 1500), defaults.website_url),
-    address: text('address', 500), map_url: safeUrl(text('map_url', 1500), defaults.map_url),
-    vk_label: text('vk_label', 255), vk_url: safeUrl(text('vk_url', 1500), defaults.vk_url),
-    slogan_line_1: text('slogan_line_1', 500), slogan_line_2: text('slogan_line_2', 500),
-    logo_url: safeUrl(text('logo_url', 1500), defaults.logo_url) === LEGACY_BRAND_LOGO_URL
-      ? BRAND_LOGO_URL
-      : safeUrl(text('logo_url', 1500), defaults.logo_url),
+    website_label: defaults.website_label, website_url: defaults.website_url,
+    address: defaults.address, map_url: defaults.map_url,
+    vk_label: defaults.vk_label, vk_url: defaults.vk_url,
+    slogan_line_1: defaults.slogan_line_1, slogan_line_2: defaults.slogan_line_2,
+    logo_url: defaults.logo_url,
   };
 }
 
@@ -142,15 +141,14 @@ function legacyBrandedSignatureHtml(employee, email) {
 
 function brandedSignatureHtml(employee, email) {
   const settings = signatureSettings(employee, email);
-  const logoUrl = settings.logo_url === LEGACY_BRAND_LOGO_URL ? BRAND_LOGO_URL : settings.logo_url;
   const phoneLink = settings.phone.replace(/[^+\d]/g, '');
-  const contactRow = (icon, content, href = '') => content ? `<tr><td style="padding:3px 7px 3px 0;vertical-align:middle"><span style="display:inline-block;width:20px;height:20px;border-radius:50%;background:#f97316;color:#fff;text-align:center;line-height:20px;font-size:9px;font-weight:700">${icon}</span></td><td style="padding:3px 0;border-bottom:1px solid #46515e;color:#f5f7fa;font-size:11px;line-height:14px">${href ? `<a href="${escapeHtml(href)}" style="color:#f5f7fa;text-decoration:none">${escapeHtml(content)}</a>` : escapeHtml(content)}</td></tr>` : '';
+  const contactRow = (icon, content, href = '') => content ? `<tr><td width="28" style="width:28px;padding:4px 8px 4px 0;vertical-align:middle"><img src="${SIGNATURE_ICON_BASE_URL}/${icon}.svg" width="22" height="22" alt="" style="display:block;width:22px;height:22px;border:0"></td><td style="padding:4px 0;border-bottom:1px solid #46515e;color:#f5f7fa;font-size:12px;line-height:16px;word-break:break-word">${href ? `<a href="${escapeHtml(href)}" style="color:#f5f7fa;text-decoration:none">${escapeHtml(content)}</a>` : escapeHtml(content)}</td></tr>` : '';
   const custom = sanitizeSignatureHtml(employee?.email_signature);
-  return `<style>@media only screen and (max-width:480px){.symb-signature .symb-slogan{display:none!important}.symb-signature .symb-brand{width:82px!important;padding:10px!important}.symb-signature .symb-person{width:125px!important;padding:10px 12px!important}.symb-signature .symb-contacts{padding:8px 10px!important}}</style><table role="presentation" class="symb-signature" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;margin-top:14px;border:1px solid #39434f;border-radius:11px;background:#171c22;color:#f5f7fa;font-family:Arial,sans-serif"><tr>
-<td class="symb-cell symb-brand" style="width:112px;padding:14px;vertical-align:middle;text-align:center">${logoUrl ? `<img src="${escapeHtml(logoUrl)}" width="104" alt="Символика" style="display:block;width:104px;max-width:100%;height:auto;margin:0 auto">` : '<div style="font-size:18px;font-weight:800">Символика</div>'}</td>
-<td class="symb-cell symb-person" style="width:168px;padding:14px 16px;border-left:2px solid #f97316;vertical-align:middle"><div style="color:#f5f7fa;font-size:17px;font-weight:800;line-height:20px">${escapeHtml(settings.full_name)}</div><div style="margin-top:4px;color:#f97316;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase">${escapeHtml(settings.position)}</div><div style="width:30px;height:2px;margin:9px 0;background:#f97316"></div><div class="symb-slogan" style="color:#c3c9d1;font-size:10px;font-style:italic;line-height:14px">${escapeHtml(settings.slogan_line_1)}${settings.slogan_line_2 ? `<br>${escapeHtml(settings.slogan_line_2)}` : ''}</div></td>
-<td class="symb-cell symb-contacts" style="padding:10px 14px;vertical-align:middle"><table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%">${contactRow('&#9742;', settings.phone, phoneLink ? `tel:${phoneLink}` : '')}${contactRow('&#9993;', settings.email, settings.email ? `mailto:${settings.email}` : '')}${contactRow('www', settings.website_label, settings.website_url)}${contactRow('&#9679;', settings.address, settings.map_url)}${contactRow('VK', settings.vk_label, settings.vk_url)}</table></td>
-</tr></table>${custom ? `<div style="max-width:600px;margin-top:8px;font-family:Arial,sans-serif;font-size:11px;color:#66717f">${custom}</div>` : ''}`;
+  return `<style>@media only screen and (max-width:560px){.symb-signature .symb-brand{width:24%!important;padding:10px!important}.symb-signature .symb-person{width:31%!important;padding:10px 11px!important}.symb-signature .symb-contacts{width:45%!important;padding:8px 10px!important}.symb-signature .symb-name{font-size:16px!important;line-height:18px!important}.symb-signature .symb-slogan{font-size:9px!important;line-height:12px!important}}</style><table role="presentation" class="symb-signature" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;max-width:100%;margin-top:14px;border:1px solid #39434f;border-radius:12px;background:#171c22;color:#f5f7fa;font-family:Arial,sans-serif;table-layout:fixed"><tr>
+<td class="symb-brand" width="24%" style="width:24%;padding:14px;vertical-align:middle;text-align:center"><img src="${escapeHtml(BRAND_LOGO_URL)}" width="150" alt="Символика" style="display:block;width:100%;max-width:150px;height:auto;margin:0 auto;border:0"></td>
+<td class="symb-person" width="32%" style="width:32%;padding:14px 18px;border-left:2px solid #f97316;vertical-align:middle"><div class="symb-name" style="color:#f5f7fa;font-size:19px;font-weight:800;line-height:22px;word-break:break-word">${escapeHtml(settings.full_name)}</div><div style="margin-top:4px;color:#f97316;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;word-break:break-word">${escapeHtml(settings.position)}</div><div style="width:32px;height:2px;margin:9px 0;background:#f97316"></div><div class="symb-slogan" style="color:#c3c9d1;font-size:10px;font-style:italic;line-height:14px">${escapeHtml(settings.slogan_line_1)}<br>${escapeHtml(settings.slogan_line_2)}</div></td>
+<td class="symb-contacts" width="44%" style="width:44%;padding:10px 16px;vertical-align:middle"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%">${contactRow('phone', settings.phone, phoneLink ? `tel:${phoneLink}` : '')}${contactRow('mail', settings.email, settings.email ? `mailto:${settings.email}` : '')}${contactRow('website', settings.website_label, settings.website_url)}${contactRow('location', settings.address, settings.map_url)}${contactRow('vk', settings.vk_label, settings.vk_url)}</table></td>
+</tr></table>${custom ? `<div style="width:100%;margin-top:8px;font-family:Arial,sans-serif;font-size:11px;color:#66717f">${custom}</div>` : ''}`;
 }
 
 function boolEnv(value, fallback = false) {
@@ -236,6 +234,25 @@ export default {
       createReadStream(BRAND_LOGO_FILE).on('error', next).pipe(res);
     });
 
+    router.get('/signature-icon/:name.svg', (req, res) => {
+      const icons = {
+        phone: '<path d="M7.2 3.5 5.3 5.4c-.6.6-.7 1.5-.3 2.3 2.2 4.4 5.8 8 10.2 10.2.8.4 1.7.3 2.3-.3l1.9-1.9-3.8-2.5-1.5 1.5c-2.1-1.2-3.8-2.9-5-5l1.5-1.5-2.4-3.7Z" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+        mail: '<path d="M5 7h14v10H5V7Zm.7.8 6.3 5 6.3-5" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+        website: '<circle cx="12" cy="12" r="7" fill="none" stroke="white" stroke-width="1.6"/><path d="M5.5 12h13M12 5c2.5 2.3 2.5 11.7 0 14M12 5c-2.5 2.3-2.5 11.7 0 14" fill="none" stroke="white" stroke-width="1.4"/>',
+        location: '<path d="M12 20s6-5.4 6-11a6 6 0 1 0-12 0c0 5.6 6 11 6 11Z" fill="none" stroke="white" stroke-width="1.7"/><circle cx="12" cy="9" r="2" fill="white"/>',
+        vk: '<path d="M7.1 8.2h2.2c.2 2.5 1.2 3.6 2 3.8V8.2h2.1v2.2c1.9-.2 3-2 3-2h2.1s-.6 2.3-2.3 3.5c1.8.9 2.8 3 2.8 3h-2.4s-1.2-2.1-3.2-2.2v2.2h-.3c-4.5 0-5.7-3.1-6-6.7Z" fill="white"/>',
+      };
+      const name = cleanText(req.params.name, 30);
+      if (!icons[name]) return res.status(404).end();
+      const background = name === 'vk' ? '#0077ff' : '#f97316';
+      res.set({
+        'Content-Type': 'image/svg+xml; charset=utf-8',
+        'Cache-Control': 'public, max-age=604800, immutable',
+        'Cross-Origin-Resource-Policy': 'cross-origin',
+      });
+      return res.send(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><circle cx="12" cy="12" r="12" fill="${background}"/>${icons[name]}</svg>`);
+    });
+
     const mailMode = () => cleanText(env?.SYMBOLIKA_MAIL_MODE || 'mock', 20).toLowerCase();
 
     const actorContext = async (req, res) => {
@@ -296,6 +313,15 @@ export default {
     const accessibleFolder = async (folderId, actor) => {
       let query = database('symbolika_mail_folders as f')
         .where('f.id', Number(folderId))
+        .where('f.is_active', true)
+        .select('f.*');
+      query = applyFolderAccess(query, actor);
+      return query.first();
+    };
+
+    const accessibleSystemFolder = async (slug, actor) => {
+      let query = database('symbolika_mail_folders as f')
+        .where('f.slug', slug)
         .where('f.is_active', true)
         .select('f.*');
       query = applyFolderAccess(query, actor);
@@ -731,6 +757,7 @@ export default {
         const requestedFolderId = Number(req.body?.folder_id || replyThread?.folder_id || 0);
         const folder = await accessibleFolder(requestedFolderId, actor);
         if (!folder) return apiError(res, 400, 'Выберите доступную почтовую папку.');
+        const storageFolder = replyThread ? folder : (await accessibleSystemFolder('sent', actor) || folder);
         const fromAlias = cleanText(req.body?.from_alias || actor.sender_alias || folder.alias_email || env?.SYMBOLIKA_EMAIL_FROM || env?.SYMBOLIKA_SMTP_USER, 255).toLowerCase();
         if (!EMAIL_PATTERN.test(fromAlias)) return apiError(res, 400, 'Для папки не настроен адрес отправителя.');
         const configuredAliases = cleanText(env?.SYMBOLIKA_MAIL_ALLOWED_ALIASES, 10000)
@@ -785,7 +812,7 @@ export default {
         let threadId = replyThread?.id;
         if (!threadId) {
           const [created] = await database('symbolika_mail_threads').insert({
-            folder_id: folder.id,
+            folder_id: storageFolder.id,
             external_thread_id: messageId,
             subject,
             preview: deliveredBody.slice(0, 240),
