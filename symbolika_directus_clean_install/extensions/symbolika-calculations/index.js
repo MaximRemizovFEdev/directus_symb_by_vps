@@ -362,7 +362,10 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
   }
 
   function getPublicUrl(path = '/admin') {
-    const baseUrl = env?.SYMBOLIKA_PUBLIC_URL || env?.PUBLIC_URL || env?.DIRECTUS_PUBLIC_URL || '';
+    const configuredBaseUrl = env?.SYMBOLIKA_PUBLIC_URL || env?.PUBLIC_URL || env?.DIRECTUS_PUBLIC_URL || '';
+    const baseUrl = /localhost|127\.0\.0\.1/i.test(String(configuredBaseUrl))
+      ? 'https://symbcorp.ru'
+      : configuredBaseUrl;
     if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) return path;
 
     try {
@@ -772,7 +775,10 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       { id: 'telegram', enabled: settings.telegram_enabled, target: settings.telegram_chat_id },
     ];
     const link = getPublicUrl(getNotificationUrl(collection, item));
-    const externalMessage = [message, link].filter(Boolean).join('\n\n');
+    // External channels do not have a separate, consistently visible subject
+    // (VK and Telegram in particular). Keep it in the message itself so a task
+    // notification always starts with its title instead of a list of metadata.
+    const externalMessage = [subject, message, link].filter(Boolean).join('\n\n');
     for (const channel of channels) {
       if (!channel.enabled) continue;
       if (!channel.target) {
