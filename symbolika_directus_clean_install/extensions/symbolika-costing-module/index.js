@@ -7846,7 +7846,7 @@ export const CostingModule = {
           method: 'PATCH',
           body: JSON.stringify(payload),
         });
-        await Promise.all([this.loadAdminData(), this.loadTasks()]);
+        await Promise.all([this.loadAdminData(), this.loadTaskRows({ silent: true })]);
       } catch (error) {
         this.error = error.message;
         await this.loadAdminData();
@@ -7876,7 +7876,7 @@ export const CostingModule = {
             body: JSON.stringify({ status }),
           })));
         }
-        await Promise.all([this.loadAdminData(), this.loadTasks()]);
+        await Promise.all([this.loadAdminData(), this.loadTaskRows({ silent: true })]);
       } catch (error) {
         this.error = error.message;
         await this.loadAdminData();
