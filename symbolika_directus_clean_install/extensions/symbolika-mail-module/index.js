@@ -188,8 +188,17 @@ const MailWorkspace = {
   async mounted() {
     this.installStyles();
     await this.loadMailbox(true);
+    // Bootstrap reads the local mail cache. Pull IMAP immediately as well so
+    // opening the module never requires an extra click on Refresh.
+    await this.syncMailbox(true);
     await this.openLinkedThread();
     this.autoRefreshTimer = window.setInterval(() => this.autoRefreshMailbox(), 10000);
+    this._mailVisibilityHandler = () => {
+      if (!document.hidden) this.autoRefreshMailbox();
+    };
+    this._mailFocusHandler = () => this.autoRefreshMailbox();
+    document.addEventListener('visibilitychange', this._mailVisibilityHandler);
+    window.addEventListener('focus', this._mailFocusHandler);
   },
 
   beforeUnmount() {
@@ -197,6 +206,8 @@ const MailWorkspace = {
     window.clearTimeout(this.errorTimer);
     window.clearTimeout(this.noticeTimer);
     window.clearInterval(this.autoRefreshTimer);
+    if (this._mailVisibilityHandler) document.removeEventListener('visibilitychange', this._mailVisibilityHandler);
+    if (this._mailFocusHandler) window.removeEventListener('focus', this._mailFocusHandler);
   },
 
   methods: {
@@ -274,7 +285,7 @@ const MailWorkspace = {
     },
 
     async autoRefreshMailbox() {
-      if (document.hidden || this.loading || this.threadLoading || this.sending || this.syncing || this.showComposer) return;
+      if (document.hidden || this.loading || this.threadLoading || this.sending || this.syncing) return;
       await this.syncMailbox(true);
     },
 

@@ -1120,6 +1120,7 @@ export const CostingModule = {
       contractors: [],
       loading: true,
       areaRefreshing: false,
+      backgroundAreaRefreshing: false,
       saving: {},
       error: '',
       errorToast: '',
@@ -3300,6 +3301,7 @@ export const CostingModule = {
     if (this.pagingCompletionTimer) clearTimeout(this.pagingCompletionTimer);
     if (this.orderDraftSaveTimer) clearTimeout(this.orderDraftSaveTimer);
     if (this.errorToastTimer) clearTimeout(this.errorToastTimer);
+    if (this._backgroundAreaRefreshTimer) clearTimeout(this._backgroundAreaRefreshTimer);
     Object.values(this.savedMessageTimers || {}).forEach((timer) => clearTimeout(timer));
   },
 
@@ -4969,10 +4971,22 @@ export const CostingModule = {
       await Promise.all(tasks);
     },
 
-    async refreshCurrentArea() {
-      if (this.areaRefreshing || !this.canRefreshCurrentArea) return;
-      this.areaRefreshing = true;
-      this.error = '';
+    scheduleBackgroundAreaRefresh(delay = 350) {
+      if (this._backgroundAreaRefreshTimer) window.clearTimeout(this._backgroundAreaRefreshTimer);
+      this._backgroundAreaRefreshTimer = window.setTimeout(() => {
+        this._backgroundAreaRefreshTimer = null;
+        this.refreshCurrentArea({ background: true });
+      }, delay);
+    },
+
+    async refreshCurrentArea(options = {}) {
+      const background = options.background === true;
+      if (this.areaRefreshing || this.backgroundAreaRefreshing || !this.canRefreshCurrentArea) return;
+      if (background) this.backgroundAreaRefreshing = true;
+      else {
+        this.areaRefreshing = true;
+        this.error = '';
+      }
 
       try {
         if (['all_orders', 'my_orders', 'orders_archive'].includes(this.activeTab)) {
@@ -4989,7 +5003,7 @@ export const CostingModule = {
           }
           await Promise.all(requests);
         } else if (['costing', 'items_archive'].includes(this.activeTab)) {
-          await this.loadRows();
+          await this.loadRows({ silent: background });
         } else if (this.activeTab === 'office') {
           await Promise.all([
             this.loadOfficeRows(),
@@ -5029,9 +5043,10 @@ export const CostingModule = {
           await this.loadTaskRows();
         }
       } catch (error) {
-        this.error = error.message || 'Не удалось обновить данные раздела.';
+        if (!background) this.error = error.message || 'Не удалось обновить данные раздела.';
       } finally {
-        this.areaRefreshing = false;
+        if (background) this.backgroundAreaRefreshing = false;
+        else this.areaRefreshing = false;
         await this.$nextTick();
         this.bindPagingObserver();
       }
@@ -5539,6 +5554,11 @@ export const CostingModule = {
         const payload = await this.request(`/items/orders_items/${itemId}?fields=${encodeURIComponent(fields)}`);
         if (!payload?.data) return row;
         const hydrated = { ...row, ...payload.data };
+        // Work views expose an effective position deadline: the item's own
+        // deadline, or the parent order deadline when the item has no override.
+        // The raw orders_items response contains null in the latter case and
+        // must not erase the useful deadline already shown in the list.
+        if (!hydrated.deadline && row?.deadline) hydrated.deadline = row.deadline;
         ['product_category', 'product_subcategory', 'application_method', 'production_status', 'contractor_1', 'contractor_2'].forEach((field) => {
           if (hydrated[field] !== undefined && hydrated[field] !== null) hydrated[field] = this.entityId(hydrated[field]);
         });
@@ -5588,6 +5608,13 @@ export const CostingModule = {
       const detailRow = this.detailIsOrder(row)
         ? await this.hydrateOrderDetailRow(row)
         : (type === 'orders_items' ? await this.hydrateOrderItemDetailRow(row) : row);
+      if (type === 'orders_items' && !detailRow?.deadline) {
+        const inheritedDeadline = options.parentOrder?.deadline
+          || this.detailParentOrder?.deadline
+          || this.detailOrderContext(detailRow)?.deadline
+          || null;
+        if (inheritedDeadline) detailRow.deadline = inheritedDeadline;
+      }
       this.detail = { type, row: detailRow };
       if (this.detailIsOrder(detailRow)) {
         this.updateOrderLinkUrl(detailRow);
@@ -5989,9 +6016,11 @@ export const CostingModule = {
     },
 
     async refreshCurrentOrderAfterPaymentChange() {
-      await this.loadAllowedData();
-      if (!this.detail || !this.detailIsOrder(this.detail.row)) return;
-      const orderId = Number(this.entityId(this.orderId(this.detail.row)) || 0);
+      const orderId = this.detail && this.detailIsOrder(this.detail.row)
+        ? Number(this.entityId(this.orderId(this.detail.row)) || 0)
+        : 0;
+      await this.refreshCurrentArea({ background: true });
+      if (!orderId || !this.detail || !this.detailIsOrder(this.detail.row)) return;
       const order = orderId ? await this.findLinkedOrder(orderId) : null;
       if (order) this.detail.row = await this.hydrateOrderDetailRow(order);
       await Promise.all([
@@ -8092,8 +8121,11 @@ export const CostingModule = {
     },
 
     async loadRows(options = {}) {
-      this.loading = true;
-      this.error = '';
+      const silent = options.silent === true;
+      if (!silent) {
+        this.loading = true;
+        this.error = '';
+      }
 
       try {
         const params = new URLSearchParams();
@@ -8108,9 +8140,9 @@ export const CostingModule = {
           contractor_2_cost: this.moneyInput(row.contractor_2_cost),
         })) });
       } catch (error) {
-        if (!options.silent) this.error = error.message;
+        if (!silent) this.error = error.message;
       } finally {
-        this.loading = false;
+        if (!silent) this.loading = false;
       }
     },
 
@@ -10856,15 +10888,15 @@ export const CostingModule = {
         const normalized = field === 'blank_ordered'
           ? Boolean(value)
           : (field.includes('cost') ? this.parseMoney(value) : (value || null));
+        Object.assign(row, { [field]: normalized });
         await this.request(`/items/contractor_costing/${row.id}`, {
           method: 'PATCH',
           body: JSON.stringify({ [field]: normalized }),
         });
-
-        await this.loadRows();
+        this.scheduleBackgroundAreaRefresh();
       } catch (error) {
         this.error = error.message;
-        await this.loadRows();
+        this.scheduleBackgroundAreaRefresh(0);
       } finally {
         const next = { ...this.saving };
         delete next[key];
@@ -10896,17 +10928,15 @@ export const CostingModule = {
       this.error = '';
 
       try {
+        Object.assign(row, { [field]: value || null });
         await this.request(`/items/${collection}/${row.id}`, {
           method: 'PATCH',
           body: JSON.stringify({ [field]: value || null }),
         });
-
-        if (collection === 'contractor_work') await this.loadContractorWorkRows();
-        else await this.loadWorkRows(collection);
+        this.scheduleBackgroundAreaRefresh();
       } catch (error) {
         this.error = error.message;
-        if (collection === 'contractor_work') await this.loadContractorWorkRows();
-        else await this.loadWorkRows(collection);
+        this.scheduleBackgroundAreaRefresh(0);
       } finally {
         const next = { ...this.saving };
         delete next[key];
@@ -10931,15 +10961,15 @@ export const CostingModule = {
       this.error = '';
 
       try {
+        Object.assign(row, { office_status: value || null });
         await this.request(`/items/office_items_in_office/${row.id}`, {
           method: 'PATCH',
           body: JSON.stringify({ office_status: value || null }),
         });
-
-        await Promise.all([this.loadOfficeIssueRows(), this.loadOfficeRows(), this.loadOfficeArchiveRows(), this.loadOfficeArchiveItems()]);
+        this.scheduleBackgroundAreaRefresh();
       } catch (error) {
         this.error = error.message;
-        await Promise.all([this.loadOfficeIssueRows(), this.loadOfficeRows()]);
+        this.scheduleBackgroundAreaRefresh(0);
       } finally {
         const next = { ...this.saving };
         delete next[key];
@@ -10954,15 +10984,15 @@ export const CostingModule = {
 
       try {
         const normalized = ['add_payment'].includes(field) ? this.parseMoney(value) : (value || null);
+        Object.assign(row, { [field]: normalized });
         await this.request(`/items/office_issue/${row.id}`, {
           method: 'PATCH',
           body: JSON.stringify({ [field]: normalized }),
         });
-
-        await Promise.all([this.loadOfficeIssueRows(), this.loadOfficeRows(), this.loadOfficeArchiveRows(), this.loadOfficeArchiveItems()]);
+        this.scheduleBackgroundAreaRefresh();
       } catch (error) {
         this.error = error.message;
-        await Promise.all([this.loadOfficeIssueRows(), this.loadOfficeRows()]);
+        this.scheduleBackgroundAreaRefresh(0);
       } finally {
         const next = { ...this.saving };
         delete next[key];
@@ -10988,10 +11018,10 @@ export const CostingModule = {
         });
 
         this.updateOrderCaches(orderId, { [field]: normalized });
-        await this.loadAllowedData();
+        this.scheduleBackgroundAreaRefresh();
       } catch (error) {
         this.error = error.message;
-        await this.loadAllowedData();
+        this.scheduleBackgroundAreaRefresh(0);
       } finally {
         const next = { ...this.saving };
         delete next[key];
@@ -11034,10 +11064,10 @@ export const CostingModule = {
         });
 
         this.updateOrderCaches(orderId, patch);
-        await this.loadAllowedData();
+        this.scheduleBackgroundAreaRefresh();
       } catch (error) {
         this.error = error.message;
-        await this.loadAllowedData();
+        this.scheduleBackgroundAreaRefresh(0);
       } finally {
         const next = { ...this.saving };
         delete next[key];
@@ -11098,11 +11128,6 @@ export const CostingModule = {
         });
 
         this.updateOrderItemCaches(itemId, patch);
-        await this.loadAllowedData();
-        // loadAllowedData replaces list arrays with freshly fetched rows. Some
-        // summary views don't expose detail-only fields (for example TЗ), so
-        // reapply the confirmed patch to the new row objects as well.
-        this.updateOrderItemCaches(itemId, patch);
 
         // Database triggers can change the item and production statuses together
         // with the edited office status. Reload those values explicitly because
@@ -11130,9 +11155,10 @@ export const CostingModule = {
         refreshParams.set('fields', refreshFields.join(','));
         const refreshedPayload = await this.request(`/items/orders_items/${itemId}?${refreshParams.toString()}`);
         if (refreshedPayload?.data) this.updateOrderItemCaches(itemId, refreshedPayload.data);
+        this.scheduleBackgroundAreaRefresh();
       } catch (error) {
         this.error = error.message;
-        await this.loadAllowedData();
+        this.scheduleBackgroundAreaRefresh(0);
       } finally {
         const next = { ...this.saving };
         delete next[key];
@@ -11403,8 +11429,7 @@ export const CostingModule = {
         };
         Object.assign(row, patch);
         this.updateOrderItemCaches(itemId, patch);
-        await this.loadAllowedData();
-        this.updateOrderItemCaches(itemId, patch);
+        this.scheduleBackgroundAreaRefresh();
         return true;
       } catch (error) {
         this.error = error.message;
@@ -11699,8 +11724,7 @@ export const CostingModule = {
         Object.assign(row, patch);
         this.updateOrderItemCaches(itemId, patch);
         if (options.reload !== false) {
-          await this.loadAllowedData();
-          this.updateOrderItemCaches(itemId, patch);
+          this.scheduleBackgroundAreaRefresh();
         }
         return true;
       } catch (error) {
