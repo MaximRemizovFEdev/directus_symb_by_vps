@@ -1195,6 +1195,7 @@ export const CostingModule = {
       orderDeadlineTo: '',
       orderDateFrom: '',
       orderDateTo: '',
+      orderManagerFilter: '',
       orderStatusFilters: [],
       officeStatusFilters: [],
       workDeadlinePanelOpen: false,
@@ -2003,9 +2004,27 @@ export const CostingModule = {
       if (this.activeFilter !== 'all') count += 1;
       if (this.orderDeadlineFrom || this.orderDeadlineTo) count += 1;
       if (this.orderDateFrom || this.orderDateTo) count += 1;
+      if (this.activeTab === 'all_orders' && this.orderManagerFilter) count += 1;
       count += this.orderStatusFilters.length;
       count += this.officeStatusFilters.length;
       return count;
+    },
+
+    orderManagerOptions() {
+      const options = new Map();
+      (this.employees || []).forEach((employee) => {
+        const id = this.entityId(employee);
+        const name = String(employee?.full_name || '').trim();
+        if (id && name) options.set(String(id), name);
+      });
+      (this.allOrderRows || []).forEach((row) => {
+        const id = this.entityId(row?.manager_employee);
+        const name = String(row?.manager_name || this.relatedName(row?.manager_employee, 'full_name') || '').trim();
+        if (id && name) options.set(String(id), name);
+      });
+      return [...options.entries()]
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
     },
 
     orderFilterSummary() {
@@ -2019,6 +2038,10 @@ export const CostingModule = {
       }
       if (this.orderDateFrom || this.orderDateTo) {
         parts.push(`Дата ${this.orderDateFrom ? this.formatDate(this.orderDateFrom) : 'с начала'} - ${this.orderDateTo ? this.formatDate(this.orderDateTo) : 'без конца'}`);
+      }
+      if (this.activeTab === 'all_orders' && this.orderManagerFilter) {
+        const manager = this.orderManagerOptions.find((option) => String(option.id) === String(this.orderManagerFilter));
+        parts.push(`Менеджер: ${manager?.name || 'выбран'}`);
       }
       if (this.orderStatusFilters.length) parts.push(`${this.orderStatusFilters.length} ${this.pluralRu(this.orderStatusFilters.length, 'статус заказа', 'статуса заказа', 'статусов заказа')}`);
       if (this.officeStatusFilters.length) parts.push(`${this.officeStatusFilters.length} ${this.pluralRu(this.officeStatusFilters.length, 'статус офиса', 'статуса офиса', 'статусов офиса')}`);
@@ -3199,6 +3222,7 @@ export const CostingModule = {
       if (String(value || '').trim()) this.completeActivePagingSoon();
     },
     activeFilter() { this.completeActivePagingSoon(); },
+    orderManagerFilter() { this.completeActivePagingSoon(); },
     orderStatusFilters: { deep: true, handler() { this.completeActivePagingSoon(); } },
     officeStatusFilters: { deep: true, handler() { this.completeActivePagingSoon(); } },
     taskStatusFilter() { this.completeActivePagingSoon(); },
@@ -5087,6 +5111,7 @@ export const CostingModule = {
       this.orderDeadlineTo = '';
       this.orderDateFrom = '';
       this.orderDateTo = '';
+      this.orderManagerFilter = '';
       this.orderStatusFilters = [];
       this.officeStatusFilters = [];
     },
@@ -5196,6 +5221,16 @@ export const CostingModule = {
       if (!this.matchesDeadlineFilter(row)) return false;
       if (!this.matchesDateRange(row.deadline, this.orderDeadlineFrom, this.orderDeadlineTo)) return false;
       if (!this.matchesDateRange(row.date, this.orderDateFrom, this.orderDateTo)) return false;
+
+      if (this.activeTab === 'all_orders' && this.orderManagerFilter) {
+        const managerId = String(this.entityId(row?.manager_employee) || '');
+        const selectedId = String(this.orderManagerFilter);
+        if (managerId !== selectedId) {
+          const selected = this.orderManagerOptions.find((option) => String(option.id) === selectedId);
+          const managerName = String(row?.manager_name || this.relatedName(row?.manager_employee, 'full_name') || '').trim();
+          if (!selected?.name || managerName !== selected.name) return false;
+        }
+      }
 
       if (this.orderStatusFilters.length) {
         const statusId = this.entityId(row.order_status);
@@ -5543,6 +5578,9 @@ export const CostingModule = {
       this.detailOrderItemsOrderId = null;
       this.detailPayments = [];
       this.detailPaymentsOrderId = null;
+      const abandonedDraftToken = this.detailItemForm?._upload_status !== 'idle' ? this.detailItemForm?._draft_upload_token : null;
+      if (this.detailItemForm) this.detailItemForm._draft_upload_token = this.draftLayoutToken();
+      if (abandonedDraftToken) this.cleanupDraftLayout(abandonedDraftToken);
       this.detailItemForm = null;
       this.detailParentOrder = options.parentOrder || null;
       this.detailReturnsToParentOrder = !!options.returnToParentOrder;
@@ -5797,6 +5835,9 @@ export const CostingModule = {
 
     cancelDetailItemForm() {
       if (this.detailItemForm?.saving) return;
+      const oldToken = this.detailItemForm?._draft_upload_token;
+      if (this.detailItemForm) this.detailItemForm._draft_upload_token = this.draftLayoutToken();
+      if (oldToken) this.cleanupDraftLayout(oldToken);
       this.detailItemForm = null;
     },
 
@@ -8056,6 +8097,7 @@ export const CostingModule = {
         params.set('sort', '-date,order_number,product_name,id');
         await this.loadPagedCollection('costing', '/items/contractor_costing', params, (rows, append) => {
           this.rows = append ? this.mergePagedRows(this.rows, rows) : rows;
+          this.loadItemWorkReadiness(rows).catch(() => {});
         }, { mapRows: (rows) => rows.map((row) => ({
           ...row,
           contractor_1_cost: this.moneyInput(row.contractor_1_cost),
@@ -8066,6 +8108,26 @@ export const CostingModule = {
       } finally {
         this.loading = false;
       }
+    },
+
+    async loadItemWorkReadiness(rows) {
+      const ids = [...new Set((rows || [])
+        .map((row) => Number(this.entityId(row?.order_item) || this.entityId(row?.id) || 0))
+        .filter((id) => id > 0))];
+      if (!ids.length || !this.canCreateOrders) return;
+
+      const params = new URLSearchParams();
+      params.set('fields', 'id,technical_task_text,url,layout_revision_url_snapshot');
+      params.set('filter[id][_in]', ids.join(','));
+      params.set('limit', String(ids.length));
+      const payload = await this.request(`/items/orders_items?${params.toString()}`);
+      (payload?.data || []).forEach((item) => {
+        this.updateOrderItemCaches(item.id, {
+          technical_task_text: item.technical_task_text,
+          url: item.url,
+          layout_revision_url_snapshot: item.layout_revision_url_snapshot,
+        });
+      });
     },
 
     async loadOrderEconomicsRows(options = {}) {
@@ -8974,6 +9036,7 @@ export const CostingModule = {
       (draft.items || []).forEach((item) => {
         delete item._mobile_extra_open;
         delete item._layout_file;
+        delete item._draft_upload_promise;
       });
       return draft;
     },
@@ -8987,6 +9050,7 @@ export const CostingModule = {
         || (dialog.items || []).some((item) => (
           String(item.product_name || '').trim() || Number(item.quantity || 0) > 0
           || String(item.technical_task_text || '').trim() || String(item._layout_file?.name || '').trim()
+          || String(item._draft_upload_result?.name || '').trim()
           || String(item.url || '').trim()
         ))
       );
@@ -9019,6 +9083,27 @@ export const CostingModule = {
       }
     },
 
+    persistClosedDraftUpload(draftToken, uploaded, error = '') {
+      if (this.newOrderDialog) {
+        this.saveNewOrderDraft();
+        return;
+      }
+      try {
+        const key = this.newOrderDraftStorageKey();
+        const stored = JSON.parse(localStorage.getItem(key) || 'null');
+        const item = stored?.data?.items?.find((candidate) => candidate?._draft_upload_token === draftToken);
+        if (!item) return;
+        item._draft_upload_result = uploaded || null;
+        item._upload_status = uploaded ? 'done' : 'error';
+        item._upload_progress = uploaded ? 100 : Number(item._upload_progress || 0);
+        item._upload_error = error;
+        stored.saved_at = new Date().toISOString();
+        localStorage.setItem(key, JSON.stringify(stored));
+      } catch {
+        // The completed upload remains on Disk even if draft metadata cannot be persisted.
+      }
+    },
+
     clearNewOrderDraft() {
       try { localStorage.removeItem(this.newOrderDraftStorageKey()); } catch {}
       this.orderDraftPrompt = null;
@@ -9045,7 +9130,23 @@ export const CostingModule = {
         customer_query: restored.customer_query || '',
         company_query: restored.company_query || '',
         items: (restored.items?.length ? restored.items : [this.newOrderItem(restored.deadline || '')])
-          .map((item) => ({ ...this.newOrderItem(restored.deadline || ''), ...item, _mobile_extra_open: false })),
+          .map((item) => {
+            const restoredItem = {
+              ...this.newOrderItem(restored.deadline || ''),
+              ...item,
+              _mobile_extra_open: false,
+              _draft_upload_promise: null,
+            };
+            if (!restoredItem._draft_upload_result && ['uploading', 'finalizing'].includes(restoredItem._upload_status)) {
+              const oldToken = restoredItem._draft_upload_token;
+              restoredItem._draft_upload_token = this.draftLayoutToken();
+              restoredItem._upload_status = 'error';
+              restoredItem._upload_progress = 0;
+              restoredItem._upload_error = 'Загрузка была прервана. Выберите файл повторно.';
+              if (oldToken) this.cleanupDraftLayout(oldToken);
+            }
+            return restoredItem;
+          }),
       };
       this.hydratePartyAutocomplete(this.newOrderDialog);
       this.orderDraftPrompt = null;
@@ -9053,6 +9154,13 @@ export const CostingModule = {
     },
 
     discardNewOrderDraft(openFresh = true) {
+      const stored = this.orderDraftPrompt?.data || this.readNewOrderDraft()?.data;
+      const items = this.newOrderDialog?.items || stored?.items || [];
+      items.forEach((item) => {
+        const oldToken = item?._draft_upload_token;
+        if (item) item._draft_upload_token = this.draftLayoutToken();
+        if (oldToken) this.cleanupDraftLayout(oldToken);
+      });
       this.clearNewOrderDraft();
       if (openFresh) this.openFreshNewOrderDialog();
     },
@@ -9106,10 +9214,23 @@ export const CostingModule = {
       this.newOrderDialog = null;
     },
 
+    draftLayoutToken() {
+      const randomUuid = globalThis.crypto?.randomUUID?.();
+      if (randomUuid) return randomUuid.replace(/-/g, '');
+      const random = Math.random().toString(36).slice(2);
+      return `${Date.now().toString(36)}${random}${Math.random().toString(36).slice(2)}`;
+    },
+
     newOrderItem(deadline = '') {
       return {
         _mobile_extra_open: false,
         _layout_file: null,
+        _draft_upload_token: this.draftLayoutToken(),
+        _draft_upload_result: null,
+        _draft_upload_promise: null,
+        _upload_status: 'idle',
+        _upload_progress: 0,
+        _upload_error: '',
         product_name: '',
         quantity: '',
         price_per_unit: '',
@@ -9144,9 +9265,12 @@ export const CostingModule = {
       this.newOrderDialog.items.push(this.newOrderItem(this.newOrderDialog.deadline || ''));
     },
 
-    removeNewOrderItem(index) {
+    async removeNewOrderItem(index) {
       if (!this.newOrderDialog || this.newOrderDialog.items.length <= 1) return;
-      this.newOrderDialog.items.splice(index, 1);
+      const [removed] = this.newOrderDialog.items.splice(index, 1);
+      const removedToken = removed?._draft_upload_token;
+      if (removed) removed._draft_upload_token = this.draftLayoutToken();
+      if (removedToken) this.cleanupDraftLayout(removedToken);
     },
 
     syncNewOrderCustomer() {
@@ -10063,27 +10187,38 @@ export const CostingModule = {
         for (const created of createdItems) {
           const progressItem = created.item._source_item || created.item;
           progressItem._created_item_id = created.id;
-          if (created.item._layout_file) {
+          if ((progressItem._layout_file || progressItem._draft_upload_result) && !['uploading', 'done'].includes(progressItem._upload_status)) {
             progressItem._upload_status = 'waiting';
             progressItem._upload_progress = 0;
           }
         }
         for (const created of createdItems) {
-          if (!created.item._layout_file) continue;
           const progressItem = created.item._source_item || created.item;
-          progressItem._upload_status = 'uploading';
-          const uploaded = await this.uploadOrderItemLayout(
-            { id: created.id },
-            created.item._layout_file,
-            {
-              reload: false,
-              onProgress: (percent) => { progressItem._upload_progress = percent; },
-            },
-          );
+          if (!progressItem._layout_file && !progressItem._draft_upload_result) continue;
+          let uploaded = await this.attachDraftLayoutToItem(progressItem, created.id);
+          if (!uploaded && progressItem._layout_file) {
+            progressItem._upload_status = 'uploading';
+            progressItem._upload_progress = 0;
+            uploaded = await this.uploadOrderItemLayout(
+              { id: created.id },
+              progressItem._layout_file,
+              {
+                reload: false,
+                onProgress: (percent) => { progressItem._upload_progress = percent; },
+              },
+            );
+            if (uploaded && progressItem._draft_upload_token) this.cleanupDraftLayout(progressItem._draft_upload_token);
+          }
           progressItem._upload_status = uploaded ? 'done' : 'error';
           progressItem._upload_progress = uploaded ? 100 : progressItem._upload_progress;
           if (!uploaded) failedLayouts.push(created.item.product_name);
         }
+
+        form.items.forEach((item) => {
+          const oldToken = item?._draft_upload_token;
+          if (item) item._draft_upload_token = this.draftLayoutToken();
+          if (oldToken && item._upload_status !== 'idle') this.cleanupDraftLayout(oldToken);
+        });
 
         this.clearNewOrderDraft();
         this.newOrderDialog = null;
@@ -10603,21 +10738,28 @@ export const CostingModule = {
         const createdItemId = itemPayload?.data?.id;
         if (!createdItemId) throw new Error('Directus не вернул ID новой позиции.');
         let layoutUploaded = true;
-        if (form._layout_file) {
-          form._upload_status = 'uploading';
-          form._upload_progress = 0;
-          layoutUploaded = await this.uploadOrderItemLayout(
-            { id: createdItemId },
-            form._layout_file,
-            {
-              reload: false,
-              onProgress: (percent) => { form._upload_progress = percent; },
-            },
-          );
+        if (form._layout_file || form._draft_upload_result) {
+          layoutUploaded = await this.attachDraftLayoutToItem(form, createdItemId);
+          if (!layoutUploaded && form._layout_file) {
+            form._upload_status = 'uploading';
+            form._upload_progress = 0;
+            layoutUploaded = await this.uploadOrderItemLayout(
+              { id: createdItemId },
+              form._layout_file,
+              {
+                reload: false,
+                onProgress: (percent) => { form._upload_progress = percent; },
+              },
+            );
+            if (layoutUploaded && form._draft_upload_token) this.cleanupDraftLayout(form._draft_upload_token);
+          }
           form._upload_status = layoutUploaded ? 'done' : 'error';
           form._upload_progress = layoutUploaded ? 100 : form._upload_progress;
         }
 
+        const oldDraftToken = form._draft_upload_token;
+        form._draft_upload_token = this.draftLayoutToken();
+        if (oldDraftToken && form._upload_status !== 'idle') this.cleanupDraftLayout(oldDraftToken);
         this.detailItemForm = null;
         await this.loadAllowedData();
         const freshContext = this.detailOrderContext(order);
@@ -11202,8 +11344,16 @@ export const CostingModule = {
           return;
         }
         if (dialog.draft) {
+          const oldToken = dialog.row._draft_upload_token;
+          dialog.row._draft_upload_token = this.draftLayoutToken();
+          if (oldToken) this.cleanupDraftLayout(oldToken);
           dialog.row.url = url;
           dialog.row._layout_file = null;
+          dialog.row._draft_upload_result = null;
+          dialog.row._draft_upload_promise = null;
+          dialog.row._upload_status = 'idle';
+          dialog.row._upload_progress = 0;
+          dialog.row._upload_error = '';
           this.layoutUploadDialog = null;
           return;
         }
@@ -11216,8 +11366,8 @@ export const CostingModule = {
         return;
       }
       if (dialog.draft) {
-        dialog.row._layout_file = dialog.file;
         dialog.row.url = '';
+        this.startDraftLayoutUpload(dialog.row, dialog.file);
         this.layoutUploadDialog = null;
         return;
       }
@@ -11277,7 +11427,8 @@ export const CostingModule = {
     },
 
     draftUploadFiles(form) {
-      return (form?.items || (form?._layout_file ? [form] : [])).filter((item) => item?._layout_file);
+      return (form?.items || ((form?._layout_file || form?._draft_upload_result) ? [form] : []))
+        .filter((item) => item?._layout_file || item?._draft_upload_result);
     },
 
     draftUploadPercent(form) {
@@ -11293,11 +11444,137 @@ export const CostingModule = {
       const done = files.filter((item) => item._upload_status === 'done').length;
       const failed = files.filter((item) => item._upload_status === 'error').length;
       if (failed) return `Не удалось загрузить файлов: ${failed}`;
-      if (done === files.length) return 'Макеты загружены на Яндекс.Диск';
+      if (files.some((item) => item._upload_status === 'finalizing')) return 'Закрепляем макеты за позициями…';
+      if (done === files.length) return 'Макеты загружены в фоне';
       if (files.some((item) => item._upload_status === 'uploading')) {
         return `Загружаем макеты на Яндекс.Диск · ${done + 1} из ${files.length}`;
       }
-      return 'Сохраняем заказ и готовим загрузку макетов…';
+      return 'Макеты готовы к фоновой загрузке…';
+    },
+
+    draftLayoutName(item) {
+      return item?._layout_file?.name || item?._draft_upload_result?.name || item?.url || 'Добавить файл или ссылку';
+    },
+
+    draftLayoutIcon(item) {
+      if (item?._upload_status === 'uploading' || item?._upload_status === 'finalizing') return 'sync';
+      if (item?._upload_status === 'error') return 'error';
+      if (item?._draft_upload_result || item?._upload_status === 'done') return 'check_circle';
+      if (item?._layout_file) return 'draft';
+      return item?.url ? 'link' : 'cloud_upload';
+    },
+
+    draftLayoutMeta(item) {
+      if (item?._upload_status === 'uploading') return `Загрузка ${Number(item._upload_progress || 0)}%`;
+      if (item?._upload_status === 'finalizing') return 'Закрепляем за позицией';
+      if (item?._upload_status === 'error') return item?._upload_error || 'Ошибка · нажмите, чтобы повторить';
+      if (item?._draft_upload_result) return 'Загружен в фоне';
+      if (item?._layout_file) return this.formatFileSize(item._layout_file.size);
+      if (item?.url) return 'Ссылка заказчика';
+      return '';
+    },
+
+    uploadDraftLayoutFileRequest(draftToken, file, onProgress) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `/symbolika-yandex-disk/draft-layouts/${encodeURIComponent(draftToken)}/upload`, true);
+        xhr.withCredentials = true;
+        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+        xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
+        xhr.setRequestHeader('X-File-Size', String(file.size));
+        xhr.upload.addEventListener('progress', (event) => {
+          if (!event.lengthComputable) return;
+          const percent = Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100)));
+          onProgress?.(percent, event.loaded, event.total);
+        });
+        xhr.addEventListener('load', () => {
+          let payload = {};
+          try { payload = JSON.parse(xhr.responseText || '{}'); } catch { payload = {}; }
+          if (xhr.status < 200 || xhr.status >= 300) {
+            reject(new Error(payload?.errors?.[0]?.message || 'Не удалось загрузить макет на Яндекс Диск.'));
+            return;
+          }
+          resolve(payload?.data || {});
+        });
+        xhr.addEventListener('error', () => reject(new Error('Соединение прервалось во время фоновой загрузки макета.')));
+        xhr.addEventListener('abort', () => reject(new Error('Фоновая загрузка макета была отменена.')));
+        xhr.send(file);
+      });
+    },
+
+    startDraftLayoutUpload(row, file) {
+      if (!row || !file) return null;
+      const oldToken = row._draft_upload_token;
+      if (oldToken && row._upload_status !== 'idle') this.cleanupDraftLayout(oldToken);
+      const draftToken = this.draftLayoutToken();
+      row._layout_file = file;
+      row._draft_upload_token = draftToken;
+      row._draft_upload_result = null;
+      row._upload_status = 'uploading';
+      row._upload_progress = 0;
+      row._upload_error = '';
+      const promise = this.uploadDraftLayoutFileRequest(draftToken, file, (percent) => {
+        row._upload_progress = percent;
+      })
+        .then((uploaded) => {
+          if (row._draft_upload_token !== draftToken) {
+            this.cleanupDraftLayout(draftToken);
+            return null;
+          }
+          row._draft_upload_result = uploaded;
+          row._upload_status = 'done';
+          row._upload_progress = 100;
+          row._upload_error = '';
+          this.persistClosedDraftUpload(draftToken, uploaded);
+          return uploaded;
+        })
+        .catch((error) => {
+          if (row._draft_upload_token !== draftToken) return null;
+          row._upload_status = 'error';
+          row._upload_error = error.message;
+          this.persistClosedDraftUpload(draftToken, null, error.message);
+          return null;
+        });
+      row._draft_upload_promise = promise;
+      this.saveNewOrderDraft();
+      return promise;
+    },
+
+    async cleanupDraftLayout(draftToken) {
+      if (!draftToken) return;
+      try {
+        await this.request(`/symbolika-yandex-disk/draft-layouts/${encodeURIComponent(draftToken)}`, { method: 'DELETE' });
+      } catch {
+        // Cleanup is best effort and must not interrupt editing an order.
+      }
+    },
+
+    async attachDraftLayoutToItem(row, itemId) {
+      if (!row || !itemId) return false;
+      if (row._draft_upload_promise) await row._draft_upload_promise;
+      const uploaded = row._draft_upload_result;
+      const draftToken = row._draft_upload_token;
+      if (!uploaded?.path || !draftToken) return false;
+      row._upload_status = 'finalizing';
+      row._upload_progress = 100;
+      try {
+        const payload = await this.request(`/symbolika-yandex-disk/draft-layouts/${encodeURIComponent(draftToken)}/attach/${itemId}`, {
+          method: 'POST',
+          body: JSON.stringify({ path: uploaded.path }),
+        });
+        const result = payload?.data || {};
+        row.url = result.url || row.url || '';
+        row._draft_upload_result = null;
+        row._draft_upload_promise = null;
+        row._upload_status = 'done';
+        row._upload_progress = 100;
+        row._upload_error = '';
+        return true;
+      } catch (error) {
+        row._upload_status = 'error';
+        row._upload_error = error.message;
+        return false;
+      }
     },
 
     uploadLayoutFileRequest(itemId, file, onProgress) {
@@ -13273,11 +13550,12 @@ export const CostingModule = {
     },
 
     showsSendItemToWorkButton(item) {
-      if (!this.canCreateOrders) return false;
-      const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
-      if (!itemId) return false;
-      const status = this.normalizedWorkflowStatus(item?.item_status || 'new');
-      return ['new', 'approval', 'layout_revision'].includes(status);
+      // Do not offer the action based on the workflow status alone. Compact
+      // rows may not contain the readiness fields at all, while an incomplete
+      // new item must never look ready for production.
+      const readinessLoaded = Object.prototype.hasOwnProperty.call(item || {}, 'technical_task_text')
+        && Object.prototype.hasOwnProperty.call(item || {}, 'url');
+      return readinessLoaded && this.canSendItemToWork(item);
     },
 
     itemSendToWorkTitle(item) {
@@ -13613,13 +13891,16 @@ export const CostingModule = {
     orderWorkReadinessMissing(row) {
       const orderId = this.entityId(this.orderId(row));
       let missing;
-      if (row?.work_completion_missing !== undefined) {
+      // Freshly loaded positions are the source of truth in an open order.
+      // A compact overview row can briefly contain a stale completion value
+      // immediately after a position has been created or edited.
+      if (orderId && this.detailOrderItemsOrderId === orderId) {
+        missing = this.orderWorkItemsMissing(this.detailOrderItems);
+      } else if (row?.work_completion_missing !== undefined) {
         missing = String(row.work_completion_missing || '')
           .split('||')
           .map((value) => value.trim())
           .filter(Boolean);
-      } else if (orderId && this.detailOrderItemsOrderId === orderId) {
-        missing = this.orderWorkItemsMissing(this.detailOrderItems);
       } else {
         missing = ['Откройте заказ, чтобы проверить готовность позиций'];
       }
@@ -21733,6 +22014,25 @@ export const CostingModule = {
 
         .symbolika-layout-draft-button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .symbolika-layout-draft-button small { color: var(--theme--foreground-subdued); font-size: 10px; white-space: nowrap; }
+        .symbolika-layout-draft-button.is-error {
+          border-color: color-mix(in srgb, var(--theme--danger) 72%, var(--theme--border-color));
+        }
+        .symbolika-layout-draft-button.is-error small { color: var(--theme--danger); }
+        .symbolika-layout-draft-button.is-uploading .v-icon { animation: symbolika-spin 1s linear infinite; }
+        .symbolika-draft-inline-progress {
+          block-size: 3px;
+          margin-block-start: 4px;
+          overflow: hidden;
+          border-radius: 999px;
+          background: color-mix(in srgb, var(--theme--foreground) 12%, transparent);
+        }
+        .symbolika-draft-inline-progress > span {
+          display: block;
+          block-size: 100%;
+          border-radius: inherit;
+          background: var(--symbolika-orange);
+          transition: inline-size 160ms ease;
+        }
 
         .symbolika-layout-current-link,
         .symbolika-layout-current-empty {
@@ -24913,6 +25213,16 @@ export const CostingModule = {
             >
               <option v-for="sort in activeTableSortOptions" :key="'order-sort-' + sort.id" :value="sort.id">
                 {{ sort.title }}
+              </option>
+            </select>
+          </label>
+
+          <label v-if="activeTab === 'all_orders'" class="symbolika-costing-sort symbolika-costing-order-manager-filter">
+            Менеджер
+            <select v-model="orderManagerFilter" class="symbolika-costing-select">
+              <option value="">Все менеджеры</option>
+              <option v-for="manager in orderManagerOptions" :key="'order-manager-' + manager.id" :value="manager.id">
+                {{ manager.name }}
               </option>
             </select>
           </label>
@@ -30545,12 +30855,12 @@ export const CostingModule = {
 
                 <div class="symbolika-costing-label symbolika-costing-new-order-url symbolika-draft-layout-field">
                   <span>Макет</span>
-                  <button type="button" class="symbolika-layout-draft-button" :class="{ 'has-file': item._layout_file || item.url }" @click="openDraftLayoutUploadDialog(item)">
-                    <v-icon :name="item._layout_file ? 'draft' : (item.url ? 'link' : 'cloud_upload')" small />
-                    <span>{{ item._layout_file ? item._layout_file.name : (item.url || 'Добавить файл или ссылку') }}</span>
-                    <small v-if="item._layout_file">{{ formatFileSize(item._layout_file.size) }}</small>
-                    <small v-else-if="item.url">Ссылка заказчика</small>
+                  <button type="button" class="symbolika-layout-draft-button" :class="{ 'has-file': item._layout_file || item._draft_upload_result || item.url, 'is-uploading': item._upload_status === 'uploading', 'is-error': item._upload_status === 'error' }" @click="openDraftLayoutUploadDialog(item)">
+                    <v-icon :name="draftLayoutIcon(item)" small />
+                    <span>{{ draftLayoutName(item) }}</span>
+                    <small v-if="draftLayoutMeta(item)">{{ draftLayoutMeta(item) }}</small>
                   </button>
+                  <div v-if="item._upload_status === 'uploading'" class="symbolika-draft-inline-progress"><span :style="{ inlineSize: Number(item._upload_progress || 0) + '%' }"></span></div>
                 </div>
 
                 <label class="symbolika-costing-checkbox symbolika-mobile-item-extra">
@@ -30586,7 +30896,7 @@ export const CostingModule = {
               </div>
             </div>
 
-            <div v-if="newOrderDialog.saving && draftUploadFiles(newOrderDialog).length" class="symbolika-layout-progress symbolika-layout-save-progress" :class="{ 'is-done': draftUploadPercent(newOrderDialog) === 100 }">
+            <div v-if="draftUploadFiles(newOrderDialog).length" class="symbolika-layout-progress symbolika-layout-save-progress" :class="{ 'is-done': draftUploadPercent(newOrderDialog) === 100, 'is-error': draftUploadFiles(newOrderDialog).some((item) => item._upload_status === 'error') }">
               <div class="symbolika-layout-progress-head">
                 <strong>{{ draftUploadLabel(newOrderDialog) }}</strong>
                 <span>{{ draftUploadPercent(newOrderDialog) }}%</span>
@@ -32030,12 +32340,12 @@ export const CostingModule = {
 
                   <div class="symbolika-costing-label symbolika-costing-detail-add-url symbolika-draft-layout-field">
                     <span>Макет</span>
-                    <button type="button" class="symbolika-layout-draft-button" :class="{ 'has-file': detailItemForm._layout_file || detailItemForm.url }" @click="openDraftLayoutUploadDialog(detailItemForm)">
-                      <v-icon :name="detailItemForm._layout_file ? 'draft' : (detailItemForm.url ? 'link' : 'cloud_upload')" small />
-                      <span>{{ detailItemForm._layout_file ? detailItemForm._layout_file.name : (detailItemForm.url || 'Добавить файл или ссылку') }}</span>
-                      <small v-if="detailItemForm._layout_file">{{ formatFileSize(detailItemForm._layout_file.size) }}</small>
-                      <small v-else-if="detailItemForm.url">Ссылка заказчика</small>
+                    <button type="button" class="symbolika-layout-draft-button" :class="{ 'has-file': detailItemForm._layout_file || detailItemForm._draft_upload_result || detailItemForm.url, 'is-uploading': detailItemForm._upload_status === 'uploading', 'is-error': detailItemForm._upload_status === 'error' }" @click="openDraftLayoutUploadDialog(detailItemForm)">
+                      <v-icon :name="draftLayoutIcon(detailItemForm)" small />
+                      <span>{{ draftLayoutName(detailItemForm) }}</span>
+                      <small v-if="draftLayoutMeta(detailItemForm)">{{ draftLayoutMeta(detailItemForm) }}</small>
                     </button>
+                    <div v-if="detailItemForm._upload_status === 'uploading'" class="symbolika-draft-inline-progress"><span :style="{ inlineSize: Number(detailItemForm._upload_progress || 0) + '%' }"></span></div>
                   </div>
 
                   <label class="symbolika-costing-checkbox">
@@ -32053,7 +32363,7 @@ export const CostingModule = {
                     <input v-model.trim="detailItemForm.designer_source_url" class="symbolika-costing-input" placeholder="https://... (если исходник отличается от загруженного макета)" />
                   </label>
 
-                  <div v-if="detailItemForm.saving && detailItemForm._layout_file" class="symbolika-layout-progress symbolika-layout-save-progress" :class="{ 'is-done': detailItemForm._upload_status === 'done', 'is-error': detailItemForm._upload_status === 'error' }">
+                  <div v-if="(detailItemForm._layout_file || detailItemForm._draft_upload_result) && (detailItemForm.saving || detailItemForm._upload_status === 'uploading')" class="symbolika-layout-progress symbolika-layout-save-progress" :class="{ 'is-done': detailItemForm._upload_status === 'done', 'is-error': detailItemForm._upload_status === 'error' }">
                     <div class="symbolika-layout-progress-head">
                       <strong>{{ detailItemForm._upload_status === 'uploading' ? 'Загружаем макет на Яндекс.Диск' : 'Сохраняем позицию и готовим загрузку…' }}</strong>
                       <span>{{ Number(detailItemForm._upload_progress || 0) }}%</span>

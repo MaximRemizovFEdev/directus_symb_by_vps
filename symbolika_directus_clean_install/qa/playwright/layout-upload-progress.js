@@ -31,6 +31,7 @@ async function run() {
   let orderId;
   let itemId;
   let uploadRequested = false;
+  let attachRequested = false;
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 960 } });
   const page = await context.newPage();
@@ -42,14 +43,22 @@ async function run() {
     const customer = await api('/items/customers', { method: 'POST', body: JSON.stringify({ name: `QA Layout Progress ${suffix}` }) });
     customerId = customer.id;
 
-    await page.route('**/symbolika-yandex-disk/orders-items/*/upload', async (route) => {
+    await page.route('**/symbolika-yandex-disk/draft-layouts/*/upload', async (route) => {
       uploadRequested = true;
       if (!route.request().postDataBuffer()?.length) throw new Error('Upload request has no file body.');
       await new Promise((resolve) => setTimeout(resolve, 1400));
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ data: { url: 'https://disk.example.test/mock-layout.pdf', path: '/mock/layout.pdf', name: 'layout.pdf', size: 6 * 1024 * 1024, mime_type: 'application/pdf' } }),
+        body: JSON.stringify({ data: { draft_token: 'mock', path: 'app:/mock/draft-layout.pdf', name: 'layout.pdf', size: 6 * 1024 * 1024, mime_type: 'application/pdf' } }),
+      });
+    });
+    await page.route('**/symbolika-yandex-disk/draft-layouts/*/attach/*', async (route) => {
+      attachRequested = true;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: { url: 'https://disk.example.test/mock-layout.pdf', path: 'app:/mock/layout.pdf', name: 'layout.pdf', size: 6 * 1024 * 1024, mime_type: 'application/pdf' } }),
       });
     });
 
@@ -75,21 +84,23 @@ async function run() {
     await fileModal.locator('.symbolika-costing-modal-actions .symbolika-costing-button').click();
     await fileModal.waitFor({ state: 'hidden' });
 
-    const saveButton = orderModal.locator('.symbolika-costing-modal-actions .symbolika-costing-button');
-    await saveButton.click();
     const progress = orderModal.locator('.symbolika-layout-save-progress');
     await progress.waitFor({ timeout: 20_000 });
-    await progress.getByText(/Яндекс\.Диск/).waitFor({ timeout: 20_000 });
+    await page.waitForTimeout(100);
+    if (!uploadRequested) throw new Error('Background upload did not start before saving the order.');
+
+    const saveButton = orderModal.locator('.symbolika-costing-modal-actions .symbolika-costing-button');
+    await saveButton.click();
     if (!await saveButton.isDisabled()) throw new Error('Save button is not locked during upload.');
     if (!await orderModal.locator('.symbolika-costing-modal-actions .symbolika-costing-mini-button').isDisabled()) throw new Error('Close button is not locked during upload.');
     await orderModal.waitFor({ state: 'hidden', timeout: 30_000 });
-    if (!uploadRequested) throw new Error('File upload request was not sent after saving the order.');
+    if (!attachRequested) throw new Error('Draft file was not attached to the created position.');
 
     const orders = await api(`/items/orders?filter[customer][_eq]=${customerId}&fields=id&limit=1`);
     orderId = orders[0]?.id;
     const items = orderId ? await api(`/items/orders_items?filter[order][_eq]=${orderId}&fields=id&limit=1`) : [];
     itemId = items[0]?.id;
-    console.log(JSON.stringify({ uploadAfterSave: true, progressVisible: true, actionsLocked: true, closesAfterUpload: true }));
+    console.log(JSON.stringify({ uploadBeforeSave: true, attachedAfterSave: true, progressVisible: true, actionsLockedWhileSaving: true, closesAfterUpload: true }));
   } finally {
     await browser.close();
     if (itemId) await api(`/items/orders_items/${itemId}`, { method: 'DELETE' }).catch(() => null);
