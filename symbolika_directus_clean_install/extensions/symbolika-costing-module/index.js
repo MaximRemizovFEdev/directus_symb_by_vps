@@ -3262,6 +3262,7 @@ export const CostingModule = {
     this.offerNewOrderDraft();
     await this.openLinkedEntity();
     await this.$nextTick();
+    this.bindSmartToolbarScroll();
     this.bindPagingObserver();
     this.closeMobileModuleNavigation();
   },
@@ -3485,6 +3486,7 @@ export const CostingModule = {
       }
       if (tab === 'expenses') this.loadFinanceSettings();
       this.$nextTick(() => {
+        this.bindSmartToolbarScroll();
         this.bindPagingObserver();
       });
     },
@@ -23889,6 +23891,19 @@ export const CostingModule = {
             margin-inline: -4px;
             padding-inline: 4px;
             overflow-x: clip;
+            will-change: transform, opacity;
+            transition:
+              transform 220ms cubic-bezier(.2, .8, .2, 1),
+              opacity 160ms ease,
+              border-color 180ms ease,
+              box-shadow 180ms ease;
+          }
+
+          .symbolika-costing-smart-toolbar.is-hidden {
+            transform: translate3d(0, calc(-100% - 12px), 0) !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+            box-shadow: none !important;
           }
 
           .symbolika-costing-workspace,
@@ -24794,6 +24809,7 @@ export const CostingModule = {
         <div
           v-if="availableTabs.length && activeTab !== 'profile'"
           class="symbolika-costing-smart-toolbar"
+          :class="{ 'is-hidden': mobileViewport && smartToolbarHidden }"
         >
         <div class="symbolika-costing-toolbar">
           <button type="button" class="symbolika-costing-mobile-nav-toggle" title="Открыть разделы" aria-label="Открыть разделы" @click="mobileNavigationOpen = true">
