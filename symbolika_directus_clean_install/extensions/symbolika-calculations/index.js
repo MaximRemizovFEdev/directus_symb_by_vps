@@ -1076,7 +1076,16 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     return row?.id || null;
   }
 
-  async function syncDesignerTask(item, prevItem = null) {
+  function buildDesignerTaskDescription(item) {
+    const managerComment = notificationText(item?.designer_comment, 1500);
+    const productionComment = notificationText(item?.production_comment, 1500);
+    const parts = [];
+    if (managerComment) parts.push(`Комментарий менеджера:\n${managerComment}`);
+    if (productionComment) parts.push(`Комментарий производства:\n${productionComment}`);
+    return parts.join('\n\n') || null;
+  }
+
+  async function syncDesignerTask(item, prevItem = null, { notifyOnRequest = false } = {}) {
     if (!item?.id) return;
     const existing = await database('symbolika_tasks')
       .where({ task_type: 'design', related_order_item: item.id })
@@ -1095,22 +1104,27 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     }
 
     const order = await database('orders').where({ id: item.order }).first();
+    const description = buildDesignerTaskDescription(item);
     if (existing) {
       await database('symbolika_tasks').where({ id: existing.id }).update({
         related_order: item.order || null,
         related_customer: order?.customer || null,
         related_company: order?.customer_company || null,
         due_date: item.deadline || order?.deadline || null,
-        description: item.designer_comment || null,
+        description,
         source_url: item.designer_source_url || item.url || null,
         date_updated: database.fn.now(),
       });
+      if (notifyOnRequest || (prevItem && !prevItem.needs_designer_help)) {
+        const updatedTask = await database('symbolika_tasks').where({ id: existing.id }).first();
+        await notifyTaskParticipants(updatedTask);
+      }
       return;
     }
 
     const [createdTask] = await database('symbolika_tasks').insert({
       title: `Подготовить макет: ${item.product_name || `позиция #${item.id}`}`,
-      description: item.designer_comment || null,
+      description,
       task_type: 'design',
       status: 'new',
       priority: 'normal',
@@ -1499,21 +1513,29 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
   }
 
   async function notifyLayoutRevisionIfNeeded(item, prevItem = null) {
-    if (!item?.id || !item.manager_employee) return;
+    if (!item?.id) return;
     if (item.production_status === prevItem?.production_status) return;
 
     const nextStatus = await getProductionStatusName(item.production_status);
     if (nextStatus !== '\u0414\u043e\u0440\u0430\u0431\u043e\u0442\u043a\u0430 \u043c\u0430\u043a\u0435\u0442\u0430') return;
 
-    const orderLabel = await getOrderLabel(item.order);
+    const order = item.order
+      ? await database('orders').where({ id: item.order }).select('id', 'order_number', 'manager_employee').first()
+      : null;
+    const managerEmployee = item.manager_employee || order?.manager_employee;
+    if (!managerEmployee) return;
+    const orderLabel = order?.order_number || (order?.id ? `#${order.id}` : await getOrderLabel(item.order));
     const productName = item.product_name || '\u041f\u043e\u0437\u0438\u0446\u0438\u044f';
     const context = await getItemNotificationContext(item);
+    const productionComment = notificationText(item.production_comment, 1500);
 
     await notifyManager(
-      item.manager_employee,
+      managerEmployee,
       `Доработка макета · ${orderLabel} · ${productName}`,
       [
         'Производство вернуло макет на доработку. Нужно уточнить правки и заменить макет.',
+        productionComment ? `Комментарий производства: ${productionComment}` : 'Комментарий производства не указан.',
+        'Если нужна помощь дизайнера, включите галочку «Нужна помощь дизайнера» в карточке позиции.',
         buildItemNotificationMessage(context, { includeTechnicalTask: false, includeLayout: true }),
       ].join('\n'),
       'orders_items',
@@ -2110,7 +2132,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       }
     }
 
-    if (['orders_items', 'contractor_costing'].includes(meta.collection)) {
+    if (['orders_items', 'contractor_costing', 'production_work', 'screen_printing_work'].includes(meta.collection)) {
       for (const id of keys) {
         const row = await database('orders_items').where({ id }).first();
         if (row) prevItems.set(String(id), row);
@@ -2296,7 +2318,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       const orderBeforeRecalc = orderId
         ? await database('orders').where({ id: orderId }).first()
         : null;
-        await syncDesignerTask(item);
+        await syncDesignerTask(item, null, { notifyOnRequest: true });
         await notifyNewProductionAssignments(item);
         await notifyItemCancellationChanged(item);
       await notifyLayoutRevisionIfNeeded(item);
@@ -2457,9 +2479,12 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       if (!['production_work', 'screen_printing_work'].includes(collection)) return;
 
       for (const key of keys) {
+        const prevItem = prevItems.get(String(key)) || null;
+        prevItems.delete(String(key));
         await notifyWorkAssignmentFromCollection(collection, key);
         const item = await database('orders_items').where({ id: key }).first();
         await notifyItemCancellationChanged(item);
+        await notifyLayoutRevisionIfNeeded(item, prevItem);
       }
     } catch (error) {
       logger.error(error);

@@ -828,7 +828,7 @@ const adminConfigs = {
       { key: 'product_url', label: 'Ссылка на товар (необязательно)', type: 'text', wide: true },
       { key: 'quantity', label: 'Кол-во', type: 'number' },
       { key: 'unit', label: 'Ед.', type: 'text' },
-      { key: 'estimated_cost', label: 'Сумма', type: 'money' },
+      { key: 'estimated_cost', label: 'Цена за единицу', type: 'money' },
       { key: 'delivery_method', label: 'Получение', type: 'select', choices: [
         { value: 'self_pickup', text: 'Самовывоз' },
         { value: 'supplier_delivery', text: 'Доставка поставщика' },
@@ -1571,7 +1571,7 @@ export const CostingModule = {
           estimated_total: 0,
         };
         current.rows.push(row);
-        current.estimated_total += this.parseMoney(row.estimated_cost);
+        current.estimated_total += this.procurementRequestTotal(row);
         groups.set(key, current);
       });
 
@@ -7540,6 +7540,10 @@ export const CostingModule = {
       return this.procurementChoiceLabel('section', row?.section);
     },
 
+    procurementRequestTotal(row) {
+      return Number(row?.quantity || 0) * this.parseMoney(row?.estimated_cost);
+    },
+
     procurementGroupLines(group) {
       const lines = new Map();
       (group?.rows || []).forEach((row) => {
@@ -7551,11 +7555,11 @@ export const CostingModule = {
           product_name: row.product_name || 'Без названия',
           unit: row.unit || 'шт.',
           quantity: 0,
-          estimated_cost: 0,
+          total_cost: 0,
           requests: [],
         };
         current.quantity += Number(row.quantity || 0);
-        current.estimated_cost += this.parseMoney(row.estimated_cost);
+        current.total_cost += this.procurementRequestTotal(row);
         current.requests.push(row);
         lines.set(signature, current);
       });
@@ -25478,9 +25482,10 @@ export const CostingModule = {
         <div v-if="activeTab === 'tasks'" class="symbolika-costing-filter-bar symbolika-costing-task-filter-bar">
           <div class="symbolika-costing-filter-groups">
             <button type="button" class="symbolika-costing-filter-chip" :class="{ 'is-active': taskScope === 'my' }" @click="taskScope = 'my'">Мои</button>
+            <button v-if="currentRoleName === 'Administrator'" type="button" class="symbolika-costing-filter-chip" :class="{ 'is-active': taskScope === 'team' }" @click="taskScope = 'team'">Все</button>
             <button type="button" class="symbolika-costing-filter-chip" :class="{ 'is-active': taskScope === 'assigned' }" @click="taskScope = 'assigned'">Назначены мне</button>
             <button type="button" class="symbolika-costing-filter-chip" :class="{ 'is-active': taskScope === 'created' }" @click="taskScope = 'created'">Поставил я</button>
-            <button v-if="canSeeTeamTasks" type="button" class="symbolika-costing-filter-chip" :class="{ 'is-active': taskScope === 'team' }" @click="taskScope = 'team'">Команда</button>
+            <button v-if="currentRoleName === 'Управляющий'" type="button" class="symbolika-costing-filter-chip" :class="{ 'is-active': taskScope === 'team' }" @click="taskScope = 'team'">Команда</button>
             <button type="button" class="symbolika-costing-filter-chip" :class="{ 'is-active': taskScope === 'overdue' }" @click="taskScope = 'overdue'">Просрочены</button>
           </div>
           <label class="symbolika-costing-sort">
@@ -25506,9 +25511,10 @@ export const CostingModule = {
         <div v-if="activeTab === 'tasks_archive'" class="symbolika-costing-filter-bar symbolika-costing-task-filter-bar symbolika-costing-task-archive-filters">
           <div class="symbolika-costing-filter-groups">
             <button type="button" class="symbolika-costing-filter-chip" :class="{ 'is-active': taskArchiveScope === 'my' }" @click="taskArchiveScope = 'my'">Мои</button>
+            <button v-if="currentRoleName === 'Administrator'" type="button" class="symbolika-costing-filter-chip" :class="{ 'is-active': taskArchiveScope === 'team' }" @click="taskArchiveScope = 'team'">Все</button>
             <button type="button" class="symbolika-costing-filter-chip" :class="{ 'is-active': taskArchiveScope === 'assigned' }" @click="taskArchiveScope = 'assigned'">Назначены мне</button>
             <button type="button" class="symbolika-costing-filter-chip" :class="{ 'is-active': taskArchiveScope === 'created' }" @click="taskArchiveScope = 'created'">Поставил я</button>
-            <button v-if="canSeeTeamTasks" type="button" class="symbolika-costing-filter-chip" :class="{ 'is-active': taskArchiveScope === 'team' }" @click="taskArchiveScope = 'team'">Команда</button>
+            <button v-if="currentRoleName === 'Управляющий'" type="button" class="symbolika-costing-filter-chip" :class="{ 'is-active': taskArchiveScope === 'team' }" @click="taskArchiveScope = 'team'">Команда</button>
           </div>
           <label class="symbolika-costing-sort symbolika-costing-task-archive-status">
             Статус
@@ -25875,7 +25881,7 @@ export const CostingModule = {
             <button type="button" class="symbolika-costing-task-stat symbolika-costing-card-orange" @click="taskScope = canSeeTeamTasks ? 'team' : 'my'">
               <span>В работе</span>
               <strong>{{ taskStats.active }}</strong>
-              <small>{{ canSeeTeamTasks ? 'по команде' : 'по моим задачам' }}</small>
+              <small>{{ currentRoleName === 'Administrator' ? 'по всей компании' : (canSeeTeamTasks ? 'по команде' : 'по моим задачам') }}</small>
             </button>
             <button type="button" class="symbolika-costing-task-stat symbolika-costing-card-green" @click="setTab('tasks_archive'); taskArchiveStatusFilter = 'done'">
               <span>Готово</span>
@@ -29153,6 +29159,12 @@ export const CostingModule = {
                 :autocomplete="column.type === 'password' ? 'new-password' : (column.type === 'email' ? 'email' : 'off')"
                 :disabled="adminColumnReadonly(column)"
               />
+              <small
+                v-if="activeTab === 'admin_procurement' && column.key === 'estimated_cost'"
+                class="symbolika-costing-subtle"
+              >
+                Итого по заявке: {{ formatMoney(parseMoney(adminForm.quantity) * parseMoney(adminForm.estimated_cost)) }} ₽
+              </small>
               <textarea
                 v-else-if="column.type === 'textarea'"
                 v-model="adminForm[column.key]"
@@ -29303,7 +29315,7 @@ export const CostingModule = {
                   </div>
                   <div class="symbolika-costing-procurement-line-value is-money">
                     <span>Сумма</span>
-                    <strong>{{ formatMoney(line.estimated_cost) }} ₽</strong>
+                    <strong>{{ formatMoney(line.total_cost) }} ₽</strong>
                   </div>
                   <div class="symbolika-costing-procurement-line-actions">
                     <button
@@ -29327,7 +29339,7 @@ export const CostingModule = {
                         <span>{{ procurementChoiceLabel('request_type', row.request_type) }} · {{ procurementChoiceLabel('section', row.section) }}</span>
                       </div>
                       <span>{{ formatQuantity(row.quantity) }} {{ row.unit || 'шт.' }}</span>
-                      <span>{{ formatMoney(row.estimated_cost) }} ₽</span>
+                      <span>{{ formatMoney(procurementRequestTotal(row)) }} ₽</span>
                       <button type="button" class="symbolika-costing-icon-button" title="Изменить заявку" @click="startAdminEdit(row)">
                         <v-icon name="edit" small />
                       </button>

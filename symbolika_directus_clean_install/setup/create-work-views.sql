@@ -572,7 +572,12 @@ BEGIN
     )
     SELECT
       concat(U&'\041f\043e\0434\0433\043e\0442\043e\0432\0438\0442\044c \043c\0430\043a\0435\0442: ', COALESCE(NULLIF(NEW.product_name, ''), concat(U&'\043f\043e\0437\0438\0446\0438\044f #', NEW.id))),
-      NEW.designer_comment, 'design', 'new', 'normal', COALESCE(NEW.deadline, order_row.deadline),
+      NULLIF(concat_ws(E'\n\n',
+        CASE WHEN NULLIF(BTRIM(NEW.designer_comment), '') IS NOT NULL
+          THEN concat(U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439 \043c\0435\043d\0435\0434\0436\0435\0440\0430:', E'\n', NEW.designer_comment) END,
+        CASE WHEN NULLIF(BTRIM(NEW.production_comment), '') IS NOT NULL
+          THEN concat(U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\0430:', E'\n', NEW.production_comment) END
+      ), ''), 'design', 'new', 'normal', COALESCE(NEW.deadline, order_row.deadline),
       designer_employee, order_row.manager_employee, NEW."order", NEW.id,
       order_row.customer, order_row.customer_company,
       COALESCE(NULLIF(BTRIM(NEW.designer_source_url), ''), NEW.url), NULL, now()
@@ -584,7 +589,12 @@ BEGIN
     );
 
     UPDATE symbolika_tasks
-    SET description = NEW.designer_comment,
+    SET description = NULLIF(concat_ws(E'\n\n',
+          CASE WHEN NULLIF(BTRIM(NEW.designer_comment), '') IS NOT NULL
+            THEN concat(U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439 \043c\0435\043d\0435\0434\0436\0435\0440\0430:', E'\n', NEW.designer_comment) END,
+          CASE WHEN NULLIF(BTRIM(NEW.production_comment), '') IS NOT NULL
+            THEN concat(U&'\041a\043e\043c\043c\0435\043d\0442\0430\0440\0438\0439 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\0430:', E'\n', NEW.production_comment) END
+        ), ''),
         source_url = COALESCE(NULLIF(BTRIM(NEW.designer_source_url), ''), NEW.url),
         due_date = COALESCE(NEW.deadline, order_row.deadline),
         date_updated = now()
@@ -604,7 +614,7 @@ $$;
 
 DROP TRIGGER IF EXISTS symbolika_orders_items_designer_task ON orders_items;
 CREATE TRIGGER symbolika_orders_items_designer_task
-AFTER INSERT OR UPDATE OF needs_designer_help, designer_comment, designer_source_url, url, deadline ON orders_items
+AFTER INSERT OR UPDATE OF needs_designer_help, designer_comment, designer_source_url, production_comment, url, deadline ON orders_items
 FOR EACH ROW
 EXECUTE FUNCTION symbolika_ensure_designer_task_trigger();
 
@@ -9689,7 +9699,7 @@ BEGIN
   FROM (
     SELECT
       count(*)::integer AS item_count,
-      COALESCE(sum(estimated_cost), 0)::numeric(14,2) AS estimated_total,
+      COALESCE(sum(COALESCE(quantity, 0) * COALESCE(estimated_cost, 0)), 0)::numeric(14,2) AS estimated_total,
       min(pickup_deadline) AS pickup_deadline
     FROM procurement_requests
     WHERE procurement_batch = batch_id
@@ -9699,6 +9709,28 @@ BEGIN
   PERFORM ensure_procurement_batch_task(batch_id);
 END;
 $$;
+
+UPDATE procurement_batches pb
+SET item_count = totals.item_count,
+    estimated_total = totals.estimated_total,
+    pickup_deadline = totals.pickup_deadline,
+    date_updated = now()
+FROM (
+  SELECT
+    procurement_batch AS batch_id,
+    count(*)::integer AS item_count,
+    COALESCE(sum(COALESCE(quantity, 0) * COALESCE(estimated_cost, 0)), 0)::numeric(14,2) AS estimated_total,
+    min(pickup_deadline) AS pickup_deadline
+  FROM procurement_requests
+  WHERE procurement_batch IS NOT NULL
+  GROUP BY procurement_batch
+) totals
+WHERE pb.id = totals.batch_id
+  AND (
+    pb.item_count IS DISTINCT FROM totals.item_count
+    OR pb.estimated_total IS DISTINCT FROM totals.estimated_total
+    OR pb.pickup_deadline IS DISTINCT FROM totals.pickup_deadline
+  );
 
 CREATE OR REPLACE FUNCTION sync_procurement_batch_for_request(request_id integer)
 RETURNS void
@@ -10442,7 +10474,7 @@ BEGIN
       concat('Поставщик: ', COALESCE((SELECT name FROM contractors WHERE id = NEW.supplier), '-')),
       concat('Позиция: ', COALESCE(NEW.product_name, '-')),
       concat('Количество: ', trim(to_char(COALESCE(NEW.quantity, 0), 'FM999999990.##')), ' ', COALESCE(NEW.unit, 'шт.')),
-      concat('Сумма: ', trim(to_char(COALESCE(NEW.estimated_cost, 0), 'FM999999990.00'))),
+      concat('Сумма: ', trim(to_char(COALESCE(NEW.quantity, 0) * COALESCE(NEW.estimated_cost, 0), 'FM999999990.00'))),
       concat('Получение: ', COALESCE(NEW.delivery_method, '-')),
       concat('Адрес/ПВЗ: ', COALESCE(NEW.pickup_address, '-')),
       concat('Комментарий: ', COALESCE(NEW.comment, '-'))
