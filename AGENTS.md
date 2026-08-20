@@ -50,6 +50,7 @@ symbolika-db
 - `symbolika_directus_clean_install/extensions/symbolika-costing-module/` — основной рабочий интерфейс системы.
 - `symbolika_directus_clean_install/extensions/symbolika-calculations/` — серверная бизнес-логика: суммы, оплаты, статусы, офис, производство.
 - `symbolika_directus_clean_install/extensions/symbolika-event-rollback/` — endpoint точечного и последовательного отката событий с проверкой прав Directus.
+- `symbolika_directus_clean_install/extensions/symbolika-contact-duplicates/` — админский endpoint поиска и транзакционного объединения дублей клиентов и компаний с переносом связанных данных.
 - `symbolika_directus_clean_install/extensions/symbolika-push/` — push и внешние уведомления, включая VK.
 
 ## Рабочие модули

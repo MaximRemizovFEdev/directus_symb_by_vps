@@ -136,6 +136,22 @@
       '/admin/symbolika-profile-module',
     ])],
   ]);
+  const mobileModuleCatalog = [
+    { path: '/admin/symbolika-orders', label: '\u0417\u0430\u043a\u0430\u0437\u044b', icon: 'orders' },
+    { path: '/admin/symbolika-tasks', label: '\u0417\u0430\u0434\u0430\u0447\u0438', icon: 'tasks' },
+    { path: '/admin/symbolika-production', label: '\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e', icon: 'production' },
+    { path: '/admin/symbolika-procurement', label: '\u0417\u0430\u043a\u0443\u043f\u043a\u0438', icon: 'procurement' },
+    { path: '/admin/symbolika-mail-module', label: '\u041f\u043e\u0447\u0442\u0430', icon: 'mail' },
+    { path: '/admin/symbolika-management', label: '\u0423\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435', icon: 'management' },
+    { path: '/admin/symbolika-admin', label: '\u0410\u0434\u043c\u0438\u043d\u043a\u0430', icon: 'admin' },
+    { path: '/admin/symbolika-profile-module', label: '\u041a\u0430\u0431\u0438\u043d\u0435\u0442', icon: 'profile' },
+  ];
+  const mobileNavigationState = {
+    root: null,
+    roleName: null,
+    signature: '',
+    open: false,
+  };
   const symbolikaDefaultModulePath = '/admin/symbolika-orders';
   const serviceNavigationState = {
     roleName: null,
@@ -209,6 +225,118 @@
       }
     })();
     return serviceNavigationState.pending;
+  }
+
+  function mobileNavigationIcon(name) {
+    const paths = {
+      orders: '<path d="M7 3h10v3h3v15H4V6h3V3Zm2 3h6V5H9v1Zm-3 2v11h12V8H6Zm3 3h6v2H9v-2Zm0 4h6v2H9v-2Z"/>',
+      tasks: '<path d="m9 11 2 2 4-5 1.6 1.2-5.4 6.8L7.5 12.4 9 11ZM5 4h14v3h-2V6H7v12h10v-1h2v3H5V4Z"/>',
+      production: '<path d="M4 4h6v6H4V4Zm2 2v2h2V6H6Zm8-2h6v6h-6V4Zm2 2v2h2V6h-2ZM4 14h6v6H4v-6Zm2 2v2h2v-2H6Zm9-3h4v2h-4v4h-2v-4h2v-2Zm2 4h3v3h-3v-3Z"/>',
+      procurement: '<path d="M7 4h2l1 3h10l-2 8H9L7 6H4V4h3Zm3.7 5 .8 4h5l1-4h-6.8ZM10 17a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"/>',
+      mail: '<path d="M3 5h18v14H3V5Zm2 2v.4l7 4.7 7-4.7V7H5Zm14 10V9.8l-7 4.7-7-4.7V17h14Z"/>',
+      management: '<path d="M4 19h16v2H4v-2Zm2-2V9h3v8H6Zm5 0V3h3v14h-3Zm5 0v-6h3v6h-3Z"/>',
+      admin: '<path d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3Zm0 2.2L18 6.5V11c0 3.8-2.4 7.6-6 8.8-3.6-1.2-6-5-6-8.8V6.5l6-2.3Zm0 3.3a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Zm-4 8.8c.8-1.8 2.2-2.8 4-2.8s3.2 1 4 2.8c-1 1-2.4 1.8-4 2.3-1.6-.5-3-1.3-4-2.3Z"/>',
+      profile: '<path d="M12 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6ZM4 22v-3c0-3.3 3.6-5 8-5s8 1.7 8 5v3h-2v-3c0-1.7-2.7-3-6-3s-6 1.3-6 3v3H4Z"/>',
+      notifications: '<path d="M12 22a2.4 2.4 0 0 0 2.3-2h-4.6a2.4 2.4 0 0 0 2.3 2Zm7-5-2-2v-4a5 5 0 0 0-4-4.9V4h-2v2.1A5 5 0 0 0 7 11v4l-2 2v1h14v-1Zm-10-.9V11a3 3 0 0 1 6 0v5.1H9Z"/>',
+      more: '<path d="M5 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"/>',
+      close: '<path d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5Z"/>',
+    };
+    return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${paths[name] || paths.more}</svg>`;
+  }
+
+  function mobileNavigationPathIsActive(pathname, route) {
+    return pathname === route || pathname.startsWith(`${route}/`);
+  }
+
+  function closeMobileAppNavigation() {
+    mobileNavigationState.open = false;
+    mobileNavigationState.root?.classList.remove('is-open');
+    document.documentElement.classList.remove('symbolika-mobile-app-menu-open');
+  }
+
+  function openMobileAppNavigation() {
+    mobileNavigationState.open = true;
+    mobileNavigationState.root?.classList.add('is-open');
+    document.documentElement.classList.add('symbolika-mobile-app-menu-open');
+  }
+
+  function installMobileAppNavigationEvents(root) {
+    root.addEventListener('click', (event) => {
+      const routeButton = event.target.closest('[data-symbolika-mobile-route]');
+      if (routeButton) {
+        const route = routeButton.dataset.symbolikaMobileRoute;
+        closeMobileAppNavigation();
+        if (route && !mobileNavigationPathIsActive(window.location.pathname, route)) window.location.assign(route);
+        return;
+      }
+      if (event.target.closest('[data-symbolika-mobile-more]')) {
+        openMobileAppNavigation();
+        return;
+      }
+      if (event.target.closest('[data-symbolika-mobile-close]') || event.target.classList.contains('symbolika-mobile-app-nav-backdrop')) {
+        closeMobileAppNavigation();
+      }
+    });
+  }
+
+  async function applyMobileAppNavigation() {
+    if (isAdminLoginPath() || !window.location.pathname.startsWith('/admin/')) {
+      mobileNavigationState.root?.remove();
+      mobileNavigationState.root = null;
+      return;
+    }
+    const roleName = serviceNavigationState.roleName || await loadCurrentRoleName();
+    if (!roleName) return;
+    const allowedPaths = roleModulePaths.get(roleName) || new Set(['/admin/symbolika-profile-module']);
+    const allowedModules = mobileModuleCatalog.filter((item) => allowedPaths.has(item.path));
+    const defaultPath = symbolikaDefaultPathForRole(roleName);
+    const preferredPaths = [defaultPath, '/admin/symbolika-tasks', '/admin/symbolika-mail-module'];
+    const primaryModules = preferredPaths
+      .map((path) => allowedModules.find((item) => item.path === path))
+      .filter((item, index, rows) => item && rows.findIndex((row) => row.path === item.path) === index)
+      .slice(0, 3);
+    const pathname = window.location.pathname;
+    const signature = `${roleName}|${pathname}|${allowedModules.map((item) => item.path).join(',')}`;
+    if (mobileNavigationState.root && !mobileNavigationState.root.isConnected) {
+      mobileNavigationState.root = null;
+      mobileNavigationState.signature = '';
+    }
+    if (!mobileNavigationState.root) {
+      const root = document.createElement('div');
+      root.className = 'symbolika-mobile-app-nav';
+      root.setAttribute('aria-label', '\u041e\u0441\u043d\u043e\u0432\u043d\u0430\u044f \u043c\u043e\u0431\u0438\u043b\u044c\u043d\u0430\u044f \u043d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u044f');
+      document.body.appendChild(root);
+      installMobileAppNavigationEvents(root);
+      mobileNavigationState.root = root;
+    }
+    if (mobileNavigationState.signature === signature) return;
+    mobileNavigationState.signature = signature;
+    mobileNavigationState.roleName = roleName;
+    const secondaryActive = allowedModules.some((item) => mobileNavigationPathIsActive(pathname, item.path))
+      && !primaryModules.some((item) => mobileNavigationPathIsActive(pathname, item.path));
+    const dockItems = primaryModules.map((item) => `
+      <button type="button" class="symbolika-mobile-app-nav-item${mobileNavigationPathIsActive(pathname, item.path) ? ' is-active' : ''}" data-symbolika-mobile-route="${item.path}">
+        <span class="symbolika-mobile-app-nav-icon">${mobileNavigationIcon(item.icon)}</span><span>${item.label}</span>
+      </button>`).join('');
+    const sheetItems = allowedModules.map((item) => `
+      <button type="button" class="symbolika-mobile-app-menu-item${mobileNavigationPathIsActive(pathname, item.path) ? ' is-active' : ''}" data-symbolika-mobile-route="${item.path}">
+        <span class="symbolika-mobile-app-menu-icon">${mobileNavigationIcon(item.icon)}</span>
+        <span><strong>${item.label}</strong><small>${mobileNavigationPathIsActive(pathname, item.path) ? '\u041e\u0442\u043a\u0440\u044b\u0442\u043e \u0441\u0435\u0439\u0447\u0430\u0441' : '\u041f\u0435\u0440\u0435\u0439\u0442\u0438 \u0432 \u0440\u0430\u0437\u0434\u0435\u043b'}</small></span>
+      </button>`).join('');
+    mobileNavigationState.root.innerHTML = `
+      <div class="symbolika-mobile-app-nav-backdrop" aria-hidden="true">
+        <section class="symbolika-mobile-app-menu" role="dialog" aria-modal="true" aria-label="\u0412\u0441\u0435 \u0440\u0430\u0437\u0434\u0435\u043b\u044b">
+          <header><span><small>\u0423\u0447\u0435\u0442\u043d\u0430\u044f \u0441\u0438\u0441\u0442\u0435\u043c\u0430</small><strong>\u0412\u0441\u0435 \u0440\u0430\u0437\u0434\u0435\u043b\u044b</strong></span><button type="button" data-symbolika-mobile-close aria-label="\u0417\u0430\u043a\u0440\u044b\u0442\u044c">${mobileNavigationIcon('close')}</button></header>
+          <button type="button" class="symbolika-mobile-app-notifications${mobileNavigationPathIsActive(pathname, '/admin/symbolika-notifications') ? ' is-active' : ''}" data-symbolika-mobile-route="/admin/symbolika-notifications">${mobileNavigationIcon('notifications')}<span><strong>\u0423\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f</strong><small>\u0412\u0441\u0435 \u0441\u043e\u0431\u044b\u0442\u0438\u044f \u0438 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u043a\u0430\u043d\u0430\u043b\u043e\u0432</small></span></button>
+          <div class="symbolika-mobile-app-menu-grid">${sheetItems}</div>
+        </section>
+      </div>
+      <nav class="symbolika-mobile-app-nav-dock">${dockItems}
+        <button type="button" class="symbolika-mobile-app-nav-item${secondaryActive || mobileNavigationPathIsActive(pathname, '/admin/symbolika-notifications') ? ' is-active' : ''}" data-symbolika-mobile-more>
+          <span class="symbolika-mobile-app-nav-icon">${mobileNavigationIcon('more')}</span><span>\u0415\u0449\u0451</span>
+        </button>
+      </nav>`;
+    if (mobileNavigationState.open) mobileNavigationState.root.classList.add('is-open');
   }
 
   function getNavigationCollectionFromLink(link) {
@@ -1475,29 +1603,14 @@
   }
 
   function createPushButton() {
+    for (const button of document.querySelectorAll('.symbolika-push-toggle')) button.remove();
+    pushUi.button = null;
     if (window.location.pathname.includes('/admin/login')) return;
     if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
 
     if (Notification.permission === 'granted') {
       enablePushNotifications();
-      return;
     }
-
-    if (pushUi.button) return;
-
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'symbolika-push-toggle';
-    button.addEventListener('click', enablePushNotifications);
-    document.body.appendChild(button);
-    pushUi.button = button;
-
-    if (Notification.permission === 'denied') {
-      setPushButtonState('denied', '');
-      return;
-    }
-
-    setPushButtonState('default', '\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f');
   }
 
   const observer = new MutationObserver((mutations) => {
@@ -1515,6 +1628,7 @@
       applyHiddenSystemModules();
       applyRoleModuleVisibility();
       applyNotificationCenterShortcut();
+      applyMobileAppNavigation();
       applySymbolikaBranding();
     });
   });
@@ -1542,6 +1656,7 @@
   applyHiddenSystemModules();
   applyRoleModuleVisibility();
   applyNotificationCenterShortcut();
+  applyMobileAppNavigation();
 
   let attempts = 0;
   const interval = window.setInterval(() => {
@@ -1552,6 +1667,7 @@
     applyStandardContentVisibility();
     applyRoleModuleVisibility();
     applyNotificationCenterShortcut();
+    applyMobileAppNavigation();
     applySymbolikaBranding();
     attempts += 1;
     if (attempts >= 20) window.clearInterval(interval);
@@ -1559,6 +1675,9 @@
 
   document.addEventListener('click', onInlineTableClick, true);
   document.addEventListener('click', onNotificationCenterShortcutClick, true);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && mobileNavigationState.open) closeMobileAppNavigation();
+  });
   document.addEventListener('pointerdown', onStaticReadonlyFieldEvent, true);
   document.addEventListener('click', onStaticReadonlyFieldEvent, true);
 

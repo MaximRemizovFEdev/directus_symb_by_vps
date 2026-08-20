@@ -693,6 +693,300 @@ html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
   opacity: .82;
 }
 
+/* Push permissions and channel preferences live in the notification center. */
+.symbolika-push-toggle {
+  display: none !important;
+}
+
+.symbolika-mobile-app-nav {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .symbolika-mobile-app-nav {
+    position: fixed;
+    inset: 0;
+    z-index: 1280;
+    display: block;
+    pointer-events: none;
+  }
+
+  .symbolika-mobile-app-nav-dock {
+    position: fixed;
+    inset-inline: max(8px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-right));
+    inset-block-end: max(8px, env(safe-area-inset-bottom));
+    z-index: 2;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    align-items: stretch;
+    max-inline-size: 520px;
+    min-block-size: 62px;
+    margin-inline: auto;
+    padding: 5px;
+    border: 1px solid color-mix(in srgb, var(--theme--border-color) 82%, transparent);
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--theme--background-normal) 92%, transparent);
+    box-shadow: 0 16px 44px rgb(0 0 0 / 34%), inset 0 1px rgb(255 255 255 / 5%);
+    backdrop-filter: blur(20px) saturate(145%);
+    pointer-events: auto;
+  }
+
+  .symbolika-mobile-app-nav-item {
+    position: relative;
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 2px;
+    min-inline-size: 0;
+    min-block-size: 52px;
+    padding: 3px 5px;
+    border: 0;
+    border-radius: 13px;
+    background: transparent;
+    color: var(--theme--foreground-subdued);
+    font: inherit;
+    font-size: 10px;
+    font-weight: 750;
+    line-height: 1.05;
+    cursor: pointer;
+  }
+
+  .symbolika-mobile-app-nav-item > span:last-child {
+    max-inline-size: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .symbolika-mobile-app-nav-item.is-active {
+    background: color-mix(in srgb, var(--theme--primary) 14%, var(--theme--background-normal));
+    color: var(--theme--primary);
+  }
+
+  .symbolika-mobile-app-nav-item.is-active::before {
+    position: absolute;
+    inset-block-start: 3px;
+    inline-size: 18px;
+    block-size: 3px;
+    border-radius: 99px;
+    background: currentColor;
+    content: '';
+  }
+
+  .symbolika-mobile-app-nav-icon,
+  .symbolika-mobile-app-menu-icon {
+    display: inline-grid;
+    place-items: center;
+  }
+
+  .symbolika-mobile-app-nav-icon svg {
+    inline-size: 23px;
+    block-size: 23px;
+    fill: currentColor;
+  }
+
+  .symbolika-mobile-app-nav-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 3;
+    display: flex;
+    align-items: flex-end;
+    padding: 12px max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+    background: rgb(3 7 12 / 70%);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 180ms ease, visibility 180ms ease;
+    pointer-events: none;
+    backdrop-filter: blur(8px);
+  }
+
+  .symbolika-mobile-app-nav.is-open .symbolika-mobile-app-nav-backdrop {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  .symbolika-mobile-app-menu {
+    inline-size: min(100%, 560px);
+    max-block-size: min(84dvh, 720px);
+    margin-inline: auto;
+    padding: 14px;
+    overflow-y: auto;
+    border: 1px solid var(--theme--border-color);
+    border-radius: 24px;
+    background:
+      radial-gradient(circle at 92% 0%, color-mix(in srgb, var(--theme--primary) 13%, transparent), transparent 36%),
+      var(--theme--background-normal);
+    box-shadow: 0 28px 80px rgb(0 0 0 / 48%);
+    transform: translateY(28px) scale(.985);
+    transition: transform 190ms ease;
+  }
+
+  .symbolika-mobile-app-nav.is-open .symbolika-mobile-app-menu {
+    transform: translateY(0) scale(1);
+  }
+
+  .symbolika-mobile-app-menu > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 2px 2px 12px;
+  }
+
+  .symbolika-mobile-app-menu > header > span {
+    display: grid;
+    gap: 2px;
+  }
+
+  .symbolika-mobile-app-menu > header small,
+  .symbolika-mobile-app-menu-item small,
+  .symbolika-mobile-app-notifications small {
+    color: var(--theme--foreground-subdued);
+    font-size: 10px;
+    font-weight: 650;
+  }
+
+  .symbolika-mobile-app-menu > header strong {
+    color: var(--theme--foreground);
+    font-size: 22px;
+    line-height: 1.1;
+  }
+
+  .symbolika-mobile-app-menu > header button {
+    display: grid;
+    place-items: center;
+    flex: 0 0 42px;
+    inline-size: 42px;
+    block-size: 42px;
+    border: 1px solid var(--theme--border-color);
+    border-radius: 14px;
+    background: var(--theme--background-subdued);
+    color: var(--theme--foreground);
+  }
+
+  .symbolika-mobile-app-menu > header button svg {
+    inline-size: 22px;
+    block-size: 22px;
+    fill: currentColor;
+  }
+
+  .symbolika-mobile-app-notifications {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr);
+    align-items: center;
+    gap: 11px;
+    inline-size: 100%;
+    min-block-size: 62px;
+    margin-block-end: 10px;
+    padding: 9px 11px;
+    border: 1px solid color-mix(in srgb, var(--theme--primary) 42%, var(--theme--border-color));
+    border-radius: 15px;
+    background: color-mix(in srgb, var(--theme--primary) 8%, var(--theme--background-subdued));
+    color: var(--theme--foreground);
+    text-align: start;
+  }
+
+  .symbolika-mobile-app-notifications > svg {
+    inline-size: 25px;
+    block-size: 25px;
+    margin-inline: auto;
+    fill: var(--theme--primary);
+  }
+
+  .symbolika-mobile-app-notifications > span,
+  .symbolika-mobile-app-menu-item > span:last-child {
+    display: grid;
+    min-inline-size: 0;
+    gap: 2px;
+  }
+
+  .symbolika-mobile-app-menu-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .symbolika-mobile-app-menu-item {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr);
+    align-items: center;
+    gap: 9px;
+    min-block-size: 68px;
+    padding: 9px;
+    border: 1px solid var(--theme--border-color-subdued);
+    border-radius: 14px;
+    background: var(--theme--background-subdued);
+    color: var(--theme--foreground);
+    text-align: start;
+  }
+
+  .symbolika-mobile-app-menu-item.is-active {
+    border-color: color-mix(in srgb, var(--theme--primary) 54%, var(--theme--border-color));
+    background: color-mix(in srgb, var(--theme--primary) 12%, var(--theme--background-subdued));
+  }
+
+  .symbolika-mobile-app-menu-icon {
+    inline-size: 38px;
+    block-size: 38px;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--theme--primary) 13%, var(--theme--background-normal));
+    color: var(--theme--primary);
+  }
+
+  .symbolika-mobile-app-menu-icon svg {
+    inline-size: 22px;
+    block-size: 22px;
+    fill: currentColor;
+  }
+
+  html.symbolika-mobile-app-menu-open,
+  html.symbolika-mobile-app-menu-open body {
+    overflow: hidden !important;
+  }
+
+  body:has(.symbolika-mobile-app-nav) :is(.symbolika-costing-page, .symbolika-notifications-page) {
+    padding-block-end: calc(78px + env(safe-area-inset-bottom)) !important;
+  }
+
+  body:has(.symbolika-mobile-app-nav) .symbolika-costing-feedback-button {
+    inset-block-end: calc(82px + env(safe-area-inset-bottom)) !important;
+  }
+
+  html.symbolika-mobile-app-menu-open .symbolika-costing-feedback-button {
+    opacity: 0 !important;
+    pointer-events: none !important;
+    transform: translateY(12px) !important;
+  }
+
+  body:has(.symbolika-mobile-app-nav) .symbolika-mail-shell {
+    block-size: calc(100dvh - 76px - env(safe-area-inset-bottom)) !important;
+  }
+}
+
+@media (max-width: 390px) {
+  .symbolika-mobile-app-nav-dock {
+    inset-inline: 6px;
+    inset-block-end: max(6px, env(safe-area-inset-bottom));
+    min-block-size: 58px;
+    border-radius: 16px;
+  }
+
+  .symbolika-mobile-app-nav-item {
+    min-block-size: 48px;
+    font-size: 9px;
+  }
+
+  .symbolika-mobile-app-menu-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .symbolika-mobile-app-menu-item {
+    min-block-size: 58px;
+  }
+}
+
 @media (min-width: 1180px) {
   .content-split .v-form.grid.with-fill > .field.half[data-collection="orders"][data-field="comment"] {
     grid-column: 3 / 5 !important;

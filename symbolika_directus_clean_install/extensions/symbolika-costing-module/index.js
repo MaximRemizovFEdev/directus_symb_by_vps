@@ -261,6 +261,7 @@ const expenseFields = [
   'payment_type.id',
   'payment_type.name',
   'comment',
+  'created_at',
 ];
 
 const contractorPaymentFields = [
@@ -1327,6 +1328,9 @@ export const CostingModule = {
       employees: [],
       customers: [],
       companies: [],
+      contactDuplicateDialog: null,
+      contactDuplicatesLoading: false,
+      contactDuplicatesMergingKey: '',
       productCategories: [],
       productSubcategories: [],
       applicationMethods: [],
@@ -1619,6 +1623,10 @@ export const CostingModule = {
       if (!['clients', 'companies'].includes(this.activeTab)) return false;
       if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) return true;
       return this.currentRoleName === 'Менеджер' && !!this.currentEmployeeId;
+    },
+
+    canManageContactDuplicates() {
+      return this.currentRoleName === 'Administrator' && ['clients', 'companies'].includes(this.activeTab);
     },
 
     canCreateEstimateHere() {
@@ -2842,7 +2850,7 @@ export const CostingModule = {
 
       this.expenseRows.forEach((row) => {
         if (['contractor_payment', 'employee_bonus'].includes(row.expense_type)) return;
-        const month = ensure(row.expense_date);
+        const month = ensure(this.expenseCashDate(row));
         if (!month) return;
         const amount = this.parseMoney(row.amount);
         month.operational_expenses += amount;
@@ -2905,16 +2913,18 @@ export const CostingModule = {
 
       const actualMonthExpenses = this.expenseRows.reduce((sum, row) => {
         if (['contractor_payment', 'employee_bonus'].includes(row.expense_type)) return sum;
-        if (this.monthKey(row.expense_date) !== currentMonthKey) return sum;
-        const date = new Date(row.expense_date);
+        const cashDate = this.expenseCashDate(row);
+        if (this.monthKey(cashDate) !== currentMonthKey) return sum;
+        const date = new Date(cashDate);
         if (Number.isNaN(date.getTime()) || date > todayEnd) return sum;
         return sum + this.parseMoney(row.amount);
       }, 0);
 
       const futureMonthExpenses = this.expenseRows.reduce((sum, row) => {
         if (['contractor_payment', 'employee_bonus'].includes(row.expense_type)) return sum;
-        if (this.monthKey(row.expense_date) !== currentMonthKey) return sum;
-        const date = new Date(row.expense_date);
+        const cashDate = this.expenseCashDate(row);
+        if (this.monthKey(cashDate) !== currentMonthKey) return sum;
+        const date = new Date(cashDate);
         if (Number.isNaN(date.getTime()) || date <= todayEnd) return sum;
         return sum + this.parseMoney(row.amount);
       }, 0);
@@ -2960,7 +2970,7 @@ export const CostingModule = {
           title: type.text,
           amount: this.expenseRows.reduce((sum, row) => {
             if (row.expense_type !== type.value) return sum;
-            if (this.monthKey(row.expense_date) !== currentMonthKey) return sum;
+            if (this.monthKey(this.expenseCashDate(row)) !== currentMonthKey) return sum;
             return sum + this.parseMoney(row.amount);
           }, 0),
         }))
@@ -6181,7 +6191,10 @@ export const CostingModule = {
     openPayrollAdvance(row) {
       this.openExpenseDialog('employee_advance', row.employee, {
         accounting_month: this.payrollMonth,
-        expense_date: this.scheduledDate(this.payrollMonth, this.financeSettings?.advance_day || 28),
+        // The button records an actual payment, so the cash expense must use
+        // the payment date. The configured advance day is a due date only and
+        // must not postpone an advance that has already been paid.
+        expense_date: this.todayInput(),
         amount: Math.max(this.parseMoney(row.salary_fixed) / 2 - this.parseMoney(row.advances_paid), 0),
         comment: `Аванс за ${this.monthLabel(this.payrollMonth)} (50% оклада)`,
       });
@@ -6190,7 +6203,9 @@ export const CostingModule = {
     openPayrollFinalPayment(row) {
       this.openExpenseDialog('salary_payment', row.employee, {
         accounting_month: this.payrollMonth,
-        expense_date: this.scheduledDate(this.payrollMonth, this.financeSettings?.salary_day || 12, true),
+        // A salary payment is also an actual cash operation. Keep the salary
+        // month in accounting_month and record when the money was paid here.
+        expense_date: this.todayInput(),
         amount: Math.max(this.parseMoney(row.salary_debt), 0),
         comment: `Зарплата за ${this.monthLabel(this.payrollMonth)}: вторая часть оклада, проценты и премии`,
       });
@@ -9263,6 +9278,98 @@ export const CostingModule = {
         this.error = error.message;
       } finally {
         if (this.customerDirectoryDialog) this.customerDirectoryDialog.saving = false;
+      }
+    },
+
+    async openContactDuplicateDialog(type = '') {
+      if (this.currentRoleName !== 'Administrator') return;
+      const entityType = type || (this.activeTab === 'companies' ? 'company' : 'customer');
+      this.contactDuplicateDialog = {
+        type: entityType,
+        groups: [],
+      };
+      await this.loadContactDuplicates();
+    },
+
+    closeContactDuplicateDialog() {
+      if (this.contactDuplicatesMergingKey) return;
+      this.contactDuplicateDialog = null;
+    },
+
+    async loadContactDuplicates() {
+      const dialog = this.contactDuplicateDialog;
+      if (!dialog || this.contactDuplicatesLoading) return;
+      this.contactDuplicatesLoading = true;
+      this.error = '';
+      try {
+        const payload = await this.request(`/symbolika-contact-duplicates?type=${encodeURIComponent(dialog.type)}`);
+        if (this.contactDuplicateDialog !== dialog) return;
+        dialog.groups = (payload?.data || []).map((group) => ({
+          ...group,
+          primary_id: group.records?.[0]?.id || '',
+        }));
+      } catch (error) {
+        this.error = error.message;
+        if (this.contactDuplicateDialog === dialog) dialog.groups = [];
+      } finally {
+        this.contactDuplicatesLoading = false;
+      }
+    },
+
+    duplicateMatchLabel(group) {
+      const labels = Array.isArray(group?.reasons) ? group.reasons : [];
+      return labels.length ? `Совпадает: ${labels.join(', ')}` : 'Возможные дубли';
+    },
+
+    duplicateRecordActivity(record) {
+      const parts = [];
+      const orders = Number(record?.orders_count || 0);
+      const tasks = Number(record?.tasks_count || 0);
+      const mail = Number(record?.mail_threads_count || 0);
+      parts.push(`${orders} ${this.pluralRu(orders, 'заказ', 'заказа', 'заказов')}`);
+      if (tasks) parts.push(`${tasks} ${this.pluralRu(tasks, 'задача', 'задачи', 'задач')}`);
+      if (mail) parts.push(`${mail} ${this.pluralRu(mail, 'переписка', 'переписки', 'переписок')}`);
+      return parts.join(' · ');
+    },
+
+    async mergeContactDuplicateGroup(group) {
+      const dialog = this.contactDuplicateDialog;
+      if (!dialog || this.contactDuplicatesMergingKey || !group?.primary_id) return;
+      const primaryId = Number(group.primary_id);
+      const duplicateIds = (group.records || [])
+        .map((record) => Number(record.id))
+        .filter((id) => id && id !== primaryId);
+      if (!primaryId || !duplicateIds.length) return;
+
+      const primary = (group.records || []).find((record) => Number(record.id) === primaryId);
+      const entityLabel = dialog.type === 'company' ? 'компанию' : 'клиента';
+      const confirmed = window.confirm(
+        `Оставить ${entityLabel} «${primary?.name || `#${primaryId}`}» основной записью?\n\n`
+        + `Связанные заказы, оплаты, задачи и переписка будут перенесены. ${duplicateIds.length} ${this.pluralRu(duplicateIds.length, 'дубль будет удалён', 'дубля будут удалены', 'дублей будут удалены')}. Отменить это действие автоматически нельзя.`,
+      );
+      if (!confirmed) return;
+
+      this.contactDuplicatesMergingKey = group.key;
+      this.error = '';
+      try {
+        await this.request('/symbolika-contact-duplicates/merge', {
+          method: 'POST',
+          body: JSON.stringify({
+            entity_type: dialog.type,
+            primary_id: primaryId,
+            duplicate_ids: duplicateIds,
+          }),
+        });
+        await Promise.all([
+          this.loadCustomers(),
+          this.loadCompanies(),
+          this.loadFinanceRows(),
+        ]);
+        await this.loadContactDuplicates();
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.contactDuplicatesMergingKey = '';
       }
     },
 
@@ -12773,6 +12880,18 @@ export const CostingModule = {
 
     expenseTypeName(value) {
       return expenseTypes.find((choice) => choice.value === value)?.text || 'Прочие расходы';
+    },
+
+    expenseCashDate(row) {
+      const expenseDate = String(row?.expense_date || '').slice(0, 10);
+      if (!['salary_payment', 'employee_advance'].includes(row?.expense_type)) return expenseDate;
+
+      // Older payroll actions saved the configured due day (12/28) even when
+      // money was paid earlier. Such a row is already an actual transaction;
+      // use its creation day for cash-flow reports instead of treating it as a
+      // future planned expense.
+      const createdDate = String(row?.created_at || '').slice(0, 10);
+      return createdDate && expenseDate && expenseDate > createdDate ? createdDate : expenseDate;
     },
 
     formatMoney(value) {
@@ -21110,6 +21229,160 @@ export const CostingModule = {
           font-weight: 750;
         }
 
+        .symbolika-costing-duplicate-check-button {
+          border-color: color-mix(in srgb, var(--theme--primary) 58%, var(--symbolika-line));
+          color: var(--symbolika-text);
+        }
+
+        .symbolika-costing-duplicate-modal {
+          inline-size: min(900px, calc(100vw - 28px));
+          max-block-size: min(820px, calc(100vh - 28px));
+          overflow: hidden;
+        }
+
+        .symbolika-costing-duplicate-intro {
+          margin: 0;
+          padding: 0 22px 16px;
+          color: var(--symbolika-muted);
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
+        .symbolika-costing-duplicate-groups {
+          display: grid;
+          gap: 12px;
+          min-block-size: 0;
+          overflow: auto;
+          padding: 0 22px 18px;
+        }
+
+        .symbolika-costing-duplicate-group {
+          overflow: hidden;
+          border: 1px solid var(--symbolika-line);
+          border-radius: 16px;
+          background: color-mix(in srgb, var(--symbolika-panel) 92%, var(--theme--primary));
+        }
+
+        .symbolika-costing-duplicate-group-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          border-block-end: 1px solid var(--symbolika-line);
+          padding: 12px 14px;
+        }
+
+        .symbolika-costing-duplicate-group-head > div {
+          display: grid;
+          gap: 2px;
+        }
+
+        .symbolika-costing-duplicate-group-head strong {
+          color: var(--symbolika-text);
+          font-size: 13px;
+        }
+
+        .symbolika-costing-duplicate-group-head span {
+          color: var(--symbolika-muted);
+          font-size: 10.5px;
+        }
+
+        .symbolika-costing-duplicate-record {
+          display: grid;
+          grid-template-columns: 18px minmax(0, 1fr) minmax(150px, auto) auto;
+          gap: 11px;
+          align-items: center;
+          min-block-size: 62px;
+          border-block-end: 1px solid color-mix(in srgb, var(--symbolika-line) 72%, transparent);
+          padding: 9px 14px;
+          cursor: pointer;
+        }
+
+        .symbolika-costing-duplicate-record:last-child {
+          border-block-end: 0;
+        }
+
+        .symbolika-costing-duplicate-record.is-primary {
+          background: color-mix(in srgb, var(--symbolika-green) 9%, transparent);
+        }
+
+        .symbolika-costing-duplicate-record input {
+          position: absolute;
+          opacity: 0;
+          pointer-events: none;
+        }
+
+        .symbolika-costing-duplicate-radio {
+          inline-size: 16px;
+          block-size: 16px;
+          border: 2px solid var(--symbolika-muted);
+          border-radius: 50%;
+          box-shadow: inset 0 0 0 3px var(--symbolika-panel);
+        }
+
+        .symbolika-costing-duplicate-record.is-primary .symbolika-costing-duplicate-radio {
+          border-color: var(--symbolika-green);
+          background: var(--symbolika-green);
+        }
+
+        .symbolika-costing-duplicate-identity {
+          display: grid;
+          gap: 3px;
+          min-inline-size: 0;
+        }
+
+        .symbolika-costing-duplicate-identity strong,
+        .symbolika-costing-duplicate-identity span,
+        .symbolika-costing-duplicate-identity small {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .symbolika-costing-duplicate-identity strong {
+          color: var(--symbolika-text);
+          font-size: 12px;
+        }
+
+        .symbolika-costing-duplicate-identity span,
+        .symbolika-costing-duplicate-identity small,
+        .symbolika-costing-duplicate-activity {
+          color: var(--symbolika-muted);
+          font-size: 10.5px;
+        }
+
+        .symbolika-costing-duplicate-clean {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 12px;
+          min-block-size: 190px;
+          margin: 0 22px 18px;
+          border: 1px solid color-mix(in srgb, var(--symbolika-green) 45%, var(--symbolika-line));
+          border-radius: 16px;
+          color: var(--symbolika-green);
+        }
+
+        .symbolika-costing-duplicate-clean > div {
+          display: grid;
+          gap: 3px;
+        }
+
+        .symbolika-costing-duplicate-clean span {
+          color: var(--symbolika-muted);
+          font-size: 11px;
+        }
+
+        @media (max-width: 680px) {
+          .symbolika-costing-duplicate-record {
+            grid-template-columns: 18px minmax(0, 1fr) auto;
+          }
+
+          .symbolika-costing-duplicate-activity {
+            display: none;
+          }
+        }
+
         @media (max-width: 980px) {
           .symbolika-costing-directory-table {
             display: block;
@@ -23512,6 +23785,36 @@ export const CostingModule = {
             grid-column: 1 / -1;
           }
 
+          .symbolika-costing-task-dashboard {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+            margin-block: 9px 12px;
+          }
+
+          .symbolika-costing-task-stat {
+            min-block-size: 92px;
+            padding: 11px 8px;
+            border-radius: 12px;
+          }
+
+          .symbolika-costing-task-stat span {
+            font-size: 12px;
+          }
+
+          .symbolika-costing-task-stat strong {
+            margin-block: 5px 3px;
+            font-size: 32px;
+          }
+
+          .symbolika-costing-task-stat small {
+            display: -webkit-box;
+            overflow: hidden;
+            font-size: 9.5px;
+            line-height: 1.2;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+          }
+
           .symbolika-costing-mobile-nav-backdrop {
             position: fixed;
             inset: 0;
@@ -23553,6 +23856,23 @@ export const CostingModule = {
         }
 
         @media (max-width: 520px) {
+          .symbolika-costing-page {
+            padding-inline: 8px;
+          }
+
+          .symbolika-costing-smart-toolbar {
+            margin-inline: -4px;
+            padding-inline: 4px;
+          }
+
+          .symbolika-costing-actions {
+            gap: 7px;
+          }
+
+          .symbolika-costing-button {
+            min-block-size: 42px;
+          }
+
           .symbolika-costing-card-view {
             grid-template-columns: minmax(0, 1fr);
             gap: 8px;
@@ -24181,6 +24501,10 @@ export const CostingModule = {
             <button v-if="canCreateDirectoryEntity" type="button" class="symbolika-costing-button" @click="openCustomerDirectoryDialog()">
               <v-icon :name="activeTab === 'companies' ? 'domain_add' : 'person_add'" small />
               {{ activeTab === 'companies' ? 'Новая компания' : 'Новый клиент' }}
+            </button>
+            <button v-if="canManageContactDuplicates" type="button" class="symbolika-costing-mini-button symbolika-costing-duplicate-check-button" @click="openContactDuplicateDialog()">
+              <v-icon name="group_work" small />
+              Проверить дубли
             </button>
             <div v-if="supportsWorkspaceViewModes" class="symbolika-costing-view-switch" aria-label="Вид страницы">
               <button
@@ -30500,6 +30824,64 @@ export const CostingModule = {
               <button type="button" class="symbolika-costing-button" :disabled="customerDirectoryDialog.saving" @click="saveCustomerDirectoryEntity">
                 <v-icon name="save" small />{{ customerDirectoryDialog.saving ? 'Сохраняю…' : 'Создать' }}
               </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="contactDuplicateDialog" class="symbolika-costing-modal-backdrop" @click.self="closeContactDuplicateDialog">
+          <div class="symbolika-costing-modal symbolika-costing-duplicate-modal">
+            <div class="symbolika-costing-modal-head">
+              <div>
+                <div class="symbolika-costing-subtle">Администрирование контактов</div>
+                <h2>Дубли {{ contactDuplicateDialog.type === 'company' ? 'компаний' : 'клиентов' }}</h2>
+              </div>
+              <button type="button" class="symbolika-costing-detail-close" :disabled="!!contactDuplicatesMergingKey" @click="closeContactDuplicateDialog">×</button>
+            </div>
+            <p class="symbolika-costing-duplicate-intro">
+              Совпадения найдены по телефону, email и точному имени. Выберите запись, которую нужно оставить основной; все связи остальных записей будут перенесены на неё.
+            </p>
+            <div v-if="contactDuplicatesLoading" class="symbolika-costing-empty">Проверяю контакты…</div>
+            <div v-else-if="!contactDuplicateDialog.groups.length" class="symbolika-costing-duplicate-clean">
+              <v-icon name="verified" />
+              <div><strong>Дубли не найдены</strong><span>Телефоны, email и имена в справочнике не повторяются.</span></div>
+            </div>
+            <div v-else class="symbolika-costing-duplicate-groups">
+              <section v-for="group in contactDuplicateDialog.groups" :key="group.key" class="symbolika-costing-duplicate-group">
+                <div class="symbolika-costing-duplicate-group-head">
+                  <div>
+                    <strong>{{ group.records.length }} {{ pluralRu(group.records.length, 'запись', 'записи', 'записей') }}</strong>
+                    <span>{{ duplicateMatchLabel(group) }}</span>
+                  </div>
+                  <button
+                    type="button"
+                    class="symbolika-costing-button"
+                    :disabled="!!contactDuplicatesMergingKey"
+                    @click="mergeContactDuplicateGroup(group)"
+                  >
+                    <v-icon name="merge" small />
+                    {{ contactDuplicatesMergingKey === group.key ? 'Объединяю…' : 'Объединить' }}
+                  </button>
+                </div>
+                <label
+                  v-for="record in group.records"
+                  :key="record.id"
+                  class="symbolika-costing-duplicate-record"
+                  :class="{ 'is-primary': Number(group.primary_id) === Number(record.id) }"
+                >
+                  <input v-model="group.primary_id" type="radio" :name="'duplicate-primary-' + group.key" :value="record.id" />
+                  <span class="symbolika-costing-duplicate-radio"></span>
+                  <span class="symbolika-costing-duplicate-identity">
+                    <strong>{{ record.name || '-' }}</strong>
+                    <span>{{ [record.phone, record.email].filter(Boolean).join(' · ') || 'Контакты не указаны' }}</span>
+                    <small>#{{ record.id }}<template v-if="record.manager_name"> · {{ record.manager_name }}</template></small>
+                  </span>
+                  <span class="symbolika-costing-duplicate-activity">{{ duplicateRecordActivity(record) }}</span>
+                  <span v-if="Number(group.primary_id) === Number(record.id)" class="symbolika-costing-pill symbolika-costing-pill-green">Основная</span>
+                </label>
+              </section>
+            </div>
+            <div class="symbolika-costing-modal-actions">
+              <button type="button" class="symbolika-costing-mini-button" :disabled="!!contactDuplicatesMergingKey" @click="closeContactDuplicateDialog">Закрыть</button>
             </div>
           </div>
         </div>

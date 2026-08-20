@@ -214,6 +214,30 @@ async function inspect(page) {
           if (opened) await sideNavigation.locator('.symbolika-costing-detail-close').click();
           mobileNavigation = { opened, closed: !(await sideNavigation.isVisible().catch(() => false)) };
         }
+        let mobileAppNavigation = null;
+        if (viewport.mobile) {
+          const mobileNavigationRoot = page.locator('.symbolika-mobile-app-nav').first();
+          const dock = page.locator('.symbolika-mobile-app-nav-dock').first();
+          const moreButton = page.locator('[data-symbolika-mobile-more]').first();
+          const sheet = page.locator('.symbolika-mobile-app-menu').first();
+          const dockVisible = await dock.isVisible().catch(() => false);
+          if (dockVisible && await moreButton.isVisible().catch(() => false)) {
+            await moreButton.click();
+            await page.waitForTimeout(120);
+            const opened = await mobileNavigationRoot.evaluate((element) => element.classList.contains('is-open')).catch(() => false);
+            const routes = opened ? await sheet.locator('[data-symbolika-mobile-route]').count() : 0;
+            if (captureAllScreens && moduleName === 'symbolika-orders') {
+              await page.screenshot({ path: path.join(resultsDir, `${viewport.key}-mobile-app-menu.png`), fullPage: false });
+            }
+            const closeButton = sheet.locator('[data-symbolika-mobile-close]').first();
+            if (opened) await closeButton.click({ force: true });
+            await page.waitForTimeout(120);
+            const closed = await mobileNavigationRoot.evaluate((element) => !element.classList.contains('is-open')).catch(() => false);
+            mobileAppNavigation = { dockVisible, opened, routes, closed };
+          } else {
+            mobileAppNavigation = { dockVisible, opened: false, routes: 0, closed: true };
+          }
+        }
         let orderForm = null;
         if (inspectOrderForm && moduleName === 'symbolika-orders') {
           const createButton = page.locator('.symbolika-costing-smart-toolbar .symbolika-costing-button').first();
@@ -284,7 +308,8 @@ async function inspect(page) {
         if (orderForm?.modalOverflow > 2) failures.push(`new order form overflow ${orderForm.modalOverflow}px`);
         if (viewport.mobile && orderForm && (!orderForm.hiddenOrderExtras || !orderForm.hiddenItemExtras)) failures.push('mobile order extras are not collapsed');
         if (inspectMobileNavigation && viewport.mobile && hasCostingNavigation && (!mobileNavigation?.opened || !mobileNavigation?.closed)) failures.push('mobile navigation did not open and close');
-        const screen = { viewport: viewport.key, module: moduleName, layout, orderForm, orderDetail, mobileNavigation, httpFailures, failures };
+        if (viewport.mobile && (!mobileAppNavigation?.dockVisible || !mobileAppNavigation?.opened || !mobileAppNavigation?.closed || mobileAppNavigation.routes < 2)) failures.push('mobile app navigation is incomplete');
+        const screen = { viewport: viewport.key, module: moduleName, layout, orderForm, orderDetail, mobileNavigation, mobileAppNavigation, httpFailures, failures };
         report.screens.push(screen);
         report.failures.push(...failures.map((failure) => `${viewport.key}/${moduleName}: ${failure}`));
         if (failures.length || captureAllScreens) await page.screenshot({ path: path.join(resultsDir, `${viewport.key}-${moduleName}.png`), fullPage: false });
