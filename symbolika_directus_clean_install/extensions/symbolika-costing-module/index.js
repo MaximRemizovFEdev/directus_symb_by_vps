@@ -3006,8 +3006,7 @@ export const CostingModule = {
     },
 
     visibleMyOrderRows() {
-      const source = this.allOrderRows.length ? this.allOrderRows : this.myOrderRows;
-      return this.sortRows(this.applySearchAndFilter(source, (row) => [
+      return this.sortRows(this.applySearchAndFilter(this.myOrderRows, (row) => [
         row.order_number,
         row.customer_display,
         this.resolveCustomer(row)?.name,
@@ -3031,7 +3030,7 @@ export const CostingModule = {
 
     visibleOrderPositionRows() {
       const source = this.activeTab === 'my_orders'
-        ? (this.allOrderRows.length ? this.allOrderRows : this.myOrderRows)
+        ? this.myOrderRows
         : this.allOrderRows;
       const orderRows = source.filter((row) => this.matchesOrderFilters(row));
       const rows = this.orderItemsForRows(orderRows);
