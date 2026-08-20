@@ -23856,13 +23856,333 @@ export const CostingModule = {
         }
 
         @media (max-width: 520px) {
+          body:has(.symbolika-costing-page),
+          body:has(.symbolika-costing-page) #app,
+          body:has(.symbolika-costing-page) .v-application,
+          body:has(.symbolika-costing-page) .sp-root,
+          body:has(.symbolika-costing-page) .module-page,
+          body:has(.symbolika-costing-page) .content,
+          body:has(.symbolika-costing-page) .content-wrapper {
+            max-inline-size: 100vw !important;
+            overflow-x: clip !important;
+          }
+
+          .symbolika-costing-page,
+          .symbolika-costing-page *,
+          .symbolika-costing-page *::before,
+          .symbolika-costing-page *::after {
+            box-sizing: border-box;
+          }
+
           .symbolika-costing-page {
+            inline-size: 100%;
+            max-inline-size: 100%;
+            min-inline-size: 0;
             padding-inline: 8px;
+            overflow-x: clip;
           }
 
           .symbolika-costing-smart-toolbar {
+            inline-size: auto;
+            max-inline-size: calc(100% + 8px);
+            min-inline-size: 0;
             margin-inline: -4px;
             padding-inline: 4px;
+            overflow-x: clip;
+          }
+
+          .symbolika-costing-workspace,
+          .symbolika-costing-main,
+          .symbolika-costing-toolbar,
+          .symbolika-costing-actions,
+          .symbolika-costing-order-controls-row,
+          .symbolika-costing-filter-bar,
+          .symbolika-costing-filter-groups,
+          .symbolika-costing-view-toggle,
+          .symbolika-costing-alt-view,
+          .symbolika-costing-card-view {
+            inline-size: 100%;
+            max-inline-size: 100%;
+            min-inline-size: 0;
+          }
+
+          .symbolika-costing-toolbar {
+            grid-template-columns: 42px minmax(0, 1fr);
+          }
+
+          .symbolika-costing-toolbar > .symbolika-costing-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+          }
+
+          .symbolika-costing-actions > * {
+            min-inline-size: 0 !important;
+            max-inline-size: 100%;
+          }
+
+          .symbolika-costing-actions .symbolika-costing-button,
+          .symbolika-costing-actions .symbolika-costing-mini-button {
+            inline-size: 100%;
+            padding-inline: 8px;
+          }
+
+          .symbolika-costing-actions .symbolika-costing-view-switch {
+            inline-size: 100%;
+            justify-content: space-around;
+          }
+
+          .symbolika-costing-order-controls-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            align-items: stretch;
+            gap: 8px;
+          }
+
+          .symbolika-costing-order-controls-row > .symbolika-costing-sort {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            inline-size: 100%;
+            white-space: normal;
+          }
+
+          .symbolika-costing-order-controls-row > .symbolika-costing-sort .symbolika-costing-select {
+            inline-size: 100%;
+            max-inline-size: none;
+          }
+
+          .symbolika-costing-order-controls-row > .symbolika-costing-filter-bar {
+            display: grid;
+            inline-size: 100%;
+          }
+
+          .symbolika-costing-order-controls-row .symbolika-costing-filter-groups {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 6px;
+          }
+
+          .symbolika-costing-order-controls-row .symbolika-costing-filter-toggle,
+          .symbolika-costing-order-controls-row .symbolika-costing-filter-chip {
+            inline-size: 100%;
+            min-inline-size: 0;
+            padding-inline: 6px;
+            white-space: normal;
+            line-height: 1.15;
+          }
+
+          .symbolika-costing-order-controls-row .symbolika-costing-filter-panels {
+            position: static;
+            inline-size: 100%;
+            max-inline-size: 100%;
+            margin-block-start: 2px;
+          }
+
+          .symbolika-costing-order-controls-row > .symbolika-costing-view-toggle {
+            display: flex;
+            inline-size: 100%;
+            margin: 0;
+            flex-wrap: wrap;
+            gap: 6px;
+          }
+
+          .symbolika-costing-order-controls-row > .symbolika-costing-view-toggle > .symbolika-costing-toggle-label {
+            flex: 0 0 100%;
+          }
+
+          .symbolika-costing-order-controls-row > .symbolika-costing-view-toggle > .symbolika-costing-filter-chip {
+            flex: 1 1 calc(33.333% - 6px);
+            inline-size: auto;
+            min-inline-size: 0;
+            padding-inline: 7px;
+            white-space: normal;
+          }
+
+          .symbolika-costing-order-controls-row > .symbolika-costing-view-toggle > .symbolika-costing-filter-chip:nth-last-child(-n + 2) {
+            flex-basis: calc(50% - 6px);
+          }
+
+          .symbolika-costing-order-controls-row > .symbolika-costing-view-toggle > .symbolika-costing-toggle-divider {
+            display: none;
+          }
+
+          .symbolika-costing-filter-chip-list,
+          .symbolika-costing-segments,
+          .symbolika-costing-subtoolbar {
+            max-inline-size: 100%;
+            min-inline-size: 0;
+            flex-wrap: wrap;
+            overflow-x: clip;
+          }
+
+          .symbolika-costing-card-view {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
+
+          .symbolika-costing-work-card,
+          .symbolika-costing-kanban-column,
+          .symbolika-costing-kanban-card {
+            inline-size: 100%;
+            max-inline-size: 100%;
+          }
+
+          .symbolika-costing-kanban {
+            grid-auto-flow: row;
+            grid-auto-columns: minmax(0, 1fr);
+            grid-template-columns: minmax(0, 1fr);
+            inline-size: 100%;
+            max-inline-size: 100%;
+            overflow-x: clip;
+          }
+
+          .symbolika-costing-table-wrap,
+          .symbolika-costing-office-workspace {
+            inline-size: 100%;
+            max-inline-size: 100%;
+            min-inline-size: 0;
+            overflow-x: clip;
+          }
+
+          .symbolika-costing-event-filters {
+            grid-template-columns: minmax(0, 1fr) !important;
+            inline-size: 100%;
+          }
+
+          .symbolika-costing-event-filters > *,
+          .symbolika-costing-event-filters .symbolika-costing-select,
+          .symbolika-costing-event-filters .symbolika-costing-input {
+            inline-size: 100%;
+            min-inline-size: 0;
+            max-inline-size: 100%;
+          }
+
+          .symbolika-costing-event-refresh {
+            grid-column: auto;
+            inline-size: 100%;
+          }
+
+          .symbolika-costing-table-finance,
+          .symbolika-costing-table-finance-items {
+            display: block;
+            inline-size: 100%;
+            min-inline-size: 0 !important;
+            max-inline-size: 100%;
+          }
+
+          .symbolika-costing-table-finance colgroup,
+          .symbolika-costing-table-finance thead,
+          .symbolika-costing-table-finance-items colgroup,
+          .symbolika-costing-table-finance-items thead {
+            display: none;
+          }
+
+          .symbolika-costing-table-finance tbody,
+          .symbolika-costing-table-finance-items tbody {
+            display: grid;
+            gap: 8px;
+            inline-size: 100%;
+          }
+
+          .symbolika-costing-table-finance tbody tr,
+          .symbolika-costing-table-finance-items tbody tr {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+            inline-size: 100%;
+            padding: 11px;
+            border: 1px solid var(--theme--border-color-subdued);
+            border-radius: 12px;
+            background: var(--theme--background-normal);
+          }
+
+          .symbolika-costing-table-finance tbody td,
+          .symbolika-costing-table-finance-items tbody td {
+            display: block;
+            inline-size: auto !important;
+            min-inline-size: 0;
+            padding: 0;
+            border: 0;
+            overflow-wrap: anywhere;
+          }
+
+          .symbolika-costing-table-finance tbody td:nth-child(2),
+          .symbolika-costing-table-finance tbody td:nth-child(4),
+          .symbolika-costing-table-finance-items tbody td:nth-child(2),
+          .symbolika-costing-table-finance-items tbody td:nth-child(3),
+          .symbolika-costing-table-finance-items tbody td:last-child {
+            grid-column: 1 / -1;
+          }
+
+          .symbolika-costing-table-finance :is(a, button, select, input),
+          .symbolika-costing-table-finance-items :is(a, button, select, input) {
+            max-inline-size: 100%;
+            overflow-wrap: anywhere;
+          }
+
+          .symbolika-costing-admin-table {
+            display: block;
+            inline-size: 100%;
+            min-inline-size: 0 !important;
+            max-inline-size: 100%;
+          }
+
+          .symbolika-costing-admin-table colgroup,
+          .symbolika-costing-admin-table thead,
+          .symbolika-costing-admin-table th:not(:first-child):not(:last-child),
+          .symbolika-costing-admin-table td:not(:first-child):not(:last-child) {
+            display: none;
+          }
+
+          .symbolika-costing-admin-table tbody {
+            display: grid;
+            gap: 8px;
+            inline-size: 100%;
+          }
+
+          .symbolika-costing-admin-table tbody tr {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 10px;
+            inline-size: 100%;
+            padding: 11px 12px;
+            border: 1px solid var(--theme--border-color-subdued);
+            border-radius: 11px;
+            background: var(--theme--background-normal);
+          }
+
+          .symbolika-costing-admin-table tbody td:first-child,
+          .symbolika-costing-admin-table tbody td:last-child {
+            display: block;
+            min-inline-size: 0;
+            padding: 0;
+            border: 0;
+            overflow-wrap: anywhere;
+          }
+
+          .symbolika-costing-admin-table .symbolika-costing-row-actions {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            max-inline-size: 142px;
+          }
+
+          .symbolika-costing-admin-table .symbolika-costing-row-actions .symbolika-costing-mini-button {
+            inline-size: 40px;
+            min-inline-size: 40px;
+            padding: 0;
+            font-size: 0;
+          }
+
+          .symbolika-costing-admin-table .symbolika-costing-row-actions .v-icon {
+            margin: 0;
+          }
+
+          .symbolika-costing-page input,
+          .symbolika-costing-page select,
+          .symbolika-costing-page textarea,
+          .symbolika-costing-page button {
+            max-inline-size: 100%;
           }
 
           .symbolika-costing-actions {
