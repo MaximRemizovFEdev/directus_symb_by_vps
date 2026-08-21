@@ -127,35 +127,55 @@ export default {
       for (const [key, value] of Object.entries(options.query || {})) {
         if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
       }
-      const response = await fetch(url, {
-        method: options.method || 'GET',
-        headers: {
-          Authorization: `OAuth ${token}`,
-          ...(options.headers || {}),
-        },
-        body: options.body,
-        ...(options.duplex ? { duplex: options.duplex } : {}),
-      });
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) {
+      for (let attempt = 0; attempt < 7; attempt += 1) {
+        const response = await fetch(url, {
+          method: options.method || 'GET',
+          headers: {
+            Authorization: `OAuth ${token}`,
+            ...(options.headers || {}),
+          },
+          body: options.body,
+          ...(options.duplex ? { duplex: options.duplex } : {}),
+        });
+        const payload = await response.json().catch(() => null);
+        if (response.ok) return payload;
+
         const detail = payload?.description || payload?.message || `HTTP ${response.status}`;
+        const yandexCode = payload?.error || '';
+        const resourceLocked = yandexCode === 'DiskResourceLockedError' || /resource is locked/i.test(detail);
+        if (resourceLocked && attempt < 6) {
+          await new Promise((resolve) => setTimeout(resolve, Math.min(500 * (2 ** attempt), 5000)));
+          continue;
+        }
+
         const error = apiError(`Яндекс Диск: ${detail}`, response.status >= 400 && response.status < 500 ? 400 : 502);
-        error.yandexCode = payload?.error || '';
+        error.yandexCode = yandexCode;
         throw error;
       }
-      return payload;
+      throw apiError('Яндекс Диск не освободил ресурс для операции.', 503);
     };
 
-    const waitForYandexOperation = async (operation) => {
+    const waitForYandexOperation = async (operation, destinationPath = '') => {
       const href = String(operation?.href || '').trim();
       if (!href) return;
-      for (let attempt = 0; attempt < 40; attempt += 1) {
+      // Keep the request below the reverse proxy timeout while allowing the
+      // async move enough time to complete (observed operations take ~30 sec).
+      for (let attempt = 0; attempt < 80; attempt += 1) {
         const response = await fetch(href, { headers: { Authorization: `OAuth ${token}` } });
         const payload = await response.json().catch(() => null);
         if (!response.ok) throw apiError(`Яндекс Диск: ${payload?.description || payload?.message || `HTTP ${response.status}`}`, 502);
-        if (payload?.status === 'success') return;
-        if (payload?.status === 'failed') throw apiError('Яндекс Диск не смог переместить загруженный файл.', 502);
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        const status = String(payload?.status || '').toLowerCase();
+        if (status === 'success') return;
+        if (status === 'failed') throw apiError('Яндекс Диск не смог переместить загруженный файл.', 502);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      if (destinationPath) {
+        try {
+          await requestYandex('/resources', { query: { path: destinationPath, fields: 'path' } });
+          return;
+        } catch {
+          // Preserve the useful timeout message when the destination is absent.
+        }
       }
       throw apiError('Яндекс Диск слишком долго закрепляет файл за позицией. Повторите сохранение.', 504);
     };
@@ -292,7 +312,7 @@ export default {
           method: 'POST',
           query: { from: sourcePath, path: diskPath, overwrite: true },
         });
-        await waitForYandexOperation(moveOperation);
+        await waitForYandexOperation(moveOperation, diskPath);
         if (publishFiles) await requestYandex('/resources/publish', { method: 'PUT', query: { path: diskPath } });
         const meta = await requestYandex('/resources', {
           query: { path: diskPath, fields: 'name,path,size,mime_type,public_url,created,modified,md5' },
@@ -750,13 +770,36 @@ export default {
         await itemService.readOne(itemId, { fields: ['id'] });
         const item = await database('orders_items')
           .where('id', itemId)
-          .select('layout_preview_disk_path')
+          .select('layout_preview_disk_path', 'layout_preview_disk_name', 'layout_preview_disk_mime_type')
           .first();
         if (!item?.layout_preview_disk_path) throw apiError('Превью макета не найдено.', 404);
         const download = await requestYandex('/resources/download', { query: { path: item.layout_preview_disk_path } });
         if (!download?.href) throw apiError('Яндекс Диск не вернул адрес превью.', 502);
+        // Serve the preview through Directus instead of redirecting an <img>
+        // to Yandex Disk. Yandex can mark the temporary response as an
+        // attachment/octet-stream, which leaves a broken thumbnail in browsers.
+        const previewResponse = await fetch(download.href, { redirect: 'follow' });
+        if (!previewResponse.ok) {
+          throw apiError(`Яндекс Диск не вернул превью: HTTP ${previewResponse.status}.`, 502);
+        }
+        const declaredLength = Number(previewResponse.headers.get('content-length') || 0);
+        if (declaredLength > MAX_PREVIEW_SIZE) throw apiError('Превью слишком большое для отображения.', 413);
+        const previewBuffer = Buffer.from(await previewResponse.arrayBuffer());
+        if (previewBuffer.length > MAX_PREVIEW_SIZE) throw apiError('Превью слишком большое для отображения.', 413);
+
+        const storedMimeType = String(item.layout_preview_disk_mime_type || '').toLowerCase();
+        const responseMimeType = String(previewResponse.headers.get('content-type') || '').split(';')[0].toLowerCase();
+        const mimeType = ['image/jpeg', 'image/png'].includes(storedMimeType)
+          ? storedMimeType
+          : (['image/jpeg', 'image/png'].includes(responseMimeType) ? responseMimeType : 'image/png');
+        const safeName = cleanSegment(item.layout_preview_disk_name || 'preview', 'preview')
+          .replace(/["\\\r\n]/g, '-');
         res.setHeader('Cache-Control', 'private, max-age=300');
-        return res.redirect(302, download.href);
+        res.setHeader('Content-Type', mimeType);
+        res.setHeader('Content-Length', String(previewBuffer.length));
+        res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        return res.status(200).send(previewBuffer);
       } catch (error) {
         logger.warn(`[Symbolika Yandex Disk] preview content: ${error.message}`);
         return res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось открыть превью макета.' }] });

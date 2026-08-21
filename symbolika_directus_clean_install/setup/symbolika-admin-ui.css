@@ -1103,8 +1103,21 @@ html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
 html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
   :is(.module-bar, .modules, .module-bar-avatar) :is(a, button)
   :is(.v-icon, [class*="icon"], svg) {
-  color: currentColor !important;
-  fill: currentColor !important;
+  --v-icon-color: #f8fafc !important;
+  color: #f8fafc !important;
+  fill: #f8fafc !important;
+  stroke: #f8fafc !important;
+  opacity: 1 !important;
+  filter: brightness(0) invert(1) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.module-bar, .modules, .module-bar-avatar) :is(a, button)
+  :is(.v-icon, [class*="icon"], svg) :is(path, line, polyline, polygon, circle, rect) {
+  color: inherit !important;
+  fill: inherit;
+  stroke: inherit;
+  opacity: 1 !important;
 }
 
 html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])

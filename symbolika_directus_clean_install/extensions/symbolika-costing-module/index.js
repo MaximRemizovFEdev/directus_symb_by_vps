@@ -3104,7 +3104,8 @@ export const CostingModule = {
     },
 
     visibleMyOrderRows() {
-      return this.sortRows(this.applySearchAndFilter(this.myOrderRows, (row) => [
+      const ownRows = (this.myOrderRows || []).filter((row) => this.orderBelongsToCurrentEmployee(row));
+      return this.sortRows(this.applySearchAndFilter(ownRows, (row) => [
         row.order_number,
         row.customer_display,
         this.resolveCustomer(row)?.name,
@@ -3128,7 +3129,7 @@ export const CostingModule = {
 
     visibleOrderPositionRows() {
       const source = this.activeTab === 'my_orders'
-        ? this.myOrderRows
+        ? (this.myOrderRows || []).filter((row) => this.orderBelongsToCurrentEmployee(row))
         : this.allOrderRows;
       const orderRows = source.filter((row) => this.matchesOrderFilters(row));
       const rows = this.orderItemsForRows(orderRows);
@@ -5591,20 +5592,21 @@ export const CostingModule = {
 
     orderBelongsToCurrentEmployee(row) {
       if (!this.currentEmployeeId) return false;
-      const orderId = Number(this.entityId(this.orderId(row)) || 0);
-      // my_orders_in_work is already filtered by currentEmployeeId on the
-      // server. Treat an order present in that list as owned even when a
-      // compact summary row has not carried the manager relation yet.
-      if (orderId && (this.myOrderRows || []).some((item) => (
-        Number(this.entityId(this.orderId(item)) || 0) === orderId
-      ))) return true;
+      const directManagerId = this.entityId(row?.manager_employee);
+      if (directManagerId) {
+        return Number(directManagerId) === Number(this.currentEmployeeId);
+      }
+
       const context = this.detailOrderContext(row);
-      const managerId = this.entityId(
-        row?.manager_employee
-        || context?.manager_employee
+      const contextManagerId = this.entityId(
+        context?.manager_employee
         || this.detailParentOrder?.manager_employee,
       );
-      return Number(managerId || 0) === Number(this.currentEmployeeId || 0);
+      if (contextManagerId) {
+        return Number(contextManagerId) === Number(this.currentEmployeeId);
+      }
+
+      return false;
     },
 
     isProductionWorkerRole() {
@@ -6009,7 +6011,15 @@ export const CostingModule = {
     },
 
     orderRowKey(row) {
-      return String(this.entityId(this.orderId(row)) || row?.id || row?.order_number || '');
+      const linkedOrderId = this.entityId(this.orderId(row));
+      if (linkedOrderId) return String(linkedOrderId);
+
+      // A position id is not an order id. Falling back to row.id for item
+      // rows can attach a position from somebody else's order when the two
+      // unrelated numeric ids happen to be equal.
+      if (!row?.product_name && row?.id) return String(row.id);
+      if (!row?.product_name && row?.order_number) return String(row.order_number);
+      return '';
     },
 
     orderItemsPreviewRows(row) {
@@ -8658,11 +8668,13 @@ export const CostingModule = {
 
         await Promise.all([
           this.loadPagedCollection('my_orders_active', '/items/my_orders_in_work', params, (rows, append) => {
-            this.myActiveOrderRows = append ? this.mergePagedRows(this.myActiveOrderRows, rows) : rows;
+            const ownRows = rows.filter((row) => this.orderBelongsToCurrentEmployee(row));
+            this.myActiveOrderRows = append ? this.mergePagedRows(this.myActiveOrderRows, ownRows) : ownRows;
             rebuildRows();
           }),
           this.loadPagedCollection('my_orders_archive', '/items/my_orders_completed', params, (rows, append) => {
-            this.myArchivedOrderRows = append ? this.mergePagedRows(this.myArchivedOrderRows, rows) : rows;
+            const ownRows = rows.filter((row) => this.orderBelongsToCurrentEmployee(row));
+            this.myArchivedOrderRows = append ? this.mergePagedRows(this.myArchivedOrderRows, ownRows) : ownRows;
             rebuildRows();
           }),
         ]);
@@ -11420,8 +11432,9 @@ export const CostingModule = {
             'order_sum',
             'contractor_1_cost',
             'contractor_2_cost',
-            'internal_route_production',
-            'internal_route_screen',
+            ...(this.canManageInternalRouting()
+              ? ['internal_route_production', 'internal_route_screen']
+              : []),
           ];
         refreshParams.set('fields', refreshFields.join(','));
         const refreshedPayload = await this.request(`/items/orders_items/${itemId}?${refreshParams.toString()}`);
@@ -11488,29 +11501,15 @@ export const CostingModule = {
       if (!this.hasExternalItemContractor(row)) return '';
       const order = this.detailOrderContext(row);
       const itemDeadline = row?.deadline || order?.deadline;
-      const orderDeadline = order?.deadline;
-      const contractors = this.externalItemContractors(row).map((item) => item.name).join(', ');
-      const attachments = this.itemAttachmentRows(row).filter((item) => String(item?.url || '').trim());
-      const lines = [
-        `ТЗ для подрядчика: ${contractors}`,
-        `Заказ: ${this.orderNumber(row)}`,
-        `Позиция: ${String(row?.product_name || 'не указана').trim()}`,
-        `Количество: ${this.formatQuantity(row?.quantity)} шт.`,
-        `Срок позиции: ${itemDeadline ? this.formatDate(itemDeadline) : 'не указан'}`,
-      ];
-      if (orderDeadline && String(orderDeadline).slice(0, 10) !== String(itemDeadline || '').slice(0, 10)) {
-        lines.push(`Срок заказа: ${this.formatDate(orderDeadline)}`);
-      }
-      lines.push('', 'ТЗ:', String(row?.technical_task_text || 'не указано').trim());
-      lines.push('', `Макет: ${String(row?.url || 'не указан').trim()}`);
-      if (attachments.length) {
-        lines.push('', 'Дополнительные материалы:');
-        attachments.forEach((item) => {
-          const title = String(item.title || item.file_name || 'Материал').trim();
-          lines.push(`- ${title}: ${String(item.url).trim()}`);
-        });
-      }
-      return lines.join('\n');
+      const attachmentUrl = this.itemAttachmentRows(row)
+        .map((item) => String(item?.url || '').trim())
+        .find(Boolean);
+      const layoutUrl = String(row?.url || '').trim() || attachmentUrl || 'не указан';
+      return [
+        `ТЗ: ${String(row?.technical_task_text || 'не указано').trim()}`,
+        `Макет: ${layoutUrl}`,
+        `Срок: ${itemDeadline ? this.formatDate(itemDeadline) : 'не указан'}`,
+      ].join('\n');
     },
 
     async loadItemAttachments(row) {
@@ -14528,6 +14527,8 @@ export const CostingModule = {
           customer_company_name: item.customer_company_name || order.customer_company_name,
           manager_name: item.manager_name || order.manager_name,
           order_status_name: item.order_status_name || order.order_status_name,
+          item_status: item.item_status || current.item_status || order.item_status || 'new',
+          production_status: item.production_status || current.production_status || order.production_status || null,
           office_status: item.office_status || order.office_status,
           shipping_method_name: item.shipping_method_name || order.shipping_method_name,
         });
@@ -21166,7 +21167,7 @@ export const CostingModule = {
 
         .symbolika-contractor-brief-field {
           inline-size: 100%;
-          min-block-size: 230px;
+          min-block-size: 104px;
           resize: vertical;
           border: 1px solid var(--symbolika-line);
           border-radius: 11px;
@@ -21292,7 +21293,7 @@ export const CostingModule = {
           }
 
           .symbolika-contractor-brief-field {
-            min-block-size: 280px;
+            min-block-size: 120px;
           }
 
           .symbolika-contractor-brief-head {
@@ -34309,11 +34310,11 @@ export const CostingModule = {
               <header class="symbolika-costing-item-section-head symbolika-contractor-brief-head">
                 <div class="symbolika-contractor-brief-head-main">
                   <span class="symbolika-costing-item-section-icon"><v-icon name="assignment" small /></span>
-                  <div><strong>ТЗ для подрядчика</strong><small>Готовый блок для отправки внешнему исполнителю</small></div>
+                  <div><strong>ТЗ для подрядчика</strong><small>ТЗ, макет и срок в одном блоке</small></div>
                 </div>
                 <button type="button" class="symbolika-costing-mini-button" @click="copyContractorBrief(detail.row)">
                   <v-icon :name="copiedContractorBriefId === Number(entityId(detail.row.order_item) || entityId(detail.row.id)) ? 'check' : 'content_copy'" small />
-                  {{ copiedContractorBriefId === Number(entityId(detail.row.order_item) || entityId(detail.row.id)) ? 'Скопировано' : 'Скопировать всё' }}
+                  {{ copiedContractorBriefId === Number(entityId(detail.row.order_item) || entityId(detail.row.id)) ? 'Скопировано' : 'Скопировать' }}
                 </button>
               </header>
               <div class="symbolika-contractor-brief-recipients">
