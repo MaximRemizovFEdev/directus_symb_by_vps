@@ -446,7 +446,7 @@ const tabs = [
   { id: 'admin_categories', title: 'Категории', collection: 'product_categories' },
   { id: 'admin_subcategories', title: 'Подкатегории', collection: 'product_subcategories' },
   { id: 'admin_methods', title: 'Виды нанесения', collection: 'product_application_methods' },
-  { id: 'admin_routing', title: 'Маршрутизация', collection: 'product_routing_rules' },
+  { id: 'admin_routing', title: 'Возможности подрядчиков', collection: 'contractor_capabilities' },
   { id: 'admin_inventory', title: 'Склад и расходка', collection: 'inventory_items' },
   { id: 'admin_procurement', title: 'Закупки', collection: 'procurement_requests' },
   { id: 'admin_customer_notifications', title: 'Уведомления клиентам', collection: 'symbolika_customer_notification_settings' },
@@ -951,18 +951,20 @@ const adminConfigs = {
     ],
   },
   admin_routing: {
-    collection: 'product_routing_rules',
-    endpoint: '/items/product_routing_rules',
-    title: 'Правила маршрутизации',
-    sort: 'priority,name',
-    fields: 'id,name,product_category,product_subcategory,application_method,contractor_1,contractor_2,priority,is_active',
+    collection: 'contractor_capabilities',
+    endpoint: '/items/contractor_capabilities',
+    title: 'Возможности подрядчиков',
+    sort: 'product_category,product_subcategory,application_method,capability_type,priority,contractor',
+    fields: 'id,contractor,capability_type,product_category,product_subcategory,application_method,priority,is_active',
     columns: [
-      { key: 'name', label: 'Название', type: 'text', required: true, wide: true },
+      { key: 'contractor', label: 'Контрагент', type: 'relation', options: 'contractors', required: true, wide: true },
+      { key: 'capability_type', label: 'Роль', type: 'select', required: true, choices: [
+        { value: 'executor', text: 'Исполнитель работ' },
+        { value: 'blank_supplier', text: 'Поставщик заготовки' },
+      ] },
       { key: 'product_category', label: 'Категория', type: 'relation', options: 'productCategories', required: true },
       { key: 'product_subcategory', label: 'Подкатегория', type: 'relation', options: 'productSubcategories' },
       { key: 'application_method', label: 'Вид нанесения', type: 'relation', options: 'applicationMethods' },
-      { key: 'contractor_1', label: 'Подрядчик 1', type: 'relation', options: 'contractors' },
-      { key: 'contractor_2', label: 'Подрядчик 2', type: 'relation', options: 'contractors' },
       { key: 'priority', label: 'Приоритет', type: 'number' },
       { key: 'is_active', label: 'Активно', type: 'boolean' },
     ],
@@ -1097,6 +1099,7 @@ const eventFieldLabels = {
   internal_route_screen: 'Передача в шелкографию',
   contractor_1: 'Поставщик / подрядчик',
   contractor_1_cost: 'Стоимость заготовки',
+  contractor_2: 'Исполнитель работ',
 };
 
 const eventEntityChoices = [
@@ -1118,6 +1121,7 @@ export const CostingModule = {
     return {
       rows: [],
       contractors: [],
+      contractorCapabilities: [],
       loading: true,
       areaRefreshing: false,
       backgroundAreaRefreshing: false,
@@ -1413,6 +1417,7 @@ export const CostingModule = {
       copiedPublicItemId: null,
       copiedLayoutLinkId: null,
       copiedAttachmentId: null,
+      copiedContractorBriefId: null,
       itemAttachments: {},
       itemAttachmentLoading: {},
       layoutUploading: {},
@@ -4062,6 +4067,38 @@ export const CostingModule = {
         }, 1800);
       } catch {
         this.error = 'Не удалось скопировать ссылку на макет.';
+      }
+    },
+
+    async writeClipboardText(value) {
+      const text = String(value || '').trim();
+      if (!text) return;
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      textarea.remove();
+    },
+
+    async copyContractorBrief(row) {
+      const itemId = Number(this.entityId(row?.order_item) || this.entityId(row?.id) || 0);
+      const text = this.contractorBriefText(row);
+      if (!itemId || !text) return;
+      try {
+        await this.writeClipboardText(text);
+        this.copiedContractorBriefId = itemId;
+        window.setTimeout(() => {
+          if (this.copiedContractorBriefId === itemId) this.copiedContractorBriefId = null;
+        }, 1800);
+      } catch {
+        this.error = 'Не удалось скопировать ТЗ для подрядчика.';
       }
     },
 
@@ -8208,12 +8245,6 @@ export const CostingModule = {
       if (this.canSeeCostingTotals) return fields;
       const adminOnly = new Set([
         'order',
-        'contractor_1.id',
-        'contractor_1.name',
-        'contractor_1.supplies_textile_blanks',
-        'contractor_1.supplies_merch_blanks',
-        'contractor_2.id',
-        'contractor_2.name',
         'contractor_1_cost',
         'contractor_2_cost',
         'unit_cost',
@@ -8230,6 +8261,15 @@ export const CostingModule = {
         this.contractors = payload.data || [];
       } catch (error) {
         this.error = error.message;
+      }
+    },
+
+    async loadContractorCapabilities() {
+      try {
+        const payload = await this.request('/items/contractor_capabilities?fields=id,contractor,capability_type,product_category,product_subcategory,application_method,priority,is_active&filter[is_active][_eq]=true&sort=priority,id&limit=-1');
+        this.contractorCapabilities = payload.data || [];
+      } catch {
+        this.contractorCapabilities = [];
       }
     },
 
@@ -8849,6 +8889,8 @@ export const CostingModule = {
         this.loadApplicationMethods(),
         this.loadTzConstructorSpecs(),
         this.loadPaymentTypes(),
+        this.loadContractors(),
+        this.loadContractorCapabilities(),
       ]);
     },
 
@@ -9297,6 +9339,7 @@ export const CostingModule = {
         blank_source: 'none',
         contractor_1: '',
         contractor_1_cost: '',
+        contractor_2: '',
         technical_task_text: '',
         tz_constructor_values: {},
         url: '',
@@ -9576,9 +9619,11 @@ export const CostingModule = {
         item.blank_source = 'none';
         item.contractor_1 = '';
         item.contractor_1_cost = '';
+        item.contractor_2 = '';
       } else if (!['supplier', 'customer', 'warehouse'].includes(item.blank_source)) {
         item.blank_source = 'supplier';
       }
+      this.syncContractorSelections(item);
     },
 
     filteredSubcategories(categoryId) {
@@ -9619,12 +9664,74 @@ export const CostingModule = {
     },
 
     blankSupplierOptions(item) {
-      return this.contractors.filter((contractor) => {
-        if ((contractor.approval_status || 'approved') !== 'approved') return false;
-        if (this.isTextileBlankItem(item)) return Boolean(contractor.supplies_textile_blanks);
-        if (this.isMerchBlankItem(item)) return Boolean(contractor.supplies_merch_blanks);
-        return false;
+      return this.capabilityContractorOptions(item, 'blank_supplier');
+    },
+
+    matchingCapabilities(item, capabilityType) {
+      const categoryId = Number(this.itemCategoryId(item) || 0);
+      if (!categoryId) return [];
+      const subcategoryId = Number(this.entityId(item?.product_subcategory) || 0);
+      const applicationMethodId = Number(this.entityId(item?.application_method) || 0);
+      const matches = (this.contractorCapabilities || []).filter((row) => {
+        if (row.is_active === false || row.capability_type !== capabilityType) return false;
+        if (Number(this.entityId(row.product_category) || 0) !== categoryId) return false;
+        const rowSubcategoryId = Number(this.entityId(row.product_subcategory) || 0);
+        const rowMethodId = Number(this.entityId(row.application_method) || 0);
+        return (!rowSubcategoryId || rowSubcategoryId === subcategoryId)
+          && (!rowMethodId || rowMethodId === applicationMethodId);
       });
+      if (!matches.length) return [];
+      const specificity = (row) => (this.entityId(row.product_subcategory) ? 2 : 0)
+        + (this.entityId(row.application_method) ? 2 : 0);
+      const best = Math.max(...matches.map(specificity));
+      return matches.filter((row) => specificity(row) === best);
+    },
+
+    capabilityContractorOptions(item, capabilityType) {
+      const contractorIds = [...new Set(this.matchingCapabilities(item, capabilityType)
+        .map((row) => Number(this.entityId(row.contractor) || 0))
+        .filter(Boolean))];
+      return contractorIds
+        .map((id) => this.contractors.find((contractor) => Number(contractor.id) === id))
+        .filter((contractor) => contractor && (contractor.approval_status || 'approved') === 'approved');
+    },
+
+    executorOptions(item) {
+      return this.capabilityContractorOptions(item, 'executor');
+    },
+
+    executorField(item) {
+      return this.itemNeedsBlank(item) ? 'contractor_2' : 'contractor_1';
+    },
+
+    selectedExecutorId(item) {
+      return this.entityId(item?.[this.executorField(item)]);
+    },
+
+    syncContractorSelections(item) {
+      if (!item) return;
+      const executorField = this.executorField(item);
+      const executorOptions = this.executorOptions(item);
+      const executorIds = executorOptions.map((row) => Number(row.id));
+      if (!executorIds.includes(Number(this.entityId(item[executorField]) || 0))) {
+        item[executorField] = executorIds.length === 1 ? executorIds[0] : '';
+      }
+
+      if (this.itemNeedsBlank(item) && item.blank_source === 'supplier') {
+        const supplierOptions = this.blankSupplierOptions(item);
+        const supplierIds = supplierOptions.map((row) => Number(row.id));
+        if (!supplierIds.includes(Number(this.entityId(item.contractor_1) || 0))) {
+          item.contractor_1 = supplierIds.length === 1 ? supplierIds[0] : '';
+        }
+      } else if (this.itemNeedsBlank(item)) {
+        item.contractor_1 = '';
+        item.contractor_1_cost = '';
+      }
+    },
+
+    contractorSelectionsEditable(item) {
+      if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) return true;
+      return ['new', 'approval', 'layout_revision'].includes(this.normalizedWorkflowStatus(item?.item_status || 'new'));
     },
 
     showSubcategoryField(item) {
@@ -9643,6 +9750,7 @@ export const CostingModule = {
       } else if (!item.blank_source || item.blank_source === 'none') {
         item.blank_source = this.itemNeedsBlank(item) ? 'supplier' : 'none';
       }
+      this.syncContractorSelections(item);
     },
 
     relationItemById(list, value) {
@@ -10214,8 +10322,9 @@ export const CostingModule = {
               product_subcategory: item.product_subcategory ? Number(item.product_subcategory) : null,
               application_method: item.application_method ? Number(item.application_method) : null,
               blank_source: this.itemNeedsBlank(item) ? (item.blank_source || 'supplier') : 'none',
-              contractor_1: this.itemNeedsBlank(item) && item.blank_source === 'supplier' && item.contractor_1 ? Number(item.contractor_1) : null,
+              contractor_1: item.contractor_1 ? Number(item.contractor_1) : null,
               contractor_1_cost: this.itemNeedsBlank(item) && item.blank_source === 'supplier' ? this.parseMoney(item.contractor_1_cost) : 0,
+              contractor_2: this.itemNeedsBlank(item) && item.contractor_2 ? Number(item.contractor_2) : null,
               deadline: item.deadline || form.deadline || null,
               item_status: 'new',
               office_status: 'not_in_office',
@@ -10775,8 +10884,9 @@ export const CostingModule = {
             product_subcategory: form.product_subcategory ? Number(form.product_subcategory) : null,
             application_method: form.application_method ? Number(form.application_method) : null,
             blank_source: this.itemNeedsBlank(form) ? (form.blank_source || 'supplier') : 'none',
-            contractor_1: this.itemNeedsBlank(form) && form.blank_source === 'supplier' && form.contractor_1 ? Number(form.contractor_1) : null,
+            contractor_1: form.contractor_1 ? Number(form.contractor_1) : null,
             contractor_1_cost: this.itemNeedsBlank(form) && form.blank_source === 'supplier' ? this.parseMoney(form.contractor_1_cost) : 0,
+            contractor_2: this.itemNeedsBlank(form) && form.contractor_2 ? Number(form.contractor_2) : null,
             deadline: form.deadline || order.deadline || null,
             item_status: 'new',
             // A new item never inherits the finished order's office state.
@@ -11189,6 +11299,67 @@ export const CostingModule = {
     itemAttachmentRows(row) {
       const itemId = Number(this.entityId(row?.order_item) || row?.id || 0);
       return itemId ? (this.itemAttachments[itemId] || []) : [];
+    },
+
+    externalItemContractors(row) {
+      const result = [];
+      const seen = new Set();
+      [row?.contractor_1, row?.contractor_2, row?.contractor].forEach((value) => {
+        const id = this.contractorId(value);
+        if (!id || seen.has(String(id))) return;
+        const contractor = this.contractors.find((item) => String(item.id) === String(id))
+          || (typeof value === 'object' ? value : null);
+        if (!contractor) return;
+        const kind = String(contractor?.supplier_kind || 'contractor');
+        const name = String(contractor?.name || '').trim();
+        const isInternal = Boolean(contractor?.is_internal_production)
+          || this.normalizeStatus(name) === 'собственное производство';
+        if (isInternal || !['contractor', 'both'].includes(kind)) return;
+        seen.add(String(id));
+        result.push({ id, name: name || `Подрядчик #${id}` });
+      });
+      return result;
+    },
+
+    hasExternalItemContractor(row) {
+      return this.externalItemContractors(row).length > 0;
+    },
+
+    contractorBriefMissing(row) {
+      const missing = [];
+      if (!String(row?.technical_task_text || '').trim()) missing.push('ТЗ');
+      if (!String(row?.url || '').trim() && !this.itemAttachmentRows(row).length) missing.push('макет');
+      if (!row?.deadline && !this.detailOrderContext(row)?.deadline) missing.push('срок');
+      return missing;
+    },
+
+    contractorBriefText(row) {
+      if (!this.hasExternalItemContractor(row)) return '';
+      const order = this.detailOrderContext(row);
+      const itemDeadline = row?.deadline || order?.deadline;
+      const orderDeadline = order?.deadline;
+      const contractors = this.externalItemContractors(row).map((item) => item.name).join(', ');
+      const attachments = this.itemAttachmentRows(row).filter((item) => String(item?.url || '').trim());
+      const lines = [
+        `ТЗ для подрядчика: ${contractors}`,
+        `Заказ: ${this.orderNumber(row)}`,
+        `Позиция: ${String(row?.product_name || 'не указана').trim()}`,
+        `Количество: ${this.formatQuantity(row?.quantity)} шт.`,
+        `Срок позиции: ${itemDeadline ? this.formatDate(itemDeadline) : 'не указан'}`,
+      ];
+      if (orderDeadline && String(orderDeadline).slice(0, 10) !== String(itemDeadline || '').slice(0, 10)) {
+        lines.push(`Срок заказа: ${this.formatDate(orderDeadline)}`);
+      }
+      lines.push('', 'ТЗ:', String(row?.technical_task_text || 'не указано').trim());
+      lines.push('', `Макет: ${String(row?.url || 'не указан').trim()}`);
+      if (attachments.length) {
+        lines.push('', 'Дополнительные материалы:');
+        attachments.forEach((item) => {
+          const title = String(item.title || item.file_name || 'Материал').trim();
+          lines.push(`- ${title}: ${String(item.url).trim()}`);
+        });
+      }
+      return lines.join('\n');
     },
 
     async loadItemAttachments(row) {
@@ -11951,20 +12122,28 @@ export const CostingModule = {
         await this.saveOrderItemField(row, 'contractor_1', '');
         await this.saveOrderItemField(row, 'contractor_1_cost', 0);
       }
+      await this.saveOrderItemField(row, 'contractor_1', row.contractor_1 || '');
+      await this.saveOrderItemField(row, 'contractor_2', row.contractor_2 || '');
       this.updateTzConstructor(row, true);
     },
 
     async saveOrderItemSubcategory(row, value) {
       if (!row) return;
       row.product_subcategory = value || '';
+      this.syncContractorSelections(row);
       await this.saveOrderItemField(row, 'product_subcategory', value);
+      await this.saveOrderItemField(row, 'contractor_1', row.contractor_1 || '');
+      await this.saveOrderItemField(row, 'contractor_2', row.contractor_2 || '');
       this.updateTzConstructor(row, true);
     },
 
     async saveOrderItemApplicationMethod(row, value) {
       if (!row) return;
       row.application_method = value || '';
+      this.syncContractorSelections(row);
       await this.saveOrderItemField(row, 'application_method', value);
+      await this.saveOrderItemField(row, 'contractor_1', row.contractor_1 || '');
+      await this.saveOrderItemField(row, 'contractor_2', row.contractor_2 || '');
       this.updateTzConstructor(row, true);
     },
 
@@ -13155,7 +13334,6 @@ export const CostingModule = {
       return {
         'symbolika-costing-row-overdue': this.isOverdue(row?.deadline),
         'symbolika-costing-row-today': this.isToday(row?.deadline),
-        'symbolika-costing-row-unpaid': this.parseMoney(row?.payment_due ?? row?.office_payment_due) > 0,
       };
     },
 
@@ -13579,6 +13757,22 @@ export const CostingModule = {
       if (this.parseMoney(item?.quantity) <= 0) missing.push(`${label}: количество`);
       if (!String(item?.technical_task_text || '').trim()) missing.push(`${label}: ТЗ`);
       if (!url) missing.push(`${label}: ссылка на макет`);
+      const categoryId = this.itemCategoryId(item);
+      const executorOptions = this.executorOptions(item);
+      const selectedExecutorId = this.selectedExecutorId(item);
+      if (!categoryId) missing.push(`${label}: категория`);
+      else if (!executorOptions.length) missing.push(`${label}: для категории не настроен исполнитель`);
+      else if (!selectedExecutorId || !executorOptions.some((option) => this.entityId(option?.id) === selectedExecutorId)) {
+        missing.push(`${label}: исполнитель работ`);
+      }
+      if (this.itemNeedsBlank(item) && item?.blank_source === 'supplier') {
+        const supplierId = this.entityId(item?.contractor_1);
+        const supplierOptions = this.blankSupplierOptions(item);
+        if (!supplierOptions.length) missing.push(`${label}: для категории не настроен поставщик заготовки`);
+        else if (!supplierId || !supplierOptions.some((option) => this.entityId(option?.id) === supplierId)) {
+          missing.push(`${label}: поставщик заготовки`);
+        }
+      }
 
       if (this.normalizedWorkflowStatus(item?.item_status) === 'layout_revision') {
         const snapshot = String(item?.layout_revision_url_snapshot || '').trim();
@@ -13602,13 +13796,17 @@ export const CostingModule = {
       // rows may not contain the readiness fields at all, while an incomplete
       // new item must never look ready for production.
       const readinessLoaded = Object.prototype.hasOwnProperty.call(item || {}, 'technical_task_text')
-        && Object.prototype.hasOwnProperty.call(item || {}, 'url');
+        && Object.prototype.hasOwnProperty.call(item || {}, 'url')
+        && Object.prototype.hasOwnProperty.call(item || {}, 'contractor_1')
+        && Object.prototype.hasOwnProperty.call(item || {}, 'contractor_2');
       return readinessLoaded && this.canSendItemToWork(item);
     },
 
     itemSendToWorkTitle(item) {
       const readinessLoaded = Object.prototype.hasOwnProperty.call(item || {}, 'technical_task_text')
-        && Object.prototype.hasOwnProperty.call(item || {}, 'url');
+        && Object.prototype.hasOwnProperty.call(item || {}, 'url')
+        && Object.prototype.hasOwnProperty.call(item || {}, 'contractor_1')
+        && Object.prototype.hasOwnProperty.call(item || {}, 'contractor_2');
       if (!readinessLoaded) return 'Проверить заполнение и запустить позицию в работу';
       const missing = this.itemWorkReadinessMissing(item);
       return missing.length
@@ -17709,12 +17907,16 @@ export const CostingModule = {
           background: color-mix(in srgb, var(--theme--danger) 5%, transparent);
         }
 
+        .symbolika-costing-row-overdue td:first-child {
+          box-shadow: inset 3px 0 0 color-mix(in srgb, var(--theme--danger) 82%, var(--theme--primary));
+        }
+
         .symbolika-costing-row-today td {
           background: color-mix(in srgb, var(--theme--primary) 5%, transparent);
         }
 
-        .symbolika-costing-row-unpaid td:first-child {
-          box-shadow: inset 3px 0 0 color-mix(in srgb, var(--theme--danger) 78%, var(--theme--primary));
+        .symbolika-costing-row-today td:first-child {
+          box-shadow: inset 3px 0 0 color-mix(in srgb, var(--theme--primary) 82%, var(--theme--warning, #f5b942));
         }
 
         .symbolika-costing-money-stack {
@@ -20646,6 +20848,117 @@ export const CostingModule = {
           background: color-mix(in srgb, var(--theme--background-normal) 84%, #111827);
         }
 
+        .symbolika-costing-item-section.is-contractor-brief {
+          border-color: color-mix(in srgb, var(--symbolika-orange) 42%, var(--symbolika-line));
+          background: linear-gradient(135deg, color-mix(in srgb, var(--symbolika-orange) 7%, var(--symbolika-panel)), var(--symbolika-panel));
+        }
+
+        .symbolika-contractor-brief-head {
+          justify-content: space-between;
+        }
+
+        .symbolika-contractor-brief-head-main {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-inline-size: 0;
+        }
+
+        .symbolika-contractor-brief-recipients {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .symbolika-contractor-brief-recipient {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          min-block-size: 28px;
+          border: 1px solid color-mix(in srgb, var(--symbolika-orange) 36%, var(--symbolika-line));
+          border-radius: 999px;
+          background: color-mix(in srgb, var(--symbolika-orange) 10%, var(--theme--background-normal));
+          color: var(--symbolika-text);
+          padding: 4px 9px;
+          font-size: 11px;
+          font-weight: 800;
+        }
+
+        .symbolika-contractor-brief-grid {
+          display: grid;
+          grid-template-columns: minmax(150px, .55fr) minmax(0, 1.45fr);
+          gap: 10px;
+        }
+
+        .symbolika-contractor-brief-card {
+          display: grid;
+          align-content: start;
+          gap: 6px;
+          min-inline-size: 0;
+          border: 1px solid var(--symbolika-line);
+          border-radius: 11px;
+          background: color-mix(in srgb, var(--theme--background-normal) 88%, transparent);
+          padding: 11px 12px;
+        }
+
+        .symbolika-contractor-brief-card.is-wide {
+          grid-column: 1 / -1;
+        }
+
+        .symbolika-contractor-brief-card > span {
+          color: var(--symbolika-muted);
+          font-size: 9.5px;
+          font-weight: 850;
+          letter-spacing: .055em;
+          text-transform: uppercase;
+        }
+
+        .symbolika-contractor-brief-card > strong,
+        .symbolika-contractor-brief-card > p {
+          margin: 0;
+          color: var(--symbolika-text);
+          font-size: 12px;
+          font-weight: 750;
+          line-height: 1.5;
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
+        }
+
+        .symbolika-contractor-brief-links {
+          display: grid;
+          gap: 6px;
+        }
+
+        .symbolika-contractor-brief-links a {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          min-inline-size: 0;
+          color: var(--symbolika-accent);
+          font-size: 11px;
+          font-weight: 800;
+          text-decoration: none;
+        }
+
+        .symbolika-contractor-brief-links a span {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .symbolika-contractor-brief-missing {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          border-radius: 9px;
+          background: color-mix(in srgb, #f59e0b 13%, transparent);
+          color: color-mix(in srgb, #f59e0b 82%, var(--symbolika-text));
+          padding: 8px 10px;
+          font-size: 10.5px;
+          font-weight: 800;
+        }
+
         .symbolika-costing-item-section.is-service .symbolika-costing-detail-disclosure,
         .symbolika-costing-item-section.is-service .symbolika-costing-item-public-link {
           inline-size: 100%;
@@ -20712,8 +21025,18 @@ export const CostingModule = {
         @media (max-width: 620px) {
           .symbolika-costing-item-section-grid,
           .symbolika-costing-item-section-grid.is-task,
-          .symbolika-costing-detail-disclosure-grid {
+          .symbolika-costing-detail-disclosure-grid,
+          .symbolika-contractor-brief-grid {
             grid-template-columns: minmax(0, 1fr);
+          }
+
+          .symbolika-contractor-brief-head {
+            align-items: flex-start;
+            flex-wrap: wrap;
+          }
+
+          .symbolika-contractor-brief-head > .symbolika-costing-mini-button {
+            inline-size: 100%;
           }
 
           .symbolika-costing-issue-summary,
@@ -31249,7 +31572,7 @@ export const CostingModule = {
 
                 <label v-if="showSubcategoryField(item)" class="symbolika-costing-label symbolika-mobile-item-extra">
                   Подкатегория
-                  <select v-model="item.product_subcategory" class="symbolika-costing-select" @change="updateTzConstructor(item)">
+                  <select v-model="item.product_subcategory" class="symbolika-costing-select" @change="syncContractorSelections(item); updateTzConstructor(item)">
                     <option value="">Не выбрана</option>
                     <option v-for="subcategory in filteredSubcategories(item.product_category)" :key="subcategory.id" :value="subcategory.id">
                       {{ subcategory.name }}
@@ -31259,7 +31582,7 @@ export const CostingModule = {
 
                 <label v-if="showApplicationMethodField(item)" class="symbolika-costing-label symbolika-mobile-item-extra">
                   Вид нанесения
-                  <select v-model="item.application_method" class="symbolika-costing-select" @change="updateTzConstructor(item)">
+                  <select v-model="item.application_method" class="symbolika-costing-select" @change="syncContractorSelections(item); updateTzConstructor(item)">
                     <option value="">Не выбран</option>
                     <option v-for="method in filteredApplicationMethods(item.product_category)" :key="method.id" :value="method.id">
                       {{ method.name }}
@@ -31287,9 +31610,19 @@ export const CostingModule = {
                   </select>
                 </label>
 
-                <label v-if="itemNeedsBlank(item) && item.blank_source === 'supplier'" class="symbolika-costing-label symbolika-mobile-item-extra">
+                <label v-if="itemNeedsBlank(item) && item.blank_source === 'supplier' && canSeeCostingTotals" class="symbolika-costing-label symbolika-mobile-item-extra">
                   Стоимость заготовки
                   <input v-model="item.contractor_1_cost" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'contractor_1_cost')" />
+                </label>
+
+                <label v-if="itemCategoryId(item)" class="symbolika-costing-label symbolika-mobile-item-extra">
+                  {{ executorOptions(item).length === 1 ? 'Исполнитель (автоматически)' : 'Исполнитель работ' }}
+                  <select v-model="item[executorField(item)]" class="symbolika-costing-select" :disabled="executorOptions(item).length <= 1">
+                    <option value="">{{ executorOptions(item).length ? 'Выберите исполнителя' : 'Маршрут не настроен' }}</option>
+                    <option v-for="contractor in executorOptions(item)" :key="'executor-' + contractor.id" :value="contractor.id">
+                      {{ contractor.name }}
+                    </option>
+                  </select>
                 </label>
 
                 <label class="symbolika-costing-label symbolika-costing-new-order-task">
@@ -32734,7 +33067,7 @@ export const CostingModule = {
 
                   <label v-if="showSubcategoryField(detailItemForm)" class="symbolika-costing-label">
                     Подкатегория
-                    <select v-model="detailItemForm.product_subcategory" class="symbolika-costing-select" @change="updateTzConstructor(detailItemForm)">
+                    <select v-model="detailItemForm.product_subcategory" class="symbolika-costing-select" @change="syncContractorSelections(detailItemForm); updateTzConstructor(detailItemForm)">
                       <option value="">Не выбрана</option>
                       <option v-for="subcategory in filteredSubcategories(detailItemForm.product_category)" :key="subcategory.id" :value="subcategory.id">
                         {{ subcategory.name }}
@@ -32744,7 +33077,7 @@ export const CostingModule = {
 
                   <label v-if="showApplicationMethodField(detailItemForm)" class="symbolika-costing-label">
                     Вид нанесения
-                    <select v-model="detailItemForm.application_method" class="symbolika-costing-select" @change="updateTzConstructor(detailItemForm)">
+                    <select v-model="detailItemForm.application_method" class="symbolika-costing-select" @change="syncContractorSelections(detailItemForm); updateTzConstructor(detailItemForm)">
                       <option value="">Не выбран</option>
                       <option v-for="method in filteredApplicationMethods(detailItemForm.product_category)" :key="method.id" :value="method.id">
                         {{ method.name }}
@@ -32772,9 +33105,19 @@ export const CostingModule = {
                     </select>
                   </label>
 
-                  <label v-if="itemNeedsBlank(detailItemForm) && detailItemForm.blank_source === 'supplier'" class="symbolika-costing-label">
+                  <label v-if="itemNeedsBlank(detailItemForm) && detailItemForm.blank_source === 'supplier' && canSeeCostingTotals" class="symbolika-costing-label">
                     Стоимость заготовки
                     <input v-model="detailItemForm.contractor_1_cost" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(detailItemForm, 'contractor_1_cost')" />
+                  </label>
+
+                  <label v-if="itemCategoryId(detailItemForm)" class="symbolika-costing-label">
+                    {{ executorOptions(detailItemForm).length === 1 ? 'Исполнитель (автоматически)' : 'Исполнитель работ' }}
+                    <select v-model="detailItemForm[executorField(detailItemForm)]" class="symbolika-costing-select" :disabled="executorOptions(detailItemForm).length <= 1">
+                      <option value="">{{ executorOptions(detailItemForm).length ? 'Выберите исполнителя' : 'Маршрут не настроен' }}</option>
+                      <option v-for="contractor in executorOptions(detailItemForm)" :key="'detail-executor-' + contractor.id" :value="contractor.id">
+                        {{ contractor.name }}
+                      </option>
+                    </select>
                   </label>
 
                   <label class="symbolika-costing-label symbolika-costing-detail-add-task">
@@ -33169,6 +33512,7 @@ export const CostingModule = {
                   class="symbolika-costing-table-select"
                   :class="savingWorkClass('orders_items', detail.row, 'contractor_1')"
                   :value="entityId(detail.row.contractor_1)"
+                  :disabled="!contractorSelectionsEditable(detail.row)"
                   @change="saveOrderItemField(detail.row, 'contractor_1', $event.target.value)"
                 >
                   <option value="">Не выбран</option>
@@ -33179,7 +33523,7 @@ export const CostingModule = {
                 </select>
               </div>
             </div>
-            <div v-if="itemNeedsBlank(detail.row) && detail.row.blank_source === 'supplier'" class="symbolika-costing-detail-field is-primary">
+            <div v-if="itemNeedsBlank(detail.row) && detail.row.blank_source === 'supplier' && canSeeCostingTotals" class="symbolika-costing-detail-field is-primary">
               <div class="symbolika-costing-detail-label">Стоимость заготовки</div>
               <div class="symbolika-costing-detail-value">
                 <input
@@ -33190,6 +33534,23 @@ export const CostingModule = {
                   @focus="clearZeroInput(detail.row, 'contractor_1_cost')"
                   @change="saveOrderItemField(detail.row, 'contractor_1_cost', $event.target.value)"
                 />
+              </div>
+            </div>
+            <div v-if="itemCategoryId(detail.row)" class="symbolika-costing-detail-field is-primary">
+              <div class="symbolika-costing-detail-label">{{ executorOptions(detail.row).length === 1 ? 'Исполнитель (автоматически)' : 'Исполнитель работ' }}</div>
+              <div class="symbolika-costing-detail-value">
+                <select
+                  class="symbolika-costing-table-select"
+                  :class="savingWorkClass('orders_items', detail.row, executorField(detail.row))"
+                  :value="selectedExecutorId(detail.row)"
+                  :disabled="!contractorSelectionsEditable(detail.row) || executorOptions(detail.row).length <= 1"
+                  @change="saveOrderItemField(detail.row, executorField(detail.row), $event.target.value)"
+                >
+                  <option value="">{{ executorOptions(detail.row).length ? 'Выберите исполнителя' : 'Маршрут не настроен' }}</option>
+                  <option v-for="contractor in executorOptions(detail.row)" :key="'saved-executor-' + contractor.id" :value="contractor.id">
+                    {{ contractor.name }}
+                  </option>
+                </select>
               </div>
             </div>
               </div>
@@ -33346,6 +33707,54 @@ export const CostingModule = {
                 @change="saveOrderItemField(detail.row, 'designer_source_url', $event.target.value)"
               />
             </div>
+              </div>
+            </section>
+
+            <section v-if="hasExternalItemContractor(detail.row)" class="symbolika-costing-item-section symbolika-costing-detail-wide is-contractor-brief">
+              <header class="symbolika-costing-item-section-head symbolika-contractor-brief-head">
+                <div class="symbolika-contractor-brief-head-main">
+                  <span class="symbolika-costing-item-section-icon"><v-icon name="assignment" small /></span>
+                  <div><strong>ТЗ для подрядчика</strong><small>Готовый блок для отправки внешнему исполнителю</small></div>
+                </div>
+                <button type="button" class="symbolika-costing-mini-button" @click="copyContractorBrief(detail.row)">
+                  <v-icon :name="copiedContractorBriefId === Number(entityId(detail.row.order_item) || entityId(detail.row.id)) ? 'check' : 'content_copy'" small />
+                  {{ copiedContractorBriefId === Number(entityId(detail.row.order_item) || entityId(detail.row.id)) ? 'Скопировано' : 'Скопировать всё' }}
+                </button>
+              </header>
+              <div class="symbolika-contractor-brief-recipients">
+                <span v-for="contractor in externalItemContractors(detail.row)" :key="contractor.id" class="symbolika-contractor-brief-recipient">
+                  <v-icon name="handshake" small />{{ contractor.name }}
+                </span>
+              </div>
+              <div v-if="contractorBriefMissing(detail.row).length" class="symbolika-contractor-brief-missing">
+                <v-icon name="warning_amber" small />Не заполнено: {{ contractorBriefMissing(detail.row).join(', ') }}
+              </div>
+              <div class="symbolika-contractor-brief-grid">
+                <article class="symbolika-contractor-brief-card">
+                  <span>Срок</span>
+                  <strong>{{ formatDate(detail.row.deadline || detailOrderContext(detail.row).deadline) }}</strong>
+                </article>
+                <article class="symbolika-contractor-brief-card">
+                  <span>Позиция</span>
+                  <strong>{{ detail.row.product_name || '-' }} · {{ formatQuantity(detail.row.quantity) }} шт.</strong>
+                </article>
+                <article class="symbolika-contractor-brief-card is-wide">
+                  <span>Техническое задание</span>
+                  <p>{{ detail.row.technical_task_text || 'ТЗ пока не заполнено' }}</p>
+                </article>
+                <article class="symbolika-contractor-brief-card is-wide">
+                  <span>Макет и материалы</span>
+                  <div v-if="detail.row.url || itemAttachmentRows(detail.row).length" class="symbolika-contractor-brief-links">
+                    <a v-if="detail.row.url" :href="detail.row.url" target="_blank" rel="noreferrer">
+                      <v-icon name="draft" small /><span>{{ detail.row.layout_disk_name || detail.row.url }}</span><v-icon name="open_in_new" small />
+                    </a>
+                    <a v-for="attachment in itemAttachmentRows(detail.row)" :key="'brief-' + attachment.id" :href="attachment.url" target="_blank" rel="noreferrer">
+                      <v-icon :name="attachment.attachment_type === 'file' ? 'draft' : 'link'" small />
+                      <span>{{ attachment.title || attachment.file_name || attachment.url }}</span><v-icon name="open_in_new" small />
+                    </a>
+                  </div>
+                  <strong v-else>Макет пока не указан</strong>
+                </article>
               </div>
             </section>
 

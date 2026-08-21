@@ -14460,5 +14460,578 @@ SET interface = 'select-dropdown',
 WHERE collection = 'procurement_requests'
   AND field = 'section';
 
+-- Multiple eligible contractors per product route. The selected supplier and
+-- executor are still stored in orders_items.contractor_1/contractor_2 so the
+-- existing costing, production and settlement layers remain compatible.
+CREATE TABLE IF NOT EXISTS contractor_capabilities (
+  id serial PRIMARY KEY,
+  contractor integer NOT NULL REFERENCES contractors(id) ON DELETE CASCADE,
+  capability_type varchar(32) NOT NULL,
+  product_category integer NOT NULL REFERENCES product_categories(id) ON DELETE CASCADE,
+  product_subcategory integer REFERENCES product_subcategories(id) ON DELETE CASCADE,
+  application_method integer REFERENCES product_application_methods(id) ON DELETE CASCADE,
+  priority integer NOT NULL DEFAULT 100,
+  is_active boolean NOT NULL DEFAULT true,
+  CONSTRAINT contractor_capabilities_type_valid
+    CHECK (capability_type IN ('executor', 'blank_supplier'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS contractor_capabilities_unique_route
+  ON contractor_capabilities (
+    contractor,
+    capability_type,
+    product_category,
+    COALESCE(product_subcategory, 0),
+    COALESCE(application_method, 0)
+  );
+
+-- Migrate current routing without touching existing order items.
+INSERT INTO contractor_capabilities (
+  contractor, capability_type, product_category, product_subcategory,
+  application_method, priority, is_active
+)
+SELECT DISTINCT
+  COALESCE(rule.contractor_2, rule.contractor_1), 'executor',
+  rule.product_category, rule.product_subcategory, rule.application_method,
+  COALESCE(rule.priority, 100), COALESCE(rule.is_active, true)
+FROM product_routing_rules rule
+WHERE COALESCE(rule.contractor_2, rule.contractor_1) IS NOT NULL
+  AND rule.product_category IS NOT NULL
+ON CONFLICT DO NOTHING;
+
+INSERT INTO contractor_capabilities (
+  contractor, capability_type, product_category, priority, is_active
+)
+SELECT DISTINCT contractor.id, 'blank_supplier', category.id, 100, true
+FROM contractors contractor
+CROSS JOIN product_categories category
+WHERE COALESCE(contractor.approval_status, 'approved') = 'approved'
+  AND (
+    (COALESCE(contractor.supplies_textile_blanks, false) AND category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%')
+    OR
+    (COALESCE(contractor.supplies_merch_blanks, false) AND category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%')
+  )
+ON CONFLICT DO NOTHING;
+
+CREATE OR REPLACE FUNCTION apply_category_contractors_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  needs_blank boolean := false;
+  executor_candidates integer[] := ARRAY[]::integer[];
+  supplier_candidates integer[] := ARRAY[]::integer[];
+BEGIN
+  IF TG_OP = 'INSERT'
+     OR NEW.product_category IS DISTINCT FROM OLD.product_category
+     OR NEW.product_subcategory IS DISTINCT FROM OLD.product_subcategory
+     OR NEW.application_method IS DISTINCT FROM OLD.application_method
+     OR NEW.blank_source IS DISTINCT FROM OLD.blank_source THEN
+
+    SELECT COALESCE(
+      pc.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
+      OR pc.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%', false
+    ) INTO needs_blank
+    FROM product_categories pc
+    WHERE pc.id = NEW.product_category;
+    needs_blank := COALESCE(needs_blank, false);
+
+    IF NEW.product_subcategory IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM product_subcategories subcategory
+      WHERE subcategory.id = NEW.product_subcategory
+        AND subcategory.category = NEW.product_category
+        AND COALESCE(subcategory.is_active, true)
+    ) THEN
+      NEW.product_subcategory := NULL;
+    END IF;
+
+    IF NEW.application_method IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM product_application_methods method
+      WHERE method.id = NEW.application_method
+        AND COALESCE(method.is_active, true)
+        AND (method.category = NEW.product_category OR method.category IS NULL)
+    ) THEN
+      NEW.application_method := NULL;
+    END IF;
+
+    WITH matching AS (
+      SELECT capability.contractor,
+        (CASE WHEN capability.product_subcategory IS NOT NULL THEN 2 ELSE 0 END
+         + CASE WHEN capability.application_method IS NOT NULL THEN 2 ELSE 0 END) AS specificity
+      FROM contractor_capabilities capability
+      JOIN contractors contractor ON contractor.id = capability.contractor
+      WHERE capability.capability_type = 'executor'
+        AND COALESCE(capability.is_active, true)
+        AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+        AND capability.product_category = NEW.product_category
+        AND (capability.product_subcategory IS NULL OR capability.product_subcategory = NEW.product_subcategory)
+        AND (capability.application_method IS NULL OR capability.application_method = NEW.application_method)
+    ), best AS (SELECT MAX(specificity) AS specificity FROM matching)
+    SELECT COALESCE(array_agg(DISTINCT matching.contractor), ARRAY[]::integer[])
+      INTO executor_candidates
+    FROM matching, best
+    WHERE matching.specificity = best.specificity;
+
+    IF needs_blank THEN
+      IF NEW.blank_source IS NULL OR NEW.blank_source NOT IN ('supplier', 'customer', 'warehouse') THEN
+        NEW.blank_source := 'supplier';
+      END IF;
+
+      IF cardinality(executor_candidates) = 1 THEN
+        NEW.contractor_2 := executor_candidates[1];
+      ELSIF NOT (NEW.contractor_2 = ANY(executor_candidates)) THEN
+        NEW.contractor_2 := NULL;
+      END IF;
+
+      IF NEW.blank_source = 'supplier' THEN
+        WITH matching AS (
+          SELECT capability.contractor,
+            (CASE WHEN capability.product_subcategory IS NOT NULL THEN 2 ELSE 0 END
+             + CASE WHEN capability.application_method IS NOT NULL THEN 2 ELSE 0 END) AS specificity
+          FROM contractor_capabilities capability
+          JOIN contractors contractor ON contractor.id = capability.contractor
+          WHERE capability.capability_type = 'blank_supplier'
+            AND COALESCE(capability.is_active, true)
+            AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+            AND capability.product_category = NEW.product_category
+            AND (capability.product_subcategory IS NULL OR capability.product_subcategory = NEW.product_subcategory)
+            AND (capability.application_method IS NULL OR capability.application_method = NEW.application_method)
+        ), best AS (SELECT MAX(specificity) AS specificity FROM matching)
+        SELECT COALESCE(array_agg(DISTINCT matching.contractor), ARRAY[]::integer[])
+          INTO supplier_candidates
+        FROM matching, best
+        WHERE matching.specificity = best.specificity;
+
+        IF cardinality(supplier_candidates) = 1 THEN
+          NEW.contractor_1 := supplier_candidates[1];
+        ELSIF NOT (NEW.contractor_1 = ANY(supplier_candidates)) THEN
+          NEW.contractor_1 := NULL;
+          NEW.contractor_1_cost := 0;
+        END IF;
+      ELSE
+        NEW.contractor_1 := NULL;
+        NEW.contractor_1_cost := 0;
+        NEW.blank_ordered := false;
+      END IF;
+    ELSE
+      NEW.blank_source := 'none';
+      NEW.blank_ordered := false;
+      NEW.contractor_2 := NULL;
+      IF cardinality(executor_candidates) = 1 THEN
+        NEW.contractor_1 := executor_candidates[1];
+      ELSIF NOT (NEW.contractor_1 = ANY(executor_candidates)) THEN
+        NEW.contractor_1 := NULL;
+      END IF;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION symbolika_validate_item_route_for_work()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  needs_blank boolean := false;
+BEGIN
+  IF symbolika_normalize_item_status(NEW.item_status) IN ('sent_to_work', 'in_work')
+     AND symbolika_normalize_item_status(OLD.item_status) NOT IN ('sent_to_work', 'in_work') THEN
+    IF NEW.product_category IS NULL THEN
+      RAISE EXCEPTION 'Для запуска позиции укажите категорию';
+    END IF;
+    SELECT COALESCE(
+      category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
+      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%', false
+    ) INTO needs_blank
+    FROM product_categories category WHERE category.id = NEW.product_category;
+
+    IF needs_blank AND NEW.contractor_2 IS NULL THEN
+      RAISE EXCEPTION 'Для запуска позиции выберите исполнителя работ';
+    ELSIF NOT needs_blank AND NEW.contractor_1 IS NULL THEN
+      RAISE EXCEPTION 'Для запуска позиции выберите исполнителя работ';
+    END IF;
+    IF needs_blank AND NEW.blank_source = 'supplier' AND NEW.contractor_1 IS NULL THEN
+      RAISE EXCEPTION 'Для запуска позиции выберите поставщика заготовки';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS symbolika_validate_item_route_for_work ON orders_items;
+CREATE TRIGGER symbolika_validate_item_route_for_work
+BEFORE UPDATE OF item_status ON orders_items
+FOR EACH ROW EXECUTE FUNCTION symbolika_validate_item_route_for_work();
+
+-- Final route guard. The earlier transition-only definition is kept above for
+-- migration readability; this definition replaces it and also protects an
+-- already running item from losing or changing to an invalid route.
+CREATE OR REPLACE FUNCTION symbolika_validate_item_route_for_work()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  needs_blank boolean := false;
+  selected_executor integer;
+  executor_allowed boolean := false;
+  supplier_allowed boolean := false;
+BEGIN
+  IF symbolika_normalize_item_status(NEW.item_status) IN ('sent_to_work', 'in_work') THEN
+    IF NEW.product_category IS NULL THEN
+      RAISE EXCEPTION USING MESSAGE = U&'\0414\043b\044f \0437\0430\043f\0443\0441\043a\0430 \043f\043e\0437\0438\0446\0438\0438 \0443\043a\0430\0436\0438\0442\0435 \043a\0430\0442\0435\0433\043e\0440\0438\044e';
+    END IF;
+
+    SELECT COALESCE(
+      category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
+      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%', false
+    ) INTO needs_blank
+    FROM product_categories category
+    WHERE category.id = NEW.product_category;
+    needs_blank := COALESCE(needs_blank, false);
+    selected_executor := CASE WHEN needs_blank THEN NEW.contractor_2 ELSE NEW.contractor_1 END;
+
+    WITH matching AS (
+      SELECT capability.contractor,
+        (CASE WHEN capability.product_subcategory IS NOT NULL THEN 2 ELSE 0 END
+         + CASE WHEN capability.application_method IS NOT NULL THEN 2 ELSE 0 END) AS specificity
+      FROM contractor_capabilities capability
+      JOIN contractors contractor ON contractor.id = capability.contractor
+      WHERE capability.capability_type = 'executor'
+        AND COALESCE(capability.is_active, true)
+        AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+        AND capability.product_category = NEW.product_category
+        AND (capability.product_subcategory IS NULL OR capability.product_subcategory = NEW.product_subcategory)
+        AND (capability.application_method IS NULL OR capability.application_method = NEW.application_method)
+    ), best AS (
+      SELECT MAX(specificity) AS specificity FROM matching
+    )
+    SELECT EXISTS (
+      SELECT 1 FROM matching, best
+      WHERE matching.specificity = best.specificity
+        AND matching.contractor = selected_executor
+    ) INTO executor_allowed;
+
+    IF selected_executor IS NULL OR NOT executor_allowed THEN
+      RAISE EXCEPTION USING MESSAGE = U&'\0414\043b\044f \0437\0430\043f\0443\0441\043a\0430 \043f\043e\0437\0438\0446\0438\0438 \0432\044b\0431\0435\0440\0438\0442\0435 \0434\043e\043f\0443\0441\0442\0438\043c\043e\0433\043e \0438\0441\043f\043e\043b\043d\0438\0442\0435\043b\044f \0440\0430\0431\043e\0442';
+    END IF;
+
+    IF needs_blank AND NEW.blank_source = 'supplier' THEN
+      WITH matching AS (
+        SELECT capability.contractor,
+          (CASE WHEN capability.product_subcategory IS NOT NULL THEN 2 ELSE 0 END
+           + CASE WHEN capability.application_method IS NOT NULL THEN 2 ELSE 0 END) AS specificity
+        FROM contractor_capabilities capability
+        JOIN contractors contractor ON contractor.id = capability.contractor
+        WHERE capability.capability_type = 'blank_supplier'
+          AND COALESCE(capability.is_active, true)
+          AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+          AND capability.product_category = NEW.product_category
+          AND (capability.product_subcategory IS NULL OR capability.product_subcategory = NEW.product_subcategory)
+          AND (capability.application_method IS NULL OR capability.application_method = NEW.application_method)
+      ), best AS (
+        SELECT MAX(specificity) AS specificity FROM matching
+      )
+      SELECT EXISTS (
+        SELECT 1 FROM matching, best
+        WHERE matching.specificity = best.specificity
+          AND matching.contractor = NEW.contractor_1
+      ) INTO supplier_allowed;
+
+      IF NEW.contractor_1 IS NULL OR NOT supplier_allowed THEN
+        RAISE EXCEPTION USING MESSAGE = U&'\0414\043b\044f \0437\0430\043f\0443\0441\043a\0430 \043f\043e\0437\0438\0446\0438\0438 \0432\044b\0431\0435\0440\0438\0442\0435 \0434\043e\043f\0443\0441\0442\0438\043c\043e\0433\043e \043f\043e\0441\0442\0430\0432\0449\0438\043a\0430 \0437\0430\0433\043e\0442\043e\0432\043a\0438';
+      END IF;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS symbolika_validate_item_route_for_work ON orders_items;
+CREATE TRIGGER symbolika_validate_item_route_for_work
+BEFORE INSERT OR UPDATE OF item_status, product_category, product_subcategory,
+  application_method, blank_source, contractor_1, contractor_2 ON orders_items
+FOR EACH ROW EXECUTE FUNCTION symbolika_validate_item_route_for_work();
+
+CREATE OR REPLACE FUNCTION symbolika_order_work_completion(order_id integer)
+RETURNS TABLE (
+  work_completion_percent integer,
+  work_completion_missing_count integer,
+  work_completion_missing text
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  item_row record;
+  checks_total integer := 0;
+  checks_filled integer := 0;
+  missing_values text[] := ARRAY[]::text[];
+  item_label text;
+  needs_blank boolean;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM orders_items item WHERE item."order" = order_id) THEN
+    RETURN QUERY SELECT 0, 1, U&'\0417\0430\043a\0430\0437: \043d\0435\0442 \043f\043e\0437\0438\0446\0438\0439';
+    RETURN;
+  END IF;
+
+  FOR item_row IN SELECT item.* FROM orders_items item WHERE item."order" = order_id ORDER BY item.id LOOP
+    item_label := COALESCE(NULLIF(BTRIM(item_row.product_name), ''), U&'\041f\043e\0437\0438\0446\0438\044f #' || item_row.id::text);
+
+    checks_total := checks_total + 1;
+    IF NULLIF(BTRIM(item_row.product_name), '') IS NOT NULL THEN checks_filled := checks_filled + 1;
+    ELSE missing_values := array_append(missing_values, item_label || U&': \043d\0430\0437\0432\0430\043d\0438\0435'); END IF;
+
+    checks_total := checks_total + 1;
+    IF COALESCE(item_row.quantity, 0) > 0 THEN checks_filled := checks_filled + 1;
+    ELSE missing_values := array_append(missing_values, item_label || U&': \043a\043e\043b\0438\0447\0435\0441\0442\0432\043e'); END IF;
+
+    checks_total := checks_total + 1;
+    IF NULLIF(BTRIM(item_row.technical_task_text), '') IS NOT NULL THEN checks_filled := checks_filled + 1;
+    ELSE missing_values := array_append(missing_values, item_label || U&': \0422\0417'); END IF;
+
+    checks_total := checks_total + 1;
+    IF NULLIF(BTRIM(item_row.url), '') IS NOT NULL THEN checks_filled := checks_filled + 1;
+    ELSE missing_values := array_append(missing_values, item_label || U&': \0441\0441\044b\043b\043a\0430 \043d\0430 \043c\0430\043a\0435\0442'); END IF;
+
+    checks_total := checks_total + 1;
+    IF item_row.product_category IS NOT NULL THEN checks_filled := checks_filled + 1;
+    ELSE missing_values := array_append(missing_values, item_label || U&': \043a\0430\0442\0435\0433\043e\0440\0438\044f'); END IF;
+
+    SELECT COALESCE(
+      category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
+      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%', false
+    ) INTO needs_blank
+    FROM product_categories category WHERE category.id = item_row.product_category;
+    needs_blank := COALESCE(needs_blank, false);
+
+    checks_total := checks_total + 1;
+    IF (needs_blank AND item_row.contractor_2 IS NOT NULL)
+       OR (NOT needs_blank AND item_row.contractor_1 IS NOT NULL) THEN
+      checks_filled := checks_filled + 1;
+    ELSE
+      missing_values := array_append(missing_values, item_label || U&': \0438\0441\043f\043e\043b\043d\0438\0442\0435\043b\044c \0440\0430\0431\043e\0442');
+    END IF;
+
+    IF needs_blank AND item_row.blank_source = 'supplier' THEN
+      checks_total := checks_total + 1;
+      IF item_row.contractor_1 IS NOT NULL THEN checks_filled := checks_filled + 1;
+      ELSE missing_values := array_append(missing_values, item_label || U&': \043f\043e\0441\0442\0430\0432\0449\0438\043a \0437\0430\0433\043e\0442\043e\0432\043a\0438'); END IF;
+    END IF;
+  END LOOP;
+
+  RETURN QUERY SELECT
+    CASE WHEN checks_total > 0 THEN ROUND(checks_filled * 100.0 / checks_total)::integer ELSE 0 END,
+    COALESCE(array_length(missing_values, 1), 0),
+    array_to_string(missing_values, '||');
+END;
+$$;
+
+INSERT INTO directus_collections (collection, icon, hidden, singleton, sort, collapse, translations)
+VALUES (
+  'contractor_capabilities', 'route', true, false, 44, 'open',
+  json_build_array(json_build_object('language','ru-RU','translation', U&'\0412\043e\0437\043c\043e\0436\043d\043e\0441\0442\0438 \043a\043e\043d\0442\0440\0430\0433\0435\043d\0442\043e\0432'))::json
+)
+ON CONFLICT (collection) DO UPDATE SET icon = EXCLUDED.icon, hidden = EXCLUDED.hidden;
+
+DELETE FROM directus_fields WHERE collection = 'contractor_capabilities';
+INSERT INTO directus_fields (
+  collection, field, special, interface, options, display, display_options,
+  readonly, hidden, sort, width, translations, required, searchable
+) VALUES
+  ('contractor_capabilities','id',NULL,'numeric',NULL,NULL,NULL,true,true,1,'full',NULL,false,true),
+  ('contractor_capabilities','contractor','m2o','select-dropdown-m2o','{"template":"{{name}}"}'::json,'related-values','{"template":"{{name}}"}'::json,false,false,2,'half',NULL,true,true),
+  ('contractor_capabilities','capability_type',NULL,'select-dropdown',json_build_object(
+    'choices', json_build_array(
+      json_build_object('text', U&'\0418\0441\043f\043e\043b\043d\0438\0442\0435\043b\044c \0440\0430\0431\043e\0442', 'value', 'executor'),
+      json_build_object('text', U&'\041f\043e\0441\0442\0430\0432\0449\0438\043a \0437\0430\0433\043e\0442\043e\0432\043a\0438', 'value', 'blank_supplier')
+    )
+  )::json,'labels',NULL,false,false,3,'half',NULL,true,true),
+  ('contractor_capabilities','product_category','m2o','select-dropdown-m2o','{"template":"{{name}}"}'::json,'related-values','{"template":"{{name}}"}'::json,false,false,4,'half',NULL,true,true),
+  ('contractor_capabilities','product_subcategory','m2o','select-dropdown-m2o','{"template":"{{name}}"}'::json,'related-values','{"template":"{{name}}"}'::json,false,false,5,'half',NULL,false,true),
+  ('contractor_capabilities','application_method','m2o','select-dropdown-m2o','{"template":"{{name}}"}'::json,'related-values','{"template":"{{name}}"}'::json,false,false,6,'half',NULL,false,true),
+  ('contractor_capabilities','priority',NULL,'input',NULL,NULL,NULL,false,false,7,'half',NULL,false,true),
+  ('contractor_capabilities','is_active','cast-boolean','boolean',NULL,NULL,NULL,false,false,8,'half',NULL,false,true);
+
+DELETE FROM directus_relations WHERE many_collection = 'contractor_capabilities';
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
+  ('contractor_capabilities','contractor','contractors',NULL,'cascade'),
+  ('contractor_capabilities','product_category','product_categories',NULL,'cascade'),
+  ('contractor_capabilities','product_subcategory','product_subcategories',NULL,'cascade'),
+  ('contractor_capabilities','application_method','product_application_methods',NULL,'cascade');
+
+DELETE FROM directus_permissions WHERE collection = 'contractor_capabilities';
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+SELECT 'contractor_capabilities', 'read', '{}'::json, NULL, NULL,
+  'id,contractor,capability_type,product_category,product_subcategory,application_method,priority,is_active', policy
+FROM (VALUES
+  ('00000000-0000-4000-8000-000000000201'::uuid),
+  ('00000000-0000-4000-8000-000000000202'::uuid),
+  ('00000000-0000-4000-8000-000000000204'::uuid),
+  ('00000000-0000-4000-8000-000000000205'::uuid),
+  ('00000000-0000-4000-8000-000000000206'::uuid),
+  ('00000000-0000-4000-8000-000000000208'::uuid)
+) policies(policy);
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy) VALUES
+  ('contractor_capabilities','create','{}'::json,NULL,NULL,'*','00000000-0000-4000-8000-000000000205'),
+  ('contractor_capabilities','update','{}'::json,NULL,NULL,'*','00000000-0000-4000-8000-000000000205'),
+  ('contractor_capabilities','delete','{}'::json,NULL,NULL,'*','00000000-0000-4000-8000-000000000205');
+
+-- Managers need to read and save the selected executor, but contractor costs
+-- remain excluded from their UI and permissions.
+UPDATE directus_permissions
+SET fields = concat_ws(',', NULLIF(fields, ''), 'contractor_2')
+WHERE collection = 'orders_items'
+  AND action IN ('create', 'read', 'update')
+  AND fields IS NOT NULL AND fields <> '*'
+  AND NOT ('contractor_2' = ANY(string_to_array(fields, ',')))
+  AND policy IN (
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202',
+    '00000000-0000-4000-8000-000000000204',
+    '00000000-0000-4000-8000-000000000206',
+    '00000000-0000-4000-8000-000000000208'
+  );
+
+-- The order-level launch check must use the same contractor capability rules
+-- as the position form and the position-level trigger. This final definition
+-- replaces the legacy readiness function declared before the capability table.
+CREATE OR REPLACE FUNCTION symbolika_order_work_readiness(order_id integer)
+RETURNS TABLE (
+  ready_for_work boolean,
+  missing_count integer,
+  missing_fields text
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  order_row record;
+  item_row record;
+  missing_values text[] := ARRAY[]::text[];
+  item_label text;
+  needs_blank boolean;
+  selected_executor integer;
+  executor_allowed boolean;
+  supplier_allowed boolean;
+BEGIN
+  SELECT orders.* INTO order_row FROM orders WHERE orders.id = order_id;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 1, U&'\0417\0430\043a\0430\0437 \043d\0435 \043d\0430\0439\0434\0435\043d';
+    RETURN;
+  END IF;
+
+  IF order_row.customer IS NULL THEN
+    missing_values := array_append(missing_values, U&'\0417\0430\043a\0430\0437: \043a\043b\0438\0435\043d\0442');
+  END IF;
+  IF order_row.manager_employee IS NULL THEN
+    missing_values := array_append(missing_values, U&'\0417\0430\043a\0430\0437: \043c\0435\043d\0435\0434\0436\0435\0440');
+  END IF;
+  IF order_row.date IS NULL THEN
+    missing_values := array_append(missing_values, U&'\0417\0430\043a\0430\0437: \0434\0430\0442\0430');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM orders_items item WHERE item."order" = order_id) THEN
+    missing_values := array_append(missing_values, U&'\0417\0430\043a\0430\0437: \043d\0435\0442 \043f\043e\0437\0438\0446\0438\0439');
+  END IF;
+
+  FOR item_row IN
+    SELECT item.*
+    FROM orders_items item
+    WHERE item."order" = order_id
+      AND symbolika_normalize_item_status(item.item_status) <> 'cancelled'
+    ORDER BY item.id
+  LOOP
+    item_label := COALESCE(NULLIF(BTRIM(item_row.product_name), ''), U&'\041f\043e\0437\0438\0446\0438\044f #' || item_row.id::text);
+    IF NULLIF(BTRIM(item_row.product_name), '') IS NULL THEN
+      missing_values := array_append(missing_values, item_label || U&': \043d\0430\0437\0432\0430\043d\0438\0435');
+    END IF;
+    IF COALESCE(item_row.quantity, 0) <= 0 THEN
+      missing_values := array_append(missing_values, item_label || U&': \043a\043e\043b\0438\0447\0435\0441\0442\0432\043e');
+    END IF;
+    IF NULLIF(BTRIM(item_row.technical_task_text), '') IS NULL THEN
+      missing_values := array_append(missing_values, item_label || U&': \0422\0417');
+    END IF;
+    IF NULLIF(BTRIM(item_row.url), '') IS NULL THEN
+      missing_values := array_append(missing_values, item_label || U&': \0441\0441\044b\043b\043a\0430 \043d\0430 \043c\0430\043a\0435\0442');
+    END IF;
+    IF item_row.product_category IS NULL THEN
+      missing_values := array_append(missing_values, item_label || U&': \043a\0430\0442\0435\0433\043e\0440\0438\044f');
+      CONTINUE;
+    END IF;
+
+    SELECT COALESCE(
+      category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
+      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%', false
+    ) INTO needs_blank
+    FROM product_categories category
+    WHERE category.id = item_row.product_category;
+    needs_blank := COALESCE(needs_blank, false);
+    selected_executor := CASE WHEN needs_blank THEN item_row.contractor_2 ELSE item_row.contractor_1 END;
+
+    WITH matching AS (
+      SELECT capability.contractor,
+        (CASE WHEN capability.product_subcategory IS NOT NULL THEN 2 ELSE 0 END
+         + CASE WHEN capability.application_method IS NOT NULL THEN 2 ELSE 0 END) AS specificity
+      FROM contractor_capabilities capability
+      JOIN contractors contractor ON contractor.id = capability.contractor
+      WHERE capability.capability_type = 'executor'
+        AND COALESCE(capability.is_active, true)
+        AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+        AND capability.product_category = item_row.product_category
+        AND (capability.product_subcategory IS NULL OR capability.product_subcategory = item_row.product_subcategory)
+        AND (capability.application_method IS NULL OR capability.application_method = item_row.application_method)
+    ), best AS (SELECT MAX(specificity) AS specificity FROM matching)
+    SELECT EXISTS (
+      SELECT 1 FROM matching, best
+      WHERE matching.specificity = best.specificity
+        AND matching.contractor = selected_executor
+    ) INTO executor_allowed;
+    IF selected_executor IS NULL OR NOT COALESCE(executor_allowed, false) THEN
+      missing_values := array_append(missing_values, item_label || U&': \0438\0441\043f\043e\043b\043d\0438\0442\0435\043b\044c \0440\0430\0431\043e\0442');
+    END IF;
+
+    IF needs_blank AND item_row.blank_source = 'supplier' THEN
+      WITH matching AS (
+        SELECT capability.contractor,
+          (CASE WHEN capability.product_subcategory IS NOT NULL THEN 2 ELSE 0 END
+           + CASE WHEN capability.application_method IS NOT NULL THEN 2 ELSE 0 END) AS specificity
+        FROM contractor_capabilities capability
+        JOIN contractors contractor ON contractor.id = capability.contractor
+        WHERE capability.capability_type = 'blank_supplier'
+          AND COALESCE(capability.is_active, true)
+          AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+          AND capability.product_category = item_row.product_category
+          AND (capability.product_subcategory IS NULL OR capability.product_subcategory = item_row.product_subcategory)
+          AND (capability.application_method IS NULL OR capability.application_method = item_row.application_method)
+      ), best AS (SELECT MAX(specificity) AS specificity FROM matching)
+      SELECT EXISTS (
+        SELECT 1 FROM matching, best
+        WHERE matching.specificity = best.specificity
+          AND matching.contractor = item_row.contractor_1
+      ) INTO supplier_allowed;
+      IF item_row.contractor_1 IS NULL OR NOT COALESCE(supplier_allowed, false) THEN
+        missing_values := array_append(missing_values, item_label || U&': \043f\043e\0441\0442\0430\0432\0449\0438\043a \0437\0430\0433\043e\0442\043e\0432\043a\0438');
+      END IF;
+    END IF;
+
+    IF symbolika_normalize_item_status(item_row.item_status) = 'layout_revision'
+       AND (
+         NULLIF(BTRIM(item_row.url), '') IS NULL
+         OR item_row.url IS NOT DISTINCT FROM item_row.layout_revision_url_snapshot
+       ) THEN
+      missing_values := array_append(missing_values, item_label || U&': \043e\0431\043d\043e\0432\0438\0442\0435 \0441\0441\044b\043b\043a\0443 \043d\0430 \043c\0430\043a\0435\0442');
+    END IF;
+  END LOOP;
+
+  RETURN QUERY SELECT
+    COALESCE(array_length(missing_values, 1), 0) = 0,
+    COALESCE(array_length(missing_values, 1), 0),
+    array_to_string(missing_values, '||');
+END;
+$$;
+
+SELECT refresh_orders_due_tables();
+
 COMMIT;
 
