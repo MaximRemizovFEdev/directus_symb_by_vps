@@ -1270,6 +1270,8 @@ export const CostingModule = {
       managerFinanceSummary: null,
       orderEconomicsRows: [],
       myOrderRows: [],
+      myActiveOrderRows: [],
+      myArchivedOrderRows: [],
       allOrderRows: [],
       urgentRows: [],
       deadlineRows: {},
@@ -3161,7 +3163,7 @@ export const CostingModule = {
         tasks_archive: ['tasks'],
         all_orders: ['all_orders'],
         orders_archive: ['all_orders'],
-        my_orders: ['my_orders', 'all_orders'],
+        my_orders: ['my_orders_active', 'my_orders_archive', 'all_orders'],
         estimates: ['estimates', 'estimate_items'],
         costing: ['costing'],
         order_economics: ['order_economics'],
@@ -5265,11 +5267,13 @@ export const CostingModule = {
     },
 
     isOrderArchived(row) {
-      return this.isArchivedStatus(row?.order_status, row?.order_status_name, ['5', '6'], ['достав', 'отмен']);
+      return String(row?.office_status || '').trim() === 'issued'
+        || this.isArchivedStatus(row?.order_status, row?.order_status_name, ['5', '6'], ['достав', 'отмен']);
     },
 
     isItemArchived(row) {
-      return this.isArchivedStatus(row?.item_status, row?.item_status_name, ['5', '6'], ['достав', 'отмен']);
+      return String(row?.office_status || '').trim() === 'issued'
+        || this.isArchivedStatus(row?.item_status, row?.item_status_name, ['5', '6'], ['достав', 'отмен']);
     },
 
     isWorkArchived(row) {
@@ -8471,6 +8475,8 @@ export const CostingModule = {
       try {
         if (!this.currentEmployeeId) {
           this.myOrderRows = [];
+          this.myActiveOrderRows = [];
+          this.myArchivedOrderRows = [];
           return;
         }
 
@@ -8478,11 +8484,25 @@ export const CostingModule = {
         params.set('fields', orderSummaryFields.join(','));
         params.set('sort', 'deadline,-date,order_number,id');
         params.set('filter[manager_employee][_eq]', String(this.currentEmployeeId));
-        await this.loadPagedCollection('my_orders', '/items/my_orders_in_work', params, (rows, append) => {
-          this.myOrderRows = append ? this.mergePagedRows(this.myOrderRows, rows) : rows;
-        });
+
+        const rebuildRows = () => {
+          this.myOrderRows = this.mergePagedRows(this.myActiveOrderRows, this.myArchivedOrderRows);
+        };
+
+        await Promise.all([
+          this.loadPagedCollection('my_orders_active', '/items/my_orders_in_work', params, (rows, append) => {
+            this.myActiveOrderRows = append ? this.mergePagedRows(this.myActiveOrderRows, rows) : rows;
+            rebuildRows();
+          }),
+          this.loadPagedCollection('my_orders_archive', '/items/my_orders_completed', params, (rows, append) => {
+            this.myArchivedOrderRows = append ? this.mergePagedRows(this.myArchivedOrderRows, rows) : rows;
+            rebuildRows();
+          }),
+        ]);
       } catch {
         this.myOrderRows = [];
+        this.myActiveOrderRows = [];
+        this.myArchivedOrderRows = [];
       }
     },
 
@@ -25263,6 +25283,170 @@ export const CostingModule = {
           max-inline-size: 100%;
         }
 
+        /* Refined light palette: clear surface levels and readable operational colors. */
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page {
+          --symbolika-light-table-head: #343a40;
+          --symbolika-light-table-head-text: #ffffff;
+          --symbolika-light-row-alt: color-mix(in srgb, var(--theme--background-subdued) 66%, #ffffff);
+          --symbolika-light-row-expanded: color-mix(in srgb, var(--theme--background-accent) 58%, #ffffff);
+          --symbolika-light-green-bg: #d8f0e7;
+          --symbolika-light-green-border: #55a98d;
+          --symbolika-light-green-text: #075b45;
+          --symbolika-light-blue-bg: #dce9f6;
+          --symbolika-light-blue-border: #6b99c4;
+          --symbolika-light-blue-text: #124c7d;
+          --symbolika-light-orange-bg: #f4e5c8;
+          --symbolika-light-orange-border: #b98a36;
+          --symbolika-light-orange-text: #6d4600;
+          --symbolika-light-purple-bg: #eadff2;
+          --symbolika-light-purple-border: #9a75b7;
+          --symbolika-light-purple-text: #583477;
+          --symbolika-light-red-bg: #f5dce2;
+          --symbolika-light-red-border: #c4677a;
+          --symbolika-light-red-text: #8a1e35;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(
+            .symbolika-costing-toolbar,
+            .symbolika-costing-smart-toolbar,
+            .symbolika-costing-subtoolbar,
+            .symbolika-costing-order-controls-row
+          ) {
+          background: var(--theme--background-normal) !important;
+          box-shadow: 0 8px 24px rgb(27 33 38 / 13%) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-table-wrap {
+          border: 1px solid var(--symbolika-line-strong) !important;
+          background: var(--theme--background-normal) !important;
+          box-shadow: 0 12px 30px rgb(27 33 38 / 14%) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-table thead th {
+          border-color: #4c545b !important;
+          background: var(--symbolika-light-table-head) !important;
+          color: var(--symbolika-light-table-head-text) !important;
+          text-shadow: none !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-table tbody tr:nth-child(even):not(.symbolika-costing-expanded-row) > td {
+          background: var(--symbolika-light-row-alt) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-expanded-row > td {
+          border-block: 1px solid var(--symbolika-line-strong) !important;
+          background: var(--symbolika-light-row-expanded) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(
+            .symbolika-costing-search,
+            .symbolika-costing-input,
+            .symbolika-costing-select,
+            .symbolika-costing-table-select,
+            .symbolika-costing-table-date,
+            .symbolika-costing-comment
+          ) {
+          border-width: 1px !important;
+          box-shadow: 0 1px 2px rgb(27 33 38 / 7%) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          :is(.symbolika-costing-select.symbolika-costing-select-green,
+              .symbolika-costing-table-select.symbolika-costing-select-green,
+              .symbolika-costing-pill.symbolika-costing-pill-green) {
+          border-color: var(--symbolika-light-green-border) !important;
+          background: var(--symbolika-light-green-bg) !important;
+          color: var(--symbolika-light-green-text) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          :is(.symbolika-costing-select.symbolika-costing-select-blue,
+              .symbolika-costing-table-select.symbolika-costing-select-blue,
+              .symbolika-costing-pill.symbolika-costing-pill-blue) {
+          border-color: var(--symbolika-light-blue-border) !important;
+          background: var(--symbolika-light-blue-bg) !important;
+          color: var(--symbolika-light-blue-text) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          :is(.symbolika-costing-select.symbolika-costing-select-orange,
+              .symbolika-costing-table-select.symbolika-costing-select-orange,
+              .symbolika-costing-pill.symbolika-costing-pill-orange,
+              .symbolika-costing-date.symbolika-costing-date-hot) {
+          border-color: var(--symbolika-light-orange-border) !important;
+          background: var(--symbolika-light-orange-bg) !important;
+          color: var(--symbolika-light-orange-text) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          :is(.symbolika-costing-select.symbolika-costing-select-purple,
+              .symbolika-costing-table-select.symbolika-costing-select-purple,
+              .symbolika-costing-pill.symbolika-costing-pill-purple) {
+          border-color: var(--symbolika-light-purple-border) !important;
+          background: var(--symbolika-light-purple-bg) !important;
+          color: var(--symbolika-light-purple-text) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          :is(.symbolika-costing-select.symbolika-costing-select-danger,
+              .symbolika-costing-table-select.symbolika-costing-select-danger,
+              .symbolika-costing-pill.symbolika-costing-pill-danger,
+              .symbolika-costing-date.symbolika-costing-date-danger) {
+          border-color: var(--symbolika-light-red-border) !important;
+          background: var(--symbolika-light-red-bg) !important;
+          color: var(--symbolika-light-red-text) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page .symbolika-costing-amount-badge {
+          border-color: var(--symbolika-light-green-border) !important;
+          background: var(--symbolika-light-green-bg) !important;
+          color: var(--symbolika-light-green-text) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page .symbolika-costing-issue-button:not(:disabled) {
+          border-color: #08765c !important;
+          background: #08765c !important;
+          color: #ffffff !important;
+          box-shadow: 0 4px 12px rgb(8 118 92 / 20%) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page .symbolika-costing-issue-button:disabled {
+          border-color: var(--symbolika-line-strong) !important;
+          background: var(--theme--background-accent) !important;
+          color: var(--symbolika-muted) !important;
+          opacity: .72;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-side-nav {
+          border-inline-end: 1px solid var(--symbolika-line-strong) !important;
+          background: var(--theme--background-normal) !important;
+          box-shadow: 8px 0 24px rgb(27 33 38 / 7%);
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-side-item {
+          color: var(--symbolika-text-soft) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-side-item.is-active {
+          border-color: color-mix(in srgb, var(--theme--primary) 62%, var(--symbolika-line-strong)) !important;
+          background: color-mix(in srgb, var(--theme--primary) 14%, #ffffff) !important;
+          color: #7f3206 !important;
+          box-shadow: inset 3px 0 var(--theme--primary);
+        }
+
         @media (max-width: 1179px) {
           html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
             .symbolika-costing-page :is(
@@ -27050,7 +27234,9 @@ export const CostingModule = {
               </template>
             </tbody>
           </table>
-          <div v-if="!visibleMyOrderRows.length" class="symbolika-costing-empty">Нет заказов в работе</div>
+          <div v-if="!visibleMyOrderRows.length" class="symbolika-costing-empty">
+            {{ orderArchiveMode === 'archive' ? 'Нет архивных заказов' : orderArchiveMode === 'all' ? 'Нет заказов' : 'Нет заказов в работе' }}
+          </div>
         </div>
 
         <div v-if="activeTab === 'all_orders' && orderDisplayMode === 'orders'" class="symbolika-costing-table-wrap">
