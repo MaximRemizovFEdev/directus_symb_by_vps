@@ -14930,19 +14930,28 @@ export const CostingModule = {
 
         .symbolika-costing-order-controls-row {
           position: relative;
-          display: flex;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
           align-items: center;
-          gap: 10px;
+          gap: 8px 14px;
           min-inline-size: 0;
           margin-block: -2px 12px;
         }
 
-        .symbolika-costing-order-controls-row > .symbolika-costing-sort {
+        .symbolika-costing-order-filter-controls {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 8px 10px;
+          min-inline-size: 0;
+        }
+
+        .symbolika-costing-order-filter-controls > .symbolika-costing-sort {
           flex: 0 0 auto;
           white-space: nowrap;
         }
 
-        .symbolika-costing-order-controls-row > .symbolika-costing-filter-bar {
+        .symbolika-costing-order-filter-controls > .symbolika-costing-filter-bar {
           position: static;
           display: flex;
           align-items: center;
@@ -14952,13 +14961,14 @@ export const CostingModule = {
         }
 
         .symbolika-costing-order-controls-row .symbolika-costing-filter-groups {
-          flex-wrap: nowrap;
+          flex-wrap: wrap;
         }
 
         .symbolika-costing-order-controls-row > .symbolika-costing-view-toggle {
           flex: 0 0 auto;
           flex-wrap: nowrap;
-          margin: 0 0 0 auto;
+          justify-self: end;
+          margin: 0;
         }
 
         .symbolika-costing-order-controls-row .symbolika-costing-filter-panels {
@@ -24055,10 +24065,11 @@ export const CostingModule = {
           .symbolika-profile-theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .symbolika-payslip-order-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
           .symbolika-costing-order-controls-row {
-            flex-wrap: wrap;
+            grid-template-columns: minmax(0, 1fr);
           }
 
           .symbolika-costing-order-controls-row > .symbolika-costing-view-toggle {
+            justify-self: start;
             margin-inline-start: 0;
           }
 
@@ -24281,19 +24292,25 @@ export const CostingModule = {
             gap: 8px;
           }
 
-          .symbolika-costing-order-controls-row > .symbolika-costing-sort {
+          .symbolika-costing-order-filter-controls {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            inline-size: 100%;
+          }
+
+          .symbolika-costing-order-filter-controls > .symbolika-costing-sort {
             display: grid;
             grid-template-columns: auto minmax(0, 1fr);
             inline-size: 100%;
             white-space: normal;
           }
 
-          .symbolika-costing-order-controls-row > .symbolika-costing-sort .symbolika-costing-select {
+          .symbolika-costing-order-filter-controls > .symbolika-costing-sort .symbolika-costing-select {
             inline-size: 100%;
             max-inline-size: none;
           }
 
-          .symbolika-costing-order-controls-row > .symbolika-costing-filter-bar {
+          .symbolika-costing-order-filter-controls > .symbolika-costing-filter-bar {
             display: grid;
             inline-size: 100%;
           }
@@ -24907,42 +24924,57 @@ export const CostingModule = {
         }
 
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
-          :is(.symbolika-costing-select-green, .symbolika-costing-pill-green) {
+          :is(.symbolika-costing-select.symbolika-costing-select-green,
+              .symbolika-costing-table-select.symbolika-costing-select-green,
+              .symbolika-costing-pill.symbolika-costing-pill-green) {
           border-color: rgb(8 118 92 / 32%) !important;
           background: rgb(8 118 92 / 11%) !important;
           color: #075f4b !important;
         }
 
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
-          :is(.symbolika-costing-select-blue, .symbolika-costing-pill-blue) {
+          :is(.symbolika-costing-select.symbolika-costing-select-blue,
+              .symbolika-costing-table-select.symbolika-costing-select-blue,
+              .symbolika-costing-pill.symbolika-costing-pill-blue) {
           border-color: rgb(21 95 160 / 32%) !important;
           background: rgb(21 95 160 / 10%) !important;
           color: #124f85 !important;
         }
 
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
-          :is(.symbolika-costing-select-orange, .symbolika-costing-pill-orange, .symbolika-costing-date-hot) {
+          :is(.symbolika-costing-select.symbolika-costing-select-orange,
+              .symbolika-costing-table-select.symbolika-costing-select-orange,
+              .symbolika-costing-pill.symbolika-costing-pill-orange,
+              .symbolika-costing-date.symbolika-costing-date-hot) {
           border-color: rgb(166 98 0 / 35%) !important;
           background: rgb(181 123 17 / 12%) !important;
           color: #704900 !important;
         }
 
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
-          :is(.symbolika-costing-select-purple, .symbolika-costing-pill-purple) {
+          :is(.symbolika-costing-select.symbolika-costing-select-purple,
+              .symbolika-costing-table-select.symbolika-costing-select-purple,
+              .symbolika-costing-pill.symbolika-costing-pill-purple) {
           border-color: rgb(109 62 146 / 30%) !important;
           background: rgb(109 62 146 / 10%) !important;
           color: #623783 !important;
         }
 
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
-          :is(.symbolika-costing-select-danger, .symbolika-costing-pill-danger, .symbolika-costing-date-danger) {
+          :is(.symbolika-costing-select.symbolika-costing-select-danger,
+              .symbolika-costing-table-select.symbolika-costing-select-danger,
+              .symbolika-costing-pill.symbolika-costing-pill-danger,
+              .symbolika-costing-date.symbolika-costing-date-danger) {
           border-color: rgb(180 35 63 / 34%) !important;
           background: rgb(180 35 63 / 11%) !important;
           color: #9a1e36 !important;
         }
 
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
-          :is(.symbolika-costing-select-muted, .symbolika-costing-pill-muted, .symbolika-costing-date-normal) {
+          :is(.symbolika-costing-select.symbolika-costing-select-muted,
+              .symbolika-costing-table-select.symbolika-costing-select-muted,
+              .symbolika-costing-pill.symbolika-costing-pill-muted,
+              .symbolika-costing-date.symbolika-costing-date-normal) {
           border-color: var(--symbolika-line-strong) !important;
           background: var(--theme--background-accent) !important;
           color: var(--symbolika-text-soft) !important;
@@ -25059,6 +25091,199 @@ export const CostingModule = {
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
           .symbolika-negative-text {
           color: #b4233f !important;
+        }
+
+        /* Final light-theme pass: stronger hierarchy and safe component bounds. */
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :where([class^="symbolika-costing-"], [class*=" symbolika-costing-"]) {
+          box-sizing: border-box;
+          min-inline-size: 0;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(
+            .symbolika-costing-toolbar,
+            .symbolika-costing-smart-toolbar,
+            .symbolika-costing-subtoolbar,
+            .symbolika-costing-order-controls-row,
+            .symbolika-costing-event-filters
+          ) {
+          border-color: var(--symbolika-line-strong) !important;
+          background: color-mix(in srgb, var(--theme--background-normal) 96%, var(--theme--primary) 4%) !important;
+          color: var(--symbolika-text) !important;
+          box-shadow: 0 10px 26px rgb(31 42 50 / 10%) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(
+            .symbolika-costing-detail-section,
+            .symbolika-costing-detail-grid,
+            .symbolika-costing-detail-position-table,
+            .symbolika-costing-local-events,
+            .symbolika-costing-event-list,
+            .symbolika-costing-task-workspace,
+            .symbolika-costing-task-checklist,
+            .symbolika-costing-task-comments,
+            .symbolika-costing-task-comment,
+            .symbolika-costing-task-attachment,
+            .symbolika-costing-health-card,
+            .symbolika-costing-rollback-event,
+            .symbolika-costing-purchase-card,
+            .symbolika-costing-office-workspace
+          ) {
+          border-color: var(--symbolika-line-strong) !important;
+          background: var(--theme--background-normal) !important;
+          color: var(--symbolika-text) !important;
+          box-shadow: 0 8px 22px rgb(31 42 50 / 8%);
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(
+            .symbolika-costing-modal-overlay,
+            .symbolika-costing-detail-overlay,
+            .symbolika-costing-mobile-nav-overlay
+          ) {
+          background: rgb(25 33 39 / 46%) !important;
+          backdrop-filter: blur(6px);
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(
+            .symbolika-costing-modal,
+            .symbolika-costing-order-modal,
+            .symbolika-costing-task-modal,
+            .symbolika-costing-rollback-modal,
+            .symbolika-costing-feedback-modal,
+            .symbolika-costing-detail
+          ) {
+          max-inline-size: min(100%, calc(100vw - 24px)) !important;
+          max-block-size: calc(100dvh - 24px) !important;
+          border-color: var(--symbolika-line-strong) !important;
+          background: var(--theme--background-normal) !important;
+          color: var(--symbolika-text) !important;
+          box-shadow: 0 28px 72px rgb(31 42 50 / 24%) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(
+            .symbolika-costing-modal-head,
+            .symbolika-costing-detail-head,
+            .symbolika-costing-modal-actions,
+            .symbolika-costing-detail-actions
+          ) {
+          border-color: var(--symbolika-line-strong) !important;
+          background: color-mix(in srgb, var(--theme--background-normal) 94%, var(--theme--background-accent)) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(
+            .symbolika-costing-card,
+            .symbolika-costing-work-card,
+            .symbolika-costing-kanban-card,
+            .symbolika-costing-kanban-column,
+            .symbolika-costing-task-stat,
+            .symbolika-costing-admin-head,
+            .symbolika-costing-admin-form,
+            .symbolika-costing-finance-card,
+            .symbolika-costing-dashboard-card,
+            .symbolika-costing-new-order-item
+          ) {
+          border-color: var(--symbolika-line-strong) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(
+            .symbolika-costing-cell-sub,
+            .symbolika-costing-subtle,
+            .symbolika-costing-work-card-subtitle,
+            .symbolika-costing-work-card-description,
+            .symbolika-costing-detail-field > span,
+            .symbolika-costing-event-context,
+            .symbolika-costing-event-head time
+          ) {
+          color: var(--symbolika-muted) !important;
+          opacity: 1 !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(
+            .symbolika-costing-cell-main,
+            .symbolika-costing-product,
+            .symbolika-costing-directory-name,
+            .symbolika-costing-event-title,
+            .symbolika-costing-event-head strong,
+            .symbolika-costing-detail-field strong,
+            h1, h2, h3, h4
+          ) {
+          color: var(--symbolika-text) !important;
+          opacity: 1 !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(.symbolika-costing-pill, .symbolika-costing-date, .symbolika-costing-amount-badge) {
+          font-weight: 800;
+          text-shadow: none !important;
+          box-shadow: none;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(.symbolika-costing-button, .symbolika-costing-mini-button, .symbolika-costing-action-button) {
+          border-color: var(--symbolika-line-strong);
+          background: var(--theme--background-normal);
+          color: var(--symbolika-text);
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(.symbolika-costing-button, .symbolika-costing-mini-button, .symbolika-costing-action-button):not(:disabled):hover {
+          border-color: var(--theme--primary);
+          background: color-mix(in srgb, var(--theme--primary) 10%, var(--theme--background-normal));
+          color: #8f3c0c;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(.symbolika-costing-table-wrap, .symbolika-costing-admin-table-wrap) {
+          max-inline-size: 100%;
+          border-color: var(--symbolika-line-strong) !important;
+          overflow: auto;
+          overscroll-behavior-inline: contain;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(.symbolika-costing-table, .symbolika-costing-directory-table, .symbolika-costing-admin-table) {
+          color: var(--symbolika-text) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(.symbolika-costing-table, .symbolika-costing-directory-table, .symbolika-costing-admin-table) tbody tr:hover td {
+          background: var(--symbolika-panel-hover) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page :is(img, iframe, svg, canvas, video) {
+          max-inline-size: 100%;
+        }
+
+        @media (max-width: 1179px) {
+          html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+            .symbolika-costing-page :is(
+              .symbolika-costing-toolbar,
+              .symbolika-costing-subtoolbar,
+              .symbolika-costing-order-controls-row,
+              .symbolika-costing-event-filters
+            ) {
+            max-inline-size: 100%;
+            overflow: visible;
+          }
+
+          html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+            .symbolika-costing-page :is(
+              .symbolika-costing-actions,
+              .symbolika-costing-filter-panels,
+              .symbolika-costing-order-filter-controls
+            ) {
+            flex-wrap: wrap;
+            max-inline-size: 100%;
+          }
         }
       `;
       document.head.appendChild(style);
@@ -25232,6 +25457,7 @@ export const CostingModule = {
         </div>
 
         <div v-if="hasOrderAdvancedFilters || hasOrderDisplayMode" class="symbolika-costing-order-controls-row">
+          <div class="symbolika-costing-order-filter-controls">
           <label v-if="hasTableSortSelect" class="symbolika-costing-sort symbolika-costing-order-sort">
             Сортировка
             <select
@@ -25367,6 +25593,7 @@ export const CostingModule = {
             <v-icon name="filter_alt" small />
             {{ orderFilterSummary }}
           </div>
+        </div>
         </div>
 
         <div v-if="hasOrderDisplayMode" class="symbolika-costing-view-toggle">

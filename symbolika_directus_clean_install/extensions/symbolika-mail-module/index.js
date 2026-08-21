@@ -1076,6 +1076,132 @@ const MailWorkspace = {
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) .symbolika-mail-reader-title p::before {
           color: #9a430f;
         }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) .symbolika-mail-page {
+          --symbolika-mail-accent-text: #913b09;
+          color: var(--theme--foreground);
+          color-scheme: light;
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) .symbolika-mail-page :where([class^="symbolika-mail-"], [class*=" symbolika-mail-"]) {
+          box-sizing: border-box;
+          min-inline-size: 0;
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) :is(
+          .symbolika-mail-shell,
+          .symbolika-mail-reader,
+          .symbolika-mail-list,
+          .symbolika-mail-side-nav
+        ) {
+          color: var(--theme--foreground) !important;
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) :is(
+          .symbolika-mail-topbar,
+          .symbolika-mail-list-head,
+          .symbolika-mail-reader-head,
+          .symbolika-mail-reply-bar
+        ) {
+          border-color: var(--theme--border-color) !important;
+          background: color-mix(in srgb, var(--theme--background-normal) 96%, var(--theme--primary) 4%) !important;
+          color: var(--theme--foreground) !important;
+          box-shadow: 0 9px 24px rgb(31 42 50 / 10%) !important;
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) :is(
+          .symbolika-mail-search,
+          .symbolika-mail-input,
+          .symbolika-mail-select,
+          .symbolika-mail-textarea,
+          .symbolika-mail-editor-shell
+        ) {
+          border-color: var(--theme--border-color) !important;
+          background: var(--theme--background-normal) !important;
+          color: var(--theme--foreground) !important;
+          color-scheme: light;
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) :is(
+          .symbolika-mail-button,
+          .symbolika-mail-icon-button,
+          .symbolika-mail-link,
+          .symbolika-mail-attachment-action
+        ):not(.is-primary) {
+          border-color: var(--theme--border-color) !important;
+          background: var(--theme--background-normal) !important;
+          color: var(--theme--foreground) !important;
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) :is(
+          .symbolika-mail-mode,
+          .symbolika-mail-scope.is-active,
+          .symbolika-mail-side-folder.is-active,
+          .symbolika-mail-side-folder.is-active small
+        ) {
+          color: var(--symbolika-mail-accent-text) !important;
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) .symbolika-mail-avatar {
+          background: color-mix(in srgb, var(--theme--primary) 17%, var(--theme--background-normal));
+          color: var(--symbolika-mail-accent-text);
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) :is(
+          .symbolika-mail-thread,
+          .symbolika-mail-message,
+          .symbolika-mail-attachment,
+          .symbolika-mail-settings-card,
+          .symbolika-mail-signature-fields,
+          .symbolika-mail-signature-live
+        ) {
+          border-color: var(--theme--border-color-subdued) !important;
+          color: var(--theme--foreground) !important;
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) .symbolika-mail-thread:hover {
+          border-color: var(--theme--border-color) !important;
+          background: var(--theme--background-normal) !important;
+          box-shadow: 0 7px 18px rgb(31 42 50 / 9%);
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) .symbolika-mail-thread.is-active {
+          color: var(--theme--foreground) !important;
+          box-shadow: inset 3px 0 var(--theme--primary), 0 8px 20px rgb(31 42 50 / 11%);
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) .symbolika-mail-dialog {
+          max-inline-size: min(100%, calc(100vw - 24px));
+          max-block-size: calc(100dvh - 24px);
+          border-color: var(--theme--border-color) !important;
+          background: var(--theme--background-normal) !important;
+          color: var(--theme--foreground) !important;
+          box-shadow: 0 28px 72px rgb(31 42 50 / 25%) !important;
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) .symbolika-mail-overlay {
+          padding: 12px;
+          background: rgb(25 33 39 / 46%);
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) :is(
+          .symbolika-mail-thread-name,
+          .symbolika-mail-thread-preview,
+          .symbolika-mail-thread-time,
+          .symbolika-mail-message-from small,
+          .symbolika-mail-message time,
+          .symbolika-mail-settings-card small
+        ) {
+          color: var(--theme--foreground-subdued) !important;
+          opacity: 1 !important;
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) :is(
+          .symbolika-mail-thread-subject,
+          .symbolika-mail-message-from strong,
+          .symbolika-mail-reader-title h2,
+          .symbolika-mail-list-title strong
+        ) {
+          color: var(--theme--foreground) !important;
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) :is(
+          .symbolika-mail-content,
+          .symbolika-mail-reader,
+          .symbolika-mail-list,
+          .symbolika-mail-messages,
+          .symbolika-mail-dialog-body,
+          .symbolika-mail-signature-designer
+        ) {
+          max-inline-size: 100%;
+        }
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) .symbolika-mail-page :is(img, iframe, table, svg) {
+          max-inline-size: 100%;
+        }
         @media (max-width: 1500px) {
           .symbolika-mail-sync-state { min-inline-size: 72px; }
           .symbolika-mail-sync-state > span { display: none; }
