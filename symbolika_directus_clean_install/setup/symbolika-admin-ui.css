@@ -1082,3 +1082,41 @@ html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
     width: auto !important;
   }
 }
+
+/* Keep the primary module rail consistently dark in light themes. A mixed
+   light/dark rail makes inactive icons look detached and leaves dark icons
+   almost invisible on the selected module background. */
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.module-bar, .modules, .module-bar-avatar) {
+  border-color: rgb(255 255 255 / 10%) !important;
+  background: #11171d !important;
+  color: #dce4ee !important;
+  color-scheme: dark !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.module-bar, .modules, .module-bar-avatar) :is(a, button) {
+  background: transparent !important;
+  color: #cbd5e1 !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.module-bar, .modules, .module-bar-avatar) :is(a, button)
+  :is(.v-icon, [class*="icon"], svg) {
+  color: currentColor !important;
+  fill: currentColor !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.module-bar, .modules, .module-bar-avatar) :is(a, button):hover {
+  background: rgb(255 255 255 / 8%) !important;
+  color: #ffffff !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.module-bar, .modules, .module-bar-avatar)
+  :is(a, button):is(.router-link-active, .router-link-exact-active, .active, .is-active, [aria-current="page"]) {
+  background: color-mix(in srgb, var(--theme--primary) 20%, #11171d) !important;
+  color: #ffffff !important;
+  box-shadow: inset 3px 0 0 var(--theme--primary) !important;
+}

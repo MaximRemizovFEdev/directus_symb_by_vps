@@ -108,6 +108,7 @@ const contractorWorkFields = [
   'customer.name',
   'customer_company.name',
   'manager_employee.full_name',
+  'contractor.id',
   'contractor.name',
   'product_name',
   'quantity',
@@ -354,6 +355,9 @@ const orderSummaryFields = [
   'work_completion_percent',
   'work_completion_missing_count',
   'work_completion_missing',
+  'order_items.id',
+  'order_items.product_name',
+  'order_items.quantity',
 ];
 
 const overviewFields = [
@@ -381,6 +385,9 @@ const overviewFields = [
   'work_completion_percent',
   'work_completion_missing_count',
   'work_completion_missing',
+  'order_items.id',
+  'order_items.product_name',
+  'order_items.quantity',
 ];
 
 const orderEconomicsFields = [
@@ -457,6 +464,7 @@ const tabs = [
   { id: 'production_archive', title: 'Архив производства', collection: '' },
   { id: 'labels', title: 'Этикетки', collection: 'orders_items' },
   { id: 'contractor_work', title: 'Мои работы', collection: 'contractor_work' },
+  { id: 'contractor_overview', title: 'Работы у контрагентов', collection: 'contractor_work' },
   { id: 'office', title: 'Офис', collection: 'office_items_in_office' },
 ];
 
@@ -560,7 +568,7 @@ const moduleSections = {
   },
   management: {
     title: 'Управление',
-    tabs: ['order_economics', 'costing', 'automation_control', 'admin_customer_notifications'],
+    tabs: ['order_economics', 'costing', 'contractor_overview', 'automation_control', 'admin_customer_notifications'],
     roles: ['Administrator', 'Управляющий'],
   },
   procurement: {
@@ -1209,6 +1217,7 @@ export const CostingModule = {
       workDeadlineTo: '',
       workStatusPanelOpen: false,
       workProductionStatusFilter: '',
+      contractorOverviewContractorFilter: '',
       costingFilterPanels: {
         date: false,
         deadline: false,
@@ -1222,6 +1231,9 @@ export const CostingModule = {
       purchaseStatusFilter: 'pending',
       contractorRows: [],
       adminRows: {},
+      adminCapabilityContractorFilter: '',
+      adminCapabilityTypeFilter: 'all',
+      adminCapabilityActivityFilter: 'active',
       procurementBatches: [],
       procurementExpandedBatches: {},
       procurementExpandedLines: {},
@@ -1523,8 +1535,29 @@ export const CostingModule = {
           return statusDiff || String(left.name || '').localeCompare(String(right.name || ''), 'ru');
         });
       }
+      if (this.activeTab === 'admin_routing') {
+        const contractorId = String(this.adminCapabilityContractorFilter || '');
+        if (contractorId) {
+          scopedRows = scopedRows.filter((row) => String(this.entityId(row.contractor) || '') === contractorId);
+        }
+        if (this.adminCapabilityTypeFilter !== 'all') {
+          scopedRows = scopedRows.filter((row) => row.capability_type === this.adminCapabilityTypeFilter);
+        }
+        if (this.adminCapabilityActivityFilter !== 'all') {
+          const active = this.adminCapabilityActivityFilter === 'active';
+          scopedRows = scopedRows.filter((row) => (row.is_active !== false) === active);
+        }
+      }
       if (!query || !['admin', 'production', 'procurement', 'management'].includes(this.moduleSection)) return scopedRows;
       return scopedRows.filter((row) => this.adminRowSearchText(row).includes(query));
+    },
+
+    adminCapabilityCounts() {
+      const rows = this.adminRows.admin_routing || [];
+      return {
+        shown: this.activeTab === 'admin_routing' ? this.activeAdminRows.length : 0,
+        total: rows.length,
+      };
     },
 
     procurementCounts() {
@@ -1595,6 +1628,10 @@ export const CostingModule = {
 
     canSeeCostingTotals() {
       return this.currentRoleName === 'Administrator';
+    },
+
+    canEditItemCosts() {
+      return ['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName);
     },
 
     canManageProcurementStatus() {
@@ -1807,6 +1844,7 @@ export const CostingModule = {
       else if (this.activeTab === 'production') rows = this.visibleProductionRows;
       else if (this.activeTab === 'screen') rows = this.visibleScreenRows;
       else if (this.activeTab === 'contractor_work') rows = this.visibleContractorWorkRows;
+      else if (this.activeTab === 'contractor_overview') rows = this.visibleContractorOverviewRows;
       else if (this.activeTab === 'production_archive') rows = this.visibleProductionArchiveRows;
       else if (this.activeTab === 'office') { rows = this.visibleOfficeIssueRows; type = 'office_issue'; }
 
@@ -1861,7 +1899,7 @@ export const CostingModule = {
         { title: 'Производство', tabs: ['production', 'screen', 'labels'] },
         { title: 'Склад', tabs: ['admin_inventory'] },
         { title: 'Закупки', tabs: ['admin_procurement'] },
-        { title: 'Управление', tabs: ['order_economics', 'costing', 'automation_control'] },
+        { title: 'Управление', tabs: ['order_economics', 'costing', 'contractor_overview', 'automation_control'] },
         { title: 'Офис', tabs: ['office'] },
         { title: 'Админка', tabs: ['admin_employees', 'admin_users', 'admin_positions', 'contractors', 'admin_categories', 'admin_subcategories', 'admin_methods', 'admin_routing', 'admin_order_statuses', 'admin_production_statuses'] },
         { title: 'Финансы админки', tabs: ['admin_finance_dashboard', 'payroll', 'expenses', 'contractor_settlements', 'monthly_results'] },
@@ -1883,7 +1921,7 @@ export const CostingModule = {
       if (['estimates', 'costing', 'items_archive', 'purchasing'].includes(this.activeTab)) return baseFilters.filter((filter) => filter.id === 'all');
       if (['admin_finance_dashboard', 'payroll', 'expenses', 'contractor_settlements', 'monthly_results', 'finance', 'gift_certificates', 'clients', 'companies', 'contractors'].includes(this.activeTab) || this.isAdminDictionaryTab) return baseFilters.filter((filter) => filter.id === 'all');
       if (this.activeTab === 'office') return baseFilters.filter((filter) => filter.id === 'all');
-      if (['production', 'screen', 'production_archive', 'contractor_work', 'labels'].includes(this.activeTab)) return baseFilters.filter((filter) => filter.id === 'all');
+      if (['production', 'screen', 'production_archive', 'contractor_work', 'contractor_overview', 'labels'].includes(this.activeTab)) return baseFilters.filter((filter) => filter.id === 'all');
 
       return baseFilters.filter((filter) => this.queueRows.some((row) => filter.id === 'all' || row.filters.includes(filter.id)));
     },
@@ -1900,7 +1938,7 @@ export const CostingModule = {
     },
 
     workDeadlineQuickFilters() {
-      return baseFilters.filter((item) => ['all', 'today', 'overdue'].includes(item.id));
+      return baseFilters.filter((item) => ['all', 'today', 'overdue', 'this_week', 'next_week', 'this_month', 'next_month'].includes(item.id));
     },
 
     hasOrderAdvancedFilters() {
@@ -1971,7 +2009,7 @@ export const CostingModule = {
     },
 
     hasWorkDeadlineFilters() {
-      return ['production', 'screen', 'production_archive', 'contractor_work', 'labels'].includes(this.activeTab);
+      return ['production', 'screen', 'production_archive', 'contractor_work', 'contractor_overview', 'labels'].includes(this.activeTab);
     },
 
     activeWorkDeadlineFiltersCount() {
@@ -2315,6 +2353,35 @@ export const CostingModule = {
 
     visibleContractorWorkRows() {
       return this.sortRows(this.filterRows(this.contractorWorkRows, false), 'contractor_work');
+    },
+
+    contractorOverviewContractorOptions() {
+      const options = new Map();
+      (this.contractorWorkRows || []).forEach((row) => {
+        const id = this.contractorId(row.contractor);
+        const name = this.relatedName(row.contractor);
+        if (id && name) options.set(String(id), name);
+      });
+      return [...options.entries()]
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    },
+
+    visibleContractorOverviewRows() {
+      const contractorId = String(this.contractorOverviewContractorFilter || '');
+      const rows = this.filterRowsByArchiveMode(this.contractorWorkRows || [])
+        .filter((row) => !contractorId || String(this.contractorId(row.contractor) || '') === contractorId);
+      return this.sortRows(rows, 'contractor_work');
+    },
+
+    contractorOverviewStats() {
+      const rows = this.visibleContractorOverviewRows || [];
+      return {
+        contractors: new Set(rows.map((row) => String(this.contractorId(row.contractor) || '')).filter(Boolean)).size,
+        positions: rows.length,
+        quantity: rows.reduce((sum, row) => sum + Number(row.quantity || 0), 0),
+        overdue: rows.filter((row) => this.isOverdue(row.deadline) && !this.isWorkArchived(row)).length,
+      };
     },
 
     visibleLabelRows() {
@@ -3177,6 +3244,7 @@ export const CostingModule = {
         production: ['production_work'],
         screen: ['screen_printing_work'],
         contractor_work: ['contractor_work'],
+        contractor_overview: ['contractor_work'],
         production_archive: ['production_work', 'screen_printing_work'],
         office: this.officeBucket === 'issued' ? ['office_archive', 'office_archive_items'] : ['office_issue', 'office_rows'],
         finance: ['finance', 'finance_items'],
@@ -3206,7 +3274,7 @@ export const CostingModule = {
         'all_orders', 'my_orders', 'orders_archive',
         'deadlines', 'costing', 'items_archive', 'office', 'finance',
         'order_economics',
-        'production', 'screen', 'contractor_work', 'production_archive',
+        'production', 'screen', 'contractor_work', 'contractor_overview', 'production_archive',
         'admin_procurement',
         'tasks', 'tasks_archive',
       ].includes(this.activeTab);
@@ -3246,6 +3314,12 @@ export const CostingModule = {
     orderDeadlineTo() { this.completeActivePagingSoon(); },
     orderDateFrom() { this.completeActivePagingSoon(); },
     orderDateTo() { this.completeActivePagingSoon(); },
+    workArchiveMode() { this.completeActivePagingSoon(); },
+    workDeadlinePreset() { this.completeActivePagingSoon(); },
+    workDeadlineFrom() { this.completeActivePagingSoon(); },
+    workDeadlineTo() { this.completeActivePagingSoon(); },
+    workProductionStatusFilter() { this.completeActivePagingSoon(); },
+    contractorOverviewContractorFilter() { this.completeActivePagingSoon(); },
     financeCustomerFilter() { this.completeActivePagingSoon(); },
     financeCompanyFilter() { this.completeActivePagingSoon(); },
     financeDateFrom() { this.completeActivePagingSoon(); },
@@ -4456,6 +4530,10 @@ export const CostingModule = {
       }
       if (this.workDeadlinePreset === 'today') matchesDeadline = this.isToday(row.deadline);
       if (this.workDeadlinePreset === 'overdue') matchesDeadline = this.isOverdue(row.deadline);
+      if (this.workDeadlinePreset === 'this_week') matchesDeadline = this.isCurrentWeek(row.deadline);
+      if (this.workDeadlinePreset === 'next_week') matchesDeadline = this.isNextWeek(row.deadline);
+      if (this.workDeadlinePreset === 'this_month') matchesDeadline = this.isCurrentMonth(row.deadline);
+      if (this.workDeadlinePreset === 'next_month') matchesDeadline = this.isNextMonth(row.deadline);
       if (!matchesStatus || !matchesDeadline) return false;
       return this.matchesDateRange(row.deadline, this.workDeadlineFrom, this.workDeadlineTo);
     },
@@ -4990,14 +5068,14 @@ export const CostingModule = {
       if (allowed.has('clients') || allowed.has('companies')) tasks.push(this.loadFinanceRows(), this.loadCustomers(), this.loadCompanies(), this.loadGiftCertificates(), this.loadEmployees());
       if (!allowed.has('finance') && !allowed.has('clients') && !allowed.has('companies') && (allowed.has('my_orders') || allowed.has('all_orders') || allowed.has('deadlines') || allowed.has('office'))) tasks.push(this.loadCustomers(), this.loadCompanies());
       if (allowed.has('contractors')) tasks.push(this.loadContractorRows());
-      if (allowed.has('production') || allowed.has('screen') || allowed.has('production_archive') || allowed.has('contractor_work') || allowed.has('my_orders')) tasks.push(this.loadProductionStatuses());
+      if (allowed.has('production') || allowed.has('screen') || allowed.has('production_archive') || allowed.has('contractor_work') || allowed.has('contractor_overview') || allowed.has('my_orders')) tasks.push(this.loadProductionStatuses());
       if (allowed.has('my_orders') || allowed.has('all_orders') || allowed.has('orders_archive') || allowed.has('deadlines')) tasks.push(this.loadOrderStatuses());
       const canReadBothWorkAreas = ['Administrator', 'Управляющий'].includes(this.currentRoleName);
       const canReadProductionArea = canReadBothWorkAreas || this.currentRoleName === 'Производство';
       const canReadScreenArea = canReadBothWorkAreas || this.currentRoleName === 'Шелкография';
       if (canReadProductionArea && (allowed.has('production') || allowed.has('production_archive') || allowed.has('labels'))) tasks.push(this.loadWorkRows('production_work'));
       if (canReadScreenArea && (allowed.has('screen') || allowed.has('production_archive') || allowed.has('labels'))) tasks.push(this.loadWorkRows('screen_printing_work'));
-      if (allowed.has('contractor_work')) tasks.push(this.loadContractorWorkRows());
+      if (allowed.has('contractor_work') || allowed.has('contractor_overview')) tasks.push(this.loadContractorWorkRows());
       if (allowed.has('office')) tasks.push(this.loadOfficeRows(), this.loadOfficeIssueRows(), this.loadOfficeArchiveRows(), this.loadOfficeArchiveItems(), this.loadPaymentTypes(), this.loadGiftCertificates());
       if (allowed.has('my_orders') || allowed.has('all_orders')) tasks.push(this.loadGiftCertificates());
       if (this.canCreateOrders) tasks.push(this.loadCreateOrderDictionaries());
@@ -5062,7 +5140,7 @@ export const CostingModule = {
           await this.loadWorkRows('production_work');
         } else if (this.activeTab === 'screen') {
           await this.loadWorkRows('screen_printing_work');
-        } else if (this.activeTab === 'contractor_work') {
+        } else if (['contractor_work', 'contractor_overview'].includes(this.activeTab)) {
           await this.loadContractorWorkRows();
         } else if (this.activeTab === 'production_archive') {
           const requests = [];
@@ -5566,6 +5644,9 @@ export const CostingModule = {
           'contractor_1.supplies_textile_blanks',
           'contractor_1.supplies_merch_blanks',
           'contractor_1_cost',
+          'contractor_2.id',
+          'contractor_2.name',
+          'contractor_2_cost',
           'technical_task_text',
           'url',
           'layout_revision_url_snapshot',
@@ -5587,8 +5668,11 @@ export const CostingModule = {
           'production_comment',
         ];
         const ownsOrder = this.orderBelongsToCurrentEmployee(row);
+        const ownOrderFields = this.canEditItemCosts
+          ? managerFields
+          : managerFields.filter((field) => !['contractor_1_cost', 'contractor_2_cost'].includes(field));
         const fields = (['Менеджер', 'Administrator', 'Управляющий'].includes(this.currentRoleName) || ownsOrder)
-          ? managerFields.join(',')
+          ? ownOrderFields.join(',')
           : (this.currentRoleName === 'Дизайнер'
             ? 'id,order,product_name,quantity,deadline,technical_task_text,url,needs_designer_help,designer_comment,designer_source_url,layout_preview_url,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at'
             : 'id,order,product_name,quantity,deadline,item_status,technical_task_text,url,production_status,production_comment');
@@ -5725,7 +5809,7 @@ export const CostingModule = {
 
       if (!entity) return;
       this.detail = null;
-      this.entityDetail = { type, row, entity };
+      this.entityDetail = { type, row, entity, editing: false, draft: null };
       if (['customer', 'company'].includes(type) && entity.id) this.updateDeepLinkUrl(type, entity.id);
       else this.updateDeepLinkUrl('', null);
     },
@@ -5775,6 +5859,9 @@ export const CostingModule = {
           'contractor_1.supplies_textile_blanks',
           'contractor_1.supplies_merch_blanks',
           'contractor_1_cost',
+          'contractor_2.id',
+          'contractor_2.name',
+          'contractor_2_cost',
           'technical_task_text',
           'url',
           'layout_revision_url_snapshot',
@@ -5799,9 +5886,6 @@ export const CostingModule = {
           ...managerFields,
           'internal_route_production',
           'internal_route_screen',
-          'contractor_2.id',
-          'contractor_2.name',
-          'contractor_2_cost',
         ];
         const workerFields = [
           'id',
@@ -5819,9 +5903,12 @@ export const CostingModule = {
           'url',
         ];
         const ownsOrder = this.orderBelongsToCurrentEmployee(row);
+        const ownOrderFields = this.canEditItemCosts
+          ? managerFields
+          : managerFields.filter((field) => !['contractor_1_cost', 'contractor_2_cost'].includes(field));
         const requestedFields = ['Administrator', 'Управляющий'].includes(this.currentRoleName)
           ? privilegedFields
-          : (this.currentRoleName === 'Менеджер' || ownsOrder ? managerFields : workerFields);
+          : (this.currentRoleName === 'Менеджер' || ownsOrder ? ownOrderFields : workerFields);
         params.set('fields', requestedFields.join(','));
         params.set('filter[order][_eq]', String(orderId));
         params.set('sort', 'id');
@@ -5923,6 +6010,35 @@ export const CostingModule = {
 
     orderRowKey(row) {
       return String(this.entityId(this.orderId(row)) || row?.id || row?.order_number || '');
+    },
+
+    orderItemsPreviewRows(row) {
+      if (!row) return [];
+      const embeddedItems = Array.isArray(row.order_items) ? row.order_items : [];
+      const cachedItems = this.expandedOrderItems?.[String(this.entityId(this.orderId(row)))] || [];
+      const source = embeddedItems.length ? embeddedItems : cachedItems;
+      return source.filter((item) => item && (item.product_name || Number(item.quantity || 0) > 0));
+    },
+
+    orderItemsPreviewText(row, limit = 3) {
+      const items = this.orderItemsPreviewRows(row);
+      if (!items.length) return 'Без позиций';
+      const visible = items.slice(0, limit).map((item) => {
+        const name = String(item.product_name || 'Позиция').trim();
+        const quantity = this.formatQuantity(item.quantity || 0);
+        return `${name} · ${quantity} шт.`;
+      });
+      if (items.length > limit) visible.push(`ещё ${items.length - limit}`);
+      return visible.join(' • ');
+    },
+
+    orderItemsPreviewTitle(row) {
+      const items = this.orderItemsPreviewRows(row);
+      if (!items.length) return 'В заказе пока нет позиций';
+      return items.map((item) => {
+        const name = String(item.product_name || 'Позиция').trim();
+        return `${name} — ${this.formatQuantity(item.quantity || 0)} шт.`;
+      }).join('\n');
     },
 
     async toggleOrderRow(row) {
@@ -7884,6 +8000,17 @@ export const CostingModule = {
       if (this.activeAdminConfig.collection === 'procurement_requests') this.updateDeepLinkUrl('', null);
     },
 
+    startAdminCapabilityCreate() {
+      this.startAdminCreate();
+      if (this.activeTab !== 'admin_routing' || this.adminEditing !== 'new') return;
+      if (this.adminCapabilityContractorFilter) {
+        this.adminForm.contractor = this.adminCapabilityContractorFilter;
+      }
+      if (this.adminCapabilityTypeFilter !== 'all') {
+        this.adminForm.capability_type = this.adminCapabilityTypeFilter;
+      }
+    },
+
     startAdminEdit(row) {
       this.adminEditing = row.id;
       this.adminForm = this.adminNormalizeForm(row);
@@ -8897,7 +9024,7 @@ export const CostingModule = {
     async loadCustomers() {
       try {
         const params = new URLSearchParams({
-          fields: 'id,name,phone,email,vk_page_url,notification_channel,telegram_chat_id,vk_peer_id,company.id,company.name,manager.id,manager.full_name,orders_total_sum,payments_total_in,balance,opening_balance_amount,opening_balance_direction,opening_balance_date,opening_balance_comment',
+          fields: 'id,name,phone,email,comment,vk_page_url,notification_channel,telegram_chat_id,vk_peer_id,company.id,company.name,manager.id,manager.full_name,orders_total_sum,payments_total_in,balance,opening_balance_amount,opening_balance_direction,opening_balance_date,opening_balance_comment',
           sort: 'name,id',
         });
         await this.loadCompletePagedCollection('customers', '/items/customers', params, (rows, append) => {
@@ -8911,7 +9038,7 @@ export const CostingModule = {
     async loadCompanies() {
       try {
         const params = new URLSearchParams({
-          fields: 'id,name,phone,email,notification_channel,telegram_chat_id,vk_peer_id,manager.id,manager.full_name,orders_total_sum,payments_total_in,balance,opening_balance_amount,opening_balance_direction,opening_balance_date,opening_balance_comment',
+          fields: 'id,name,phone,email,comment,notification_channel,telegram_chat_id,vk_peer_id,manager.id,manager.full_name,orders_total_sum,payments_total_in,balance,opening_balance_amount,opening_balance_direction,opening_balance_date,opening_balance_comment',
           sort: 'name,id',
         });
         await this.loadCompletePagedCollection('companies', '/items/customer_companies', params, (rows, append) => {
@@ -9340,6 +9467,7 @@ export const CostingModule = {
         contractor_1: '',
         contractor_1_cost: '',
         contractor_2: '',
+        contractor_2_cost: '',
         technical_task_text: '',
         tz_constructor_values: {},
         url: '',
@@ -9704,6 +9832,10 @@ export const CostingModule = {
       return this.itemNeedsBlank(item) ? 'contractor_2' : 'contractor_1';
     },
 
+    executorCostField(item) {
+      return this.itemNeedsBlank(item) ? 'contractor_2_cost' : 'contractor_1_cost';
+    },
+
     selectedExecutorId(item) {
       return this.entityId(item?.[this.executorField(item)]);
     },
@@ -9715,6 +9847,7 @@ export const CostingModule = {
       const executorIds = executorOptions.map((row) => Number(row.id));
       if (!executorIds.includes(Number(this.entityId(item[executorField]) || 0))) {
         item[executorField] = executorIds.length === 1 ? executorIds[0] : '';
+        item[this.executorCostField(item)] = '';
       }
 
       if (this.itemNeedsBlank(item) && item.blank_source === 'supplier') {
@@ -10323,8 +10456,11 @@ export const CostingModule = {
               application_method: item.application_method ? Number(item.application_method) : null,
               blank_source: this.itemNeedsBlank(item) ? (item.blank_source || 'supplier') : 'none',
               contractor_1: item.contractor_1 ? Number(item.contractor_1) : null,
-              contractor_1_cost: this.itemNeedsBlank(item) && item.blank_source === 'supplier' ? this.parseMoney(item.contractor_1_cost) : 0,
+              contractor_1_cost: (!this.itemNeedsBlank(item) || item.blank_source === 'supplier') ? this.parseMoney(item.contractor_1_cost) : 0,
               contractor_2: this.itemNeedsBlank(item) && item.contractor_2 ? Number(item.contractor_2) : null,
+              ...(this.canEditItemCosts ? {
+                contractor_2_cost: this.itemNeedsBlank(item) ? this.parseMoney(item.contractor_2_cost) : 0,
+              } : {}),
               deadline: item.deadline || form.deadline || null,
               item_status: 'new',
               office_status: 'not_in_office',
@@ -10885,8 +11021,11 @@ export const CostingModule = {
             application_method: form.application_method ? Number(form.application_method) : null,
             blank_source: this.itemNeedsBlank(form) ? (form.blank_source || 'supplier') : 'none',
             contractor_1: form.contractor_1 ? Number(form.contractor_1) : null,
-            contractor_1_cost: this.itemNeedsBlank(form) && form.blank_source === 'supplier' ? this.parseMoney(form.contractor_1_cost) : 0,
+            contractor_1_cost: (!this.itemNeedsBlank(form) || form.blank_source === 'supplier') ? this.parseMoney(form.contractor_1_cost) : 0,
             contractor_2: this.itemNeedsBlank(form) && form.contractor_2 ? Number(form.contractor_2) : null,
+            ...(this.canEditItemCosts ? {
+              contractor_2_cost: this.itemNeedsBlank(form) ? this.parseMoney(form.contractor_2_cost) : 0,
+            } : {}),
             deadline: form.deadline || order.deadline || null,
             item_status: 'new',
             // A new item never inherits the finished order's office state.
@@ -11219,8 +11358,8 @@ export const CostingModule = {
       this.error = '';
 
       try {
-        const relationFields = ['production_status', 'product_category', 'product_subcategory', 'application_method', 'contractor_1'];
-        const numberFields = ['quantity', 'price_per_unit', 'contractor_1_cost'];
+        const relationFields = ['production_status', 'product_category', 'product_subcategory', 'application_method', 'contractor_1', 'contractor_2'];
+        const numberFields = ['quantity', 'price_per_unit', 'contractor_1_cost', 'contractor_2_cost'];
         const textFields = ['product_name', 'technical_task_text', 'url', 'blank_source', 'designer_comment', 'designer_source_url'];
         const booleanFields = ['blank_ordered', 'needs_designer_help', 'internal_route_production', 'internal_route_screen'];
         const normalized = relationFields.includes(field)
@@ -11279,6 +11418,8 @@ export const CostingModule = {
             'production_status.id',
             'production_status.name',
             'order_sum',
+            'contractor_1_cost',
+            'contractor_2_cost',
             'internal_route_production',
             'internal_route_screen',
           ];
@@ -11293,6 +11434,16 @@ export const CostingModule = {
         const next = { ...this.saving };
         delete next[key];
         this.saving = next;
+      }
+    },
+
+    async saveOrderItemContractor(row, field, value) {
+      const previousId = Number(this.entityId(row?.[field]) || 0);
+      const nextId = Number(value || 0);
+      await this.saveOrderItemField(row, field, value);
+      if (previousId !== nextId) {
+        const costField = field === 'contractor_2' ? 'contractor_2_cost' : 'contractor_1_cost';
+        await this.saveOrderItemField(row, costField, 0);
       }
     },
 
@@ -13368,6 +13519,7 @@ export const CostingModule = {
         production: 'precision_manufacturing',
         screen: 'format_paint',
         production_archive: 'archive',
+        contractor_overview: 'handshake',
         costing: 'price_check',
         office: 'storefront',
         finance: 'receipt_long',
@@ -13503,6 +13655,77 @@ export const CostingModule = {
       return '';
     },
 
+    canEditEntityProfile() {
+      if (!['customer', 'company'].includes(this.entityDetail?.type) || !this.entityDetail?.entity?.id) return false;
+      if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) return true;
+      return ['Менеджер', 'Производство', 'Шелкография', 'Дизайнер'].includes(this.currentRoleName)
+        && !!this.currentEmployeeId;
+    },
+
+    startEntityProfileEdit() {
+      if (!this.canEditEntityProfile()) return;
+      const entity = this.entityDetail.entity;
+      this.entityDetail.editing = true;
+      this.entityDetail.draft = {
+        name: String(entity.name || ''),
+        phone: String(entity.phone || ''),
+        email: String(entity.email || ''),
+        comment: String(entity.comment || ''),
+        company: this.entityDetail.type === 'customer' ? (this.entityId(entity.company) || '') : '',
+        vk_page_url: this.entityDetail.type === 'customer' ? String(entity.vk_page_url || '') : '',
+      };
+    },
+
+    cancelEntityProfileEdit() {
+      if (!this.entityDetail) return;
+      this.entityDetail.editing = false;
+      this.entityDetail.draft = null;
+    },
+
+    async saveEntityProfile() {
+      if (!this.canEditEntityProfile() || !this.entityDetail?.draft) return;
+      const { type, entity, draft } = this.entityDetail;
+      const name = String(draft.name || '').trim();
+      if (!name) {
+        this.error = type === 'company' ? 'Укажите название компании.' : 'Укажите имя клиента.';
+        return;
+      }
+
+      const collection = type === 'company' ? 'customer_companies' : 'customers';
+      const savingKey = `entity-profile:${type}:${entity.id}`;
+      const body = {
+        name,
+        phone: String(draft.phone || '').trim() || null,
+        email: String(draft.email || '').trim() || null,
+        comment: String(draft.comment || '').trim() || null,
+      };
+      if (type === 'customer') {
+        body.company = draft.company ? Number(draft.company) : null;
+        body.vk_page_url = String(draft.vk_page_url || '').trim() || null;
+      }
+
+      this.saving = { ...this.saving, [savingKey]: true };
+      this.error = '';
+      try {
+        await this.request(`/items/${collection}/${entity.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(body),
+        });
+        await Promise.all([this.loadCustomers(), this.loadCompanies(), this.loadFinanceRows()]);
+        const source = type === 'company' ? this.companies : this.customers;
+        const refreshed = source.find((item) => String(item.id) === String(entity.id));
+        if (refreshed && this.entityDetail) this.entityDetail.entity = refreshed;
+        this.cancelEntityProfileEdit();
+        this.feedbackSavedMessage = type === 'company' ? 'Данные компании сохранены.' : 'Данные клиента сохранены.';
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        const next = { ...this.saving };
+        delete next[savingKey];
+        this.saving = next;
+      }
+    },
+
     entityDetailFields() {
       if (!this.entityDetail) return [];
       const entity = this.entityDetail.entity;
@@ -13532,6 +13755,8 @@ export const CostingModule = {
           { label: 'Доступно по сертификатам', value: this.formatMoney(certificateSummary.remaining) },
         );
       }
+
+      if (entity.comment) fields.push({ label: 'Комментарий', value: entity.comment });
 
       fields.push(
         { label: 'Сумма заказов', value: this.formatMoney(entity.orders_total_sum) },
@@ -15432,6 +15657,42 @@ export const CostingModule = {
 
         .symbolika-costing-admin-table {
           min-inline-size: 820px;
+        }
+
+        .symbolika-costing-admin-filterbar {
+          display: flex;
+          align-items: end;
+          gap: 10px;
+          border: 1px solid var(--symbolika-line);
+          border-radius: 12px;
+          background: color-mix(in srgb, var(--symbolika-panel) 94%, transparent);
+          padding: 10px 12px;
+        }
+
+        .symbolika-costing-admin-filter {
+          display: grid;
+          gap: 5px;
+          min-inline-size: 190px;
+          color: var(--symbolika-muted);
+          font-size: 11px;
+          font-weight: 700;
+        }
+
+        .symbolika-costing-admin-filter:first-child {
+          flex: 1 1 300px;
+          max-inline-size: 420px;
+        }
+
+        .symbolika-costing-admin-filter .symbolika-costing-select {
+          min-block-size: 38px;
+        }
+
+        .symbolika-costing-admin-filter-summary {
+          align-self: center;
+          margin-inline-start: auto;
+          color: var(--symbolika-muted);
+          font-size: 12px;
+          white-space: nowrap;
         }
 
         .symbolika-costing-procurement-toolbar {
@@ -17718,6 +17979,20 @@ export const CostingModule = {
           line-height: 1.25;
           text-overflow: ellipsis;
           white-space: nowrap;
+        }
+
+        .symbolika-order-items-preview {
+          display: block;
+          min-inline-size: 0;
+          max-inline-size: 100%;
+          overflow: hidden;
+          color: color-mix(in srgb, var(--theme--foreground-subdued) 88%, var(--theme--primary));
+          font-size: 10.5px;
+          font-weight: 700;
+          line-height: 1.25;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          cursor: help;
         }
 
         .symbolika-attention-items-summary {
@@ -20885,44 +21160,27 @@ export const CostingModule = {
           font-weight: 800;
         }
 
-        .symbolika-contractor-brief-grid {
-          display: grid;
-          grid-template-columns: minmax(150px, .55fr) minmax(0, 1.45fr);
-          gap: 10px;
-        }
-
-        .symbolika-contractor-brief-card {
-          display: grid;
-          align-content: start;
-          gap: 6px;
-          min-inline-size: 0;
+        .symbolika-contractor-brief-field {
+          inline-size: 100%;
+          min-block-size: 230px;
+          resize: vertical;
           border: 1px solid var(--symbolika-line);
           border-radius: 11px;
           background: color-mix(in srgb, var(--theme--background-normal) 88%, transparent);
-          padding: 11px 12px;
-        }
-
-        .symbolika-contractor-brief-card.is-wide {
-          grid-column: 1 / -1;
-        }
-
-        .symbolika-contractor-brief-card > span {
-          color: var(--symbolika-muted);
-          font-size: 9.5px;
-          font-weight: 850;
-          letter-spacing: .055em;
-          text-transform: uppercase;
-        }
-
-        .symbolika-contractor-brief-card > strong,
-        .symbolika-contractor-brief-card > p {
-          margin: 0;
+          padding: 12px 14px;
           color: var(--symbolika-text);
           font-size: 12px;
-          font-weight: 750;
-          line-height: 1.5;
+          font-family: inherit;
+          font-weight: 650;
+          line-height: 1.55;
           white-space: pre-wrap;
           overflow-wrap: anywhere;
+        }
+
+        .symbolika-contractor-brief-field:focus {
+          outline: none;
+          border-color: color-mix(in srgb, var(--symbolika-orange) 72%, var(--symbolika-line));
+          box-shadow: 0 0 0 2px color-mix(in srgb, var(--symbolika-orange) 14%, transparent);
         }
 
         .symbolika-contractor-brief-links {
@@ -21025,9 +21283,12 @@ export const CostingModule = {
         @media (max-width: 620px) {
           .symbolika-costing-item-section-grid,
           .symbolika-costing-item-section-grid.is-task,
-          .symbolika-costing-detail-disclosure-grid,
-          .symbolika-contractor-brief-grid {
+          .symbolika-costing-detail-disclosure-grid {
             grid-template-columns: minmax(0, 1fr);
+          }
+
+          .symbolika-contractor-brief-field {
+            min-block-size: 280px;
           }
 
           .symbolika-contractor-brief-head {
@@ -21231,6 +21492,88 @@ export const CostingModule = {
           width: 25% !important;
         }
 
+        .symbolika-contractor-overview {
+          display: grid;
+          gap: 14px;
+        }
+
+        .symbolika-contractor-overview-stats {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(140px, 1fr));
+          gap: 10px;
+        }
+
+        .symbolika-contractor-overview-stat {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          min-block-size: 58px;
+          padding: 12px 16px;
+          border: 1px solid var(--theme--border-color-subdued);
+          border-radius: 12px;
+          background: var(--theme--background-accent);
+        }
+
+        .symbolika-contractor-overview-stat span {
+          color: var(--theme--foreground-subdued);
+          font-size: 12px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: .03em;
+        }
+
+        .symbolika-contractor-overview-stat strong {
+          color: var(--theme--foreground);
+          font-size: 20px;
+          line-height: 1;
+        }
+
+        .symbolika-contractor-overview-stat.is-alert {
+          border-color: color-mix(in srgb, var(--theme--danger) 55%, transparent);
+          background: color-mix(in srgb, var(--theme--danger) 9%, var(--theme--background-accent));
+        }
+
+        .symbolika-contractor-overview-stat.is-alert strong {
+          color: var(--theme--danger);
+        }
+
+        .symbolika-contractor-overview-filter .symbolika-costing-select {
+          min-inline-size: 240px;
+        }
+
+        .symbolika-contractor-overview-table col.symbolika-contractor-overview-contractor-col { width: 18% !important; }
+        .symbolika-contractor-overview-table col.symbolika-contractor-overview-order-col { width: 11% !important; }
+        .symbolika-contractor-overview-table col.symbolika-contractor-overview-item-col { width: 22% !important; }
+        .symbolika-contractor-overview-table col.symbolika-contractor-overview-customer-col { width: 21% !important; }
+        .symbolika-contractor-overview-table col.symbolika-contractor-overview-deadline-col { width: 14% !important; }
+        .symbolika-contractor-overview-table col.symbolika-contractor-overview-status-col { width: 14% !important; }
+
+        .symbolika-contractor-overview-name {
+          display: block;
+          overflow: hidden;
+          color: var(--theme--primary);
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .symbolika-contractor-overview-deadline {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        @media (max-width: 760px) {
+          .symbolika-contractor-overview-stats {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .symbolika-contractor-overview-filter,
+          .symbolika-contractor-overview-filter .symbolika-costing-select {
+            inline-size: 100%;
+            min-inline-size: 0;
+          }
+        }
+
         .symbolika-costing-table th.symbolika-costing-work-check-cell,
         .symbolika-costing-table td.symbolika-costing-work-check-cell {
           inline-size: 34px;
@@ -21428,6 +21771,26 @@ export const CostingModule = {
         }
 
         @media (max-width: 620px) {
+          .symbolika-costing-admin-filterbar {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            align-items: end;
+          }
+
+          .symbolika-costing-admin-filter,
+          .symbolika-costing-admin-filter:first-child {
+            min-inline-size: 0;
+            max-inline-size: none;
+          }
+
+          .symbolika-costing-admin-filter:first-child {
+            grid-column: 1 / -1;
+          }
+
+          .symbolika-costing-admin-filter-summary {
+            margin-inline-start: 0;
+          }
+
           .symbolika-costing-procurement-toolbar {
             flex-wrap: wrap;
           }
@@ -26138,7 +26501,7 @@ export const CostingModule = {
 
         <div v-if="hasWorkDeadlineFilters" class="symbolika-costing-filter-bar">
           <div class="symbolika-costing-filter-groups">
-            <template v-if="['production', 'screen'].includes(activeTab)">
+            <template v-if="['production', 'screen', 'contractor_overview'].includes(activeTab)">
               <span class="symbolika-costing-toggle-label">Показывать</span>
               <button
                 v-for="mode in [{ id: 'active', title: 'Активные' }, { id: 'archive', title: 'Архив' }, { id: 'all', title: 'Все' }]"
@@ -26152,6 +26515,15 @@ export const CostingModule = {
               </button>
               <span class="symbolika-costing-toggle-divider" aria-hidden="true"></span>
             </template>
+            <label v-if="activeTab === 'contractor_overview'" class="symbolika-costing-sort symbolika-contractor-overview-filter">
+              Контрагент
+              <select v-model="contractorOverviewContractorFilter" class="symbolika-costing-select">
+                <option value="">Все контрагенты</option>
+                <option v-for="contractor in contractorOverviewContractorOptions" :key="'contractor-overview-' + contractor.id" :value="contractor.id">
+                  {{ contractor.name }}
+                </option>
+              </select>
+            </label>
             <button
               type="button"
               class="symbolika-costing-filter-toggle"
@@ -27418,6 +27790,9 @@ export const CostingModule = {
                     <div v-if="showsOrderCompletion(row)" class="symbolika-costing-order-completion" :class="orderCompletionClass(row)" :style="orderCompletionStyle(row)" :title="orderCompletionTitle(row)">
                       <span>{{ orderCompletionLabel() }}</span><strong>{{ orderCompletionPercent(row) }}%</strong><i></i>
                     </div>
+                    <span class="symbolika-order-items-preview" :title="orderItemsPreviewTitle(row)">
+                      {{ orderItemsPreviewText(row) }}
+                    </span>
                   </div>
                 </td>
                 <td>
@@ -27606,6 +27981,9 @@ export const CostingModule = {
                     <div v-if="showsOrderCompletion(row)" class="symbolika-costing-order-completion" :class="orderCompletionClass(row)" :style="orderCompletionStyle(row)" :title="orderCompletionTitle(row)">
                       <span>{{ orderCompletionLabel() }}</span><strong>{{ orderCompletionPercent(row) }}%</strong><i></i>
                     </div>
+                    <span class="symbolika-order-items-preview" :title="orderItemsPreviewTitle(row)">
+                      {{ orderItemsPreviewText(row) }}
+                    </span>
                   </div>
                 </td>
                 <td>
@@ -27752,6 +28130,9 @@ export const CostingModule = {
                     <div v-if="showsOrderCompletion(row)" class="symbolika-costing-order-completion" :class="orderCompletionClass(row)" :style="orderCompletionStyle(row)" :title="orderCompletionTitle(row)">
                       <span>{{ orderCompletionLabel() }}</span><strong>{{ orderCompletionPercent(row) }}%</strong><i></i>
                     </div>
+                    <span class="symbolika-order-items-preview" :title="orderItemsPreviewTitle(row)">
+                      {{ orderItemsPreviewText(row) }}
+                    </span>
                   </div>
                 </td>
                 <td>
@@ -29865,10 +30246,54 @@ export const CostingModule = {
               v-if="!activeAdminConfig?.createDisabled"
               type="button"
               class="symbolika-costing-button symbolika-costing-button-compact"
-              @click="startAdminCreate"
+              @click="activeTab === 'admin_routing' ? startAdminCapabilityCreate() : startAdminCreate()"
             >
               <v-icon name="add" small />
-              {{ activeTab === 'admin_procurement' ? 'Создать заявку' : (activeTab === 'admin_users' ? 'Добавить пользователя' : 'Добавить') }}
+              {{ activeTab === 'admin_procurement'
+                ? 'Создать заявку'
+                : (activeTab === 'admin_users'
+                  ? 'Добавить пользователя'
+                  : (activeTab === 'admin_routing' ? 'Добавить возможность' : 'Добавить')) }}
+            </button>
+          </div>
+
+          <div v-if="activeTab === 'admin_routing'" class="symbolika-costing-admin-filterbar">
+            <label class="symbolika-costing-admin-filter">
+              <span>Подрядчик</span>
+              <select v-model="adminCapabilityContractorFilter" class="symbolika-costing-select">
+                <option value="">Все подрядчики</option>
+                <option v-for="option in adminOptions('contractors')" :key="option.id" :value="String(option.id)">
+                  {{ adminOptionLabel(option) }}
+                </option>
+              </select>
+            </label>
+            <label class="symbolika-costing-admin-filter">
+              <span>Роль</span>
+              <select v-model="adminCapabilityTypeFilter" class="symbolika-costing-select">
+                <option value="all">Все роли</option>
+                <option value="executor">Исполнитель работ</option>
+                <option value="blank_supplier">Поставщик заготовки</option>
+              </select>
+            </label>
+            <label class="symbolika-costing-admin-filter">
+              <span>Статус</span>
+              <select v-model="adminCapabilityActivityFilter" class="symbolika-costing-select">
+                <option value="active">Активные</option>
+                <option value="inactive">Скрытые</option>
+                <option value="all">Все</option>
+              </select>
+            </label>
+            <span class="symbolika-costing-admin-filter-summary">
+              Показано {{ adminCapabilityCounts.shown }} из {{ adminCapabilityCounts.total }}
+            </span>
+            <button
+              v-if="adminCapabilityContractorFilter || adminCapabilityTypeFilter !== 'all' || adminCapabilityActivityFilter !== 'active'"
+              type="button"
+              class="symbolika-costing-mini-button"
+              @click="adminCapabilityContractorFilter = ''; adminCapabilityTypeFilter = 'all'; adminCapabilityActivityFilter = 'active'"
+            >
+              <v-icon name="filter_alt_off" small />
+              Сбросить
             </button>
           </div>
 
@@ -30443,6 +30868,87 @@ export const CostingModule = {
             class="symbolika-costing-empty"
           >
             Нет позиций
+          </div>
+        </div>
+
+        <div v-if="activeTab === 'contractor_overview'" class="symbolika-contractor-overview">
+          <div class="symbolika-contractor-overview-stats">
+            <div class="symbolika-contractor-overview-stat">
+              <span>Контрагентов</span>
+              <strong>{{ contractorOverviewStats.contractors }}</strong>
+            </div>
+            <div class="symbolika-contractor-overview-stat">
+              <span>Позиций</span>
+              <strong>{{ contractorOverviewStats.positions }}</strong>
+            </div>
+            <div class="symbolika-contractor-overview-stat">
+              <span>Общий тираж</span>
+              <strong>{{ formatQuantity(contractorOverviewStats.quantity) }} шт.</strong>
+            </div>
+            <div class="symbolika-contractor-overview-stat" :class="{ 'is-alert': contractorOverviewStats.overdue }">
+              <span>Просрочено</span>
+              <strong>{{ contractorOverviewStats.overdue }}</strong>
+            </div>
+          </div>
+
+          <div class="symbolika-costing-table-wrap">
+            <table class="symbolika-costing-table symbolika-costing-table-work symbolika-contractor-overview-table">
+              <colgroup>
+                <col class="symbolika-contractor-overview-contractor-col" />
+                <col class="symbolika-contractor-overview-order-col" />
+                <col class="symbolika-contractor-overview-item-col" />
+                <col class="symbolika-contractor-overview-customer-col" />
+                <col class="symbolika-contractor-overview-deadline-col" />
+                <col class="symbolika-contractor-overview-status-col" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Контрагент</th>
+                  <th>Заказ</th>
+                  <th>Что в работе</th>
+                  <th>Заказчик / менеджер</th>
+                  <th>Срок</th>
+                  <th>Статус</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in visibleContractorOverviewRows"
+                  :key="'contractor-overview-row-' + row.id"
+                  :class="[rowStateClass(row), 'symbolika-costing-row-clickable']"
+                  @click="openRowDetail('contractor_work', row, $event)"
+                >
+                  <td>
+                    <strong class="symbolika-contractor-overview-name">{{ relatedName(row.contractor) || 'Не указан' }}</strong>
+                  </td>
+                  <td>
+                    <span class="symbolika-costing-order">{{ orderNumber(row) }}</span>
+                  </td>
+                  <td>
+                    <div class="symbolika-costing-product">{{ row.product_name || 'Без названия' }}</div>
+                    <div class="symbolika-costing-subtle">{{ formatQuantity(row.quantity) }} шт.</div>
+                  </td>
+                  <td>
+                    <div>{{ relatedName(row.customer_company) || relatedName(row.customer) || '-' }}</div>
+                    <div class="symbolika-costing-subtle">{{ relatedName(row.manager_employee, 'full_name') || 'Менеджер не указан' }}</div>
+                  </td>
+                  <td>
+                    <span class="symbolika-costing-date symbolika-contractor-overview-deadline" :class="deadlineClass(row.deadline)">
+                      <v-icon :name="deadlineIcon(row.deadline)" small />
+                      {{ row.deadline ? formatDate(row.deadline) : 'Не указан' }}
+                    </span>
+                  </td>
+                  <td>
+                    <span class="symbolika-costing-pill" :class="statusToneClass(statusName(row.production_status) || 'Без статуса')">
+                      {{ statusName(row.production_status) || 'Без статуса' }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-if="!visibleContractorOverviewRows.length" class="symbolika-costing-empty">
+              По выбранным условиям работ у контрагентов нет
+            </div>
           </div>
         </div>
 
@@ -31601,7 +32107,7 @@ export const CostingModule = {
 
                 <label v-if="itemNeedsBlank(item) && item.blank_source === 'supplier'" class="symbolika-costing-label symbolika-mobile-item-extra">
                   Поставщик заготовки
-                  <select v-model="item.contractor_1" class="symbolika-costing-select">
+                  <select v-model="item.contractor_1" class="symbolika-costing-select" @change="item.contractor_1_cost = ''">
                     <option value="">Не выбран</option>
                     <option v-if="!blankSupplierOptions(item).length" value="" disabled>Нет отмеченных поставщиков</option>
                     <option v-for="contractor in blankSupplierOptions(item)" :key="contractor.id" :value="contractor.id">
@@ -31610,19 +32116,24 @@ export const CostingModule = {
                   </select>
                 </label>
 
-                <label v-if="itemNeedsBlank(item) && item.blank_source === 'supplier' && canSeeCostingTotals" class="symbolika-costing-label symbolika-mobile-item-extra">
-                  Стоимость заготовки
+                <label v-if="itemNeedsBlank(item) && item.blank_source === 'supplier' && canEditItemCosts" class="symbolika-costing-label symbolika-mobile-item-extra">
+                  Себестоимость заготовки за ед.
                   <input v-model="item.contractor_1_cost" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'contractor_1_cost')" />
                 </label>
 
                 <label v-if="itemCategoryId(item)" class="symbolika-costing-label symbolika-mobile-item-extra">
                   {{ executorOptions(item).length === 1 ? 'Исполнитель (автоматически)' : 'Исполнитель работ' }}
-                  <select v-model="item[executorField(item)]" class="symbolika-costing-select" :disabled="executorOptions(item).length <= 1">
+                  <select v-model="item[executorField(item)]" class="symbolika-costing-select" :disabled="executorOptions(item).length <= 1" @change="item[executorCostField(item)] = ''">
                     <option value="">{{ executorOptions(item).length ? 'Выберите исполнителя' : 'Маршрут не настроен' }}</option>
                     <option v-for="contractor in executorOptions(item)" :key="'executor-' + contractor.id" :value="contractor.id">
                       {{ contractor.name }}
                     </option>
                   </select>
+                </label>
+
+                <label v-if="itemCategoryId(item) && canEditItemCosts" class="symbolika-costing-label symbolika-mobile-item-extra">
+                  Себестоимость работ за ед.
+                  <input v-model="item[executorCostField(item)]" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, executorCostField(item))" />
                 </label>
 
                 <label class="symbolika-costing-label symbolika-costing-new-order-task">
@@ -32608,6 +33119,68 @@ export const CostingModule = {
             </div>
           </div>
 
+          <div v-if="['customer', 'company'].includes(entityDetail.type) && canEditEntityProfile()" class="symbolika-costing-detail-grid">
+            <div class="symbolika-costing-detail-field symbolika-costing-detail-wide is-primary">
+              <div class="symbolika-costing-opening-balance-head">
+                <div>
+                  <div class="symbolika-costing-detail-label">Контактные данные</div>
+                  <div class="symbolika-costing-subtle">Менеджер может изменять данные только доступных ему клиентов.</div>
+                </div>
+                <button
+                  v-if="!entityDetail.editing"
+                  type="button"
+                  class="symbolika-costing-mini-button"
+                  @click="startEntityProfileEdit"
+                >
+                  <v-icon name="edit" small />
+                  Редактировать
+                </button>
+              </div>
+
+              <div v-if="entityDetail.editing && entityDetail.draft" class="symbolika-costing-detail-pair symbolika-costing-opening-balance-grid">
+                <label class="symbolika-costing-label">
+                  {{ entityDetail.type === 'company' ? 'Название компании' : 'Имя клиента' }}
+                  <input v-model="entityDetail.draft.name" class="symbolika-costing-input" />
+                </label>
+                <label class="symbolika-costing-label">
+                  Телефон
+                  <input v-model="entityDetail.draft.phone" class="symbolika-costing-input" inputmode="tel" />
+                </label>
+                <label class="symbolika-costing-label">
+                  Email
+                  <input v-model="entityDetail.draft.email" class="symbolika-costing-input" inputmode="email" />
+                </label>
+                <label v-if="entityDetail.type === 'customer'" class="symbolika-costing-label">
+                  Компания
+                  <select v-model="entityDetail.draft.company" class="symbolika-costing-select">
+                    <option value="">Без компании</option>
+                    <option v-for="company in companies" :key="company.id" :value="company.id">{{ company.name }}</option>
+                  </select>
+                </label>
+                <label v-if="entityDetail.type === 'customer'" class="symbolika-costing-label">
+                  Ссылка ВК
+                  <input v-model="entityDetail.draft.vk_page_url" class="symbolika-costing-input" placeholder="https://vk.com/..." />
+                </label>
+                <label class="symbolika-costing-label" :class="{ 'symbolika-costing-detail-wide': entityDetail.type === 'company' }">
+                  Комментарий
+                  <textarea v-model="entityDetail.draft.comment" class="symbolika-costing-input" rows="3"></textarea>
+                </label>
+              </div>
+              <div v-if="entityDetail.editing" class="symbolika-costing-opening-balance-actions">
+                <button type="button" class="symbolika-costing-mini-button" @click="cancelEntityProfileEdit">Отмена</button>
+                <button
+                  type="button"
+                  class="symbolika-costing-button"
+                  :disabled="saving['entity-profile:' + entityDetail.type + ':' + entityDetail.entity.id]"
+                  @click="saveEntityProfile"
+                >
+                  <v-icon name="save" small />
+                  {{ saving['entity-profile:' + entityDetail.type + ':' + entityDetail.entity.id] ? 'Сохраняем…' : 'Сохранить данные' }}
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div v-if="['customer', 'company'].includes(entityDetail.type) && canTransferClientManager()" class="symbolika-costing-detail-grid">
             <div class="symbolika-costing-detail-field symbolika-costing-detail-wide is-primary">
               <div class="symbolika-costing-detail-label">Ответственный менеджер</div>
@@ -33096,7 +33669,7 @@ export const CostingModule = {
 
                   <label v-if="itemNeedsBlank(detailItemForm) && detailItemForm.blank_source === 'supplier'" class="symbolika-costing-label">
                     Поставщик заготовки
-                    <select v-model="detailItemForm.contractor_1" class="symbolika-costing-select">
+                    <select v-model="detailItemForm.contractor_1" class="symbolika-costing-select" @change="detailItemForm.contractor_1_cost = ''">
                       <option value="">Не выбран</option>
                       <option v-if="!blankSupplierOptions(detailItemForm).length" value="" disabled>Нет отмеченных поставщиков</option>
                       <option v-for="contractor in blankSupplierOptions(detailItemForm)" :key="contractor.id" :value="contractor.id">
@@ -33105,19 +33678,24 @@ export const CostingModule = {
                     </select>
                   </label>
 
-                  <label v-if="itemNeedsBlank(detailItemForm) && detailItemForm.blank_source === 'supplier' && canSeeCostingTotals" class="symbolika-costing-label">
-                    Стоимость заготовки
+                  <label v-if="itemNeedsBlank(detailItemForm) && detailItemForm.blank_source === 'supplier' && canEditItemCosts" class="symbolika-costing-label">
+                    Себестоимость заготовки за ед.
                     <input v-model="detailItemForm.contractor_1_cost" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(detailItemForm, 'contractor_1_cost')" />
                   </label>
 
                   <label v-if="itemCategoryId(detailItemForm)" class="symbolika-costing-label">
                     {{ executorOptions(detailItemForm).length === 1 ? 'Исполнитель (автоматически)' : 'Исполнитель работ' }}
-                    <select v-model="detailItemForm[executorField(detailItemForm)]" class="symbolika-costing-select" :disabled="executorOptions(detailItemForm).length <= 1">
+                    <select v-model="detailItemForm[executorField(detailItemForm)]" class="symbolika-costing-select" :disabled="executorOptions(detailItemForm).length <= 1" @change="detailItemForm[executorCostField(detailItemForm)] = ''">
                       <option value="">{{ executorOptions(detailItemForm).length ? 'Выберите исполнителя' : 'Маршрут не настроен' }}</option>
                       <option v-for="contractor in executorOptions(detailItemForm)" :key="'detail-executor-' + contractor.id" :value="contractor.id">
                         {{ contractor.name }}
                       </option>
                     </select>
+                  </label>
+
+                  <label v-if="itemCategoryId(detailItemForm) && canEditItemCosts" class="symbolika-costing-label">
+                    Себестоимость работ за ед.
+                    <input v-model="detailItemForm[executorCostField(detailItemForm)]" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(detailItemForm, executorCostField(detailItemForm))" />
                   </label>
 
                   <label class="symbolika-costing-label symbolika-costing-detail-add-task">
@@ -33513,7 +34091,7 @@ export const CostingModule = {
                   :class="savingWorkClass('orders_items', detail.row, 'contractor_1')"
                   :value="entityId(detail.row.contractor_1)"
                   :disabled="!contractorSelectionsEditable(detail.row)"
-                  @change="saveOrderItemField(detail.row, 'contractor_1', $event.target.value)"
+                  @change="saveOrderItemContractor(detail.row, 'contractor_1', $event.target.value)"
                 >
                   <option value="">Не выбран</option>
                   <option v-if="!blankSupplierOptions(detail.row).length" value="" disabled>Нет отмеченных поставщиков</option>
@@ -33523,8 +34101,8 @@ export const CostingModule = {
                 </select>
               </div>
             </div>
-            <div v-if="itemNeedsBlank(detail.row) && detail.row.blank_source === 'supplier' && canSeeCostingTotals" class="symbolika-costing-detail-field is-primary">
-              <div class="symbolika-costing-detail-label">Стоимость заготовки</div>
+            <div v-if="itemNeedsBlank(detail.row) && detail.row.blank_source === 'supplier' && canEditItemCosts" class="symbolika-costing-detail-field is-primary">
+              <div class="symbolika-costing-detail-label">Себестоимость заготовки за ед.</div>
               <div class="symbolika-costing-detail-value">
                 <input
                   class="symbolika-costing-input symbolika-costing-num"
@@ -33544,13 +34122,26 @@ export const CostingModule = {
                   :class="savingWorkClass('orders_items', detail.row, executorField(detail.row))"
                   :value="selectedExecutorId(detail.row)"
                   :disabled="!contractorSelectionsEditable(detail.row) || executorOptions(detail.row).length <= 1"
-                  @change="saveOrderItemField(detail.row, executorField(detail.row), $event.target.value)"
+                  @change="saveOrderItemContractor(detail.row, executorField(detail.row), $event.target.value)"
                 >
                   <option value="">{{ executorOptions(detail.row).length ? 'Выберите исполнителя' : 'Маршрут не настроен' }}</option>
                   <option v-for="contractor in executorOptions(detail.row)" :key="'saved-executor-' + contractor.id" :value="contractor.id">
                     {{ contractor.name }}
                   </option>
                 </select>
+              </div>
+            </div>
+            <div v-if="itemCategoryId(detail.row) && canEditItemCosts" class="symbolika-costing-detail-field is-primary">
+              <div class="symbolika-costing-detail-label">Себестоимость работ за ед.</div>
+              <div class="symbolika-costing-detail-value">
+                <input
+                  class="symbolika-costing-input symbolika-costing-num"
+                  :class="savingWorkClass('orders_items', detail.row, executorCostField(detail.row))"
+                  inputmode="decimal"
+                  :value="detail.row[executorCostField(detail.row)]"
+                  @focus="clearZeroInput(detail.row, executorCostField(detail.row))"
+                  @change="saveOrderItemField(detail.row, executorCostField(detail.row), $event.target.value)"
+                />
               </div>
             </div>
               </div>
@@ -33729,33 +34320,13 @@ export const CostingModule = {
               <div v-if="contractorBriefMissing(detail.row).length" class="symbolika-contractor-brief-missing">
                 <v-icon name="warning_amber" small />Не заполнено: {{ contractorBriefMissing(detail.row).join(', ') }}
               </div>
-              <div class="symbolika-contractor-brief-grid">
-                <article class="symbolika-contractor-brief-card">
-                  <span>Срок</span>
-                  <strong>{{ formatDate(detail.row.deadline || detailOrderContext(detail.row).deadline) }}</strong>
-                </article>
-                <article class="symbolika-contractor-brief-card">
-                  <span>Позиция</span>
-                  <strong>{{ detail.row.product_name || '-' }} · {{ formatQuantity(detail.row.quantity) }} шт.</strong>
-                </article>
-                <article class="symbolika-contractor-brief-card is-wide">
-                  <span>Техническое задание</span>
-                  <p>{{ detail.row.technical_task_text || 'ТЗ пока не заполнено' }}</p>
-                </article>
-                <article class="symbolika-contractor-brief-card is-wide">
-                  <span>Макет и материалы</span>
-                  <div v-if="detail.row.url || itemAttachmentRows(detail.row).length" class="symbolika-contractor-brief-links">
-                    <a v-if="detail.row.url" :href="detail.row.url" target="_blank" rel="noreferrer">
-                      <v-icon name="draft" small /><span>{{ detail.row.layout_disk_name || detail.row.url }}</span><v-icon name="open_in_new" small />
-                    </a>
-                    <a v-for="attachment in itemAttachmentRows(detail.row)" :key="'brief-' + attachment.id" :href="attachment.url" target="_blank" rel="noreferrer">
-                      <v-icon :name="attachment.attachment_type === 'file' ? 'draft' : 'link'" small />
-                      <span>{{ attachment.title || attachment.file_name || attachment.url }}</span><v-icon name="open_in_new" small />
-                    </a>
-                  </div>
-                  <strong v-else>Макет пока не указан</strong>
-                </article>
-              </div>
+              <textarea
+                class="symbolika-contractor-brief-field"
+                :value="contractorBriefText(detail.row)"
+                readonly
+                aria-label="ТЗ для подрядчика"
+                @focus="$event.target.select()"
+              ></textarea>
             </section>
 
             <section v-if="canManageInternalRouting() || detail.row.production_comment" class="symbolika-costing-item-section symbolika-costing-detail-wide is-production symbolika-mobile-secondary-section">
