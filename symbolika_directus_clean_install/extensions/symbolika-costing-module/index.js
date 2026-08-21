@@ -17467,13 +17467,17 @@ export const CostingModule = {
 
         .symbolika-costing-new-order-item {
           display: grid;
-          grid-template-columns: minmax(150px, 1.35fr) 70px 82px 108px repeat(3, minmax(100px, 1fr)) 120px 52px;
+          grid-template-columns: minmax(180px, 1.45fr) repeat(5, minmax(110px, 1fr));
           gap: 8px;
-          align-items: end;
+          align-items: start;
           border: 1px solid color-mix(in srgb, var(--theme--border-color) 74%, transparent);
           border-radius: 7px;
           background: color-mix(in srgb, var(--theme--background-normal) 78%, black);
           padding: 10px;
+        }
+
+        .symbolika-costing-new-order-item > * {
+          min-inline-size: 0;
         }
 
         .symbolika-costing-new-order-item.symbolika-costing-estimate-item {
@@ -17486,7 +17490,7 @@ export const CostingModule = {
 
         .symbolika-costing-new-order-task,
         .symbolika-costing-new-order-url {
-          grid-column: span 2;
+          grid-column: span 3;
         }
 
         .symbolika-costing-new-order-remove {
@@ -18485,7 +18489,7 @@ export const CostingModule = {
           }
 
           .symbolika-costing-new-order-item {
-            grid-template-columns: minmax(180px, 1.4fr) 78px 96px 118px repeat(2, minmax(120px, 1fr)) 148px 56px;
+            grid-template-columns: minmax(180px, 1.45fr) repeat(5, minmax(110px, 1fr));
           }
         }
 

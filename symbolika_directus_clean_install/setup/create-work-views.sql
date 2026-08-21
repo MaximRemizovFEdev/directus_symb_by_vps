@@ -14894,10 +14894,12 @@ WHERE collection = 'orders_items'
     '00000000-0000-4000-8000-000000000208'
   );
 
--- Managers enter the per-unit cost of both the blank and the contractor's
--- work in their own positions. Row-level policy filters still keep foreign
--- orders inaccessible. Administrators and managing staff already have full
--- access and use these values for verification and order economics.
+-- Every employee who creates an order acts as its manager and must be able to
+-- enter the per-unit cost of both the blank and the contractor's work. This
+-- includes the manager, office, production, screen-printing and designer
+-- self-sales policies. Row-level policy filters still keep foreign orders
+-- inaccessible. Administrators and managing staff already have full access
+-- and use these values for verification and order economics.
 UPDATE directus_permissions
 SET fields = concat_ws(',', NULLIF(fields, ''), 'contractor_1_cost')
 WHERE collection = 'orders_items'
@@ -14906,7 +14908,10 @@ WHERE collection = 'orders_items'
   AND NOT ('contractor_1_cost' = ANY(string_to_array(fields, ',')))
   AND policy IN (
     '00000000-0000-4000-8000-000000000201',
-    '00000000-0000-4000-8000-000000000202'
+    '00000000-0000-4000-8000-000000000202',
+    '00000000-0000-4000-8000-000000000204',
+    '00000000-0000-4000-8000-000000000206',
+    '00000000-0000-4000-8000-000000000208'
   );
 
 UPDATE directus_permissions
@@ -14917,7 +14922,10 @@ WHERE collection = 'orders_items'
   AND NOT ('contractor_2_cost' = ANY(string_to_array(fields, ',')))
   AND policy IN (
     '00000000-0000-4000-8000-000000000201',
-    '00000000-0000-4000-8000-000000000202'
+    '00000000-0000-4000-8000-000000000202',
+    '00000000-0000-4000-8000-000000000204',
+    '00000000-0000-4000-8000-000000000206',
+    '00000000-0000-4000-8000-000000000208'
   );
 
 -- The order-level launch check must use the same contractor capability rules
