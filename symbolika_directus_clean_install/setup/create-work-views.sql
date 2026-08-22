@@ -2401,8 +2401,8 @@ BEGIN
     WHEN bool_and(item_status IN ('ready', 'cancelled')) AND bool_or(item_status = 'ready') THEN U&'\0413\043e\0442\043e\0432'
     WHEN bool_or(item_status = 'layout_revision') THEN U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430'
     WHEN bool_or(item_status = 'cancellation_requested') THEN U&'\0412 \0440\0430\0431\043e\0442\0435'
-    WHEN bool_or(item_status = 'in_work') THEN U&'\0412 \0440\0430\0431\043e\0442\0435'
     WHEN bool_or(item_status = 'sent_to_work') THEN U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443'
+    WHEN bool_or(item_status = 'in_work') THEN U&'\0412 \0440\0430\0431\043e\0442\0435'
     WHEN bool_or(item_status = 'approval') THEN U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435'
     ELSE U&'\041d\043e\0432\044b\0439'
   END
@@ -2538,8 +2538,8 @@ BEGIN
      AND NEW.office_status IS NOT DISTINCT FROM OLD.office_status
      AND NEW.item_status IS DISTINCT FROM previous_item_status THEN
     item_transition_allowed := CASE
-      WHEN previous_item_status IN ('new', 'approval') THEN NEW.item_status IN ('new', 'approval', 'in_work')
-      WHEN previous_item_status = 'layout_revision' THEN NEW.item_status IN ('layout_revision', 'in_work')
+      WHEN previous_item_status IN ('new', 'approval') THEN NEW.item_status IN ('new', 'approval', 'sent_to_work', 'in_work')
+      WHEN previous_item_status = 'layout_revision' THEN NEW.item_status IN ('layout_revision', 'sent_to_work', 'in_work')
       WHEN previous_item_status IN ('sent_to_work', 'in_work') THEN NEW.item_status IN ('sent_to_work', 'in_work', 'cancellation_requested', 'ready', 'delivered')
       WHEN previous_item_status = 'cancellation_requested' THEN NEW.item_status IN ('cancellation_requested', 'cancelled')
       WHEN previous_item_status = 'ready' THEN NEW.item_status IN ('ready', 'delivered')
@@ -2551,7 +2551,7 @@ BEGIN
       RAISE EXCEPTION 'Недопустимый переход статуса позиции: % -> %', previous_item_status, NEW.item_status;
     END IF;
 
-    IF NEW.item_status = 'in_work'
+    IF NEW.item_status IN ('sent_to_work', 'in_work')
        AND previous_item_status IN ('new', 'approval', 'layout_revision') THEN
       IF NULLIF(BTRIM(COALESCE(NEW.product_name, '')), '') IS NULL THEN
         RAISE EXCEPTION 'Позицию нельзя запустить в работу: заполните наименование';

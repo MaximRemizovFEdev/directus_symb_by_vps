@@ -110,6 +110,13 @@ const contractorWorkFields = [
   'manager_employee.full_name',
   'contractor.id',
   'contractor.name',
+  'contractor.supplier_kind',
+  'contractor.is_internal_production',
+  'contractor_slot',
+  'order_item.id',
+  'order_item.item_status',
+  'order_item.contractor_1.id',
+  'order_item.contractor_2.id',
   'product_name',
   'quantity',
   'technical_task_text',
@@ -464,6 +471,7 @@ const tabs = [
   { id: 'production_archive', title: 'Архив производства', collection: '' },
   { id: 'labels', title: 'Этикетки', collection: 'orders_items' },
   { id: 'contractor_work', title: 'Мои работы', collection: 'contractor_work' },
+  { id: 'work_launch', title: 'Запуск в работу', collection: 'contractor_work' },
   { id: 'contractor_overview', title: 'Работы у контрагентов', collection: 'contractor_work' },
   { id: 'office', title: 'Офис', collection: 'office_items_in_office' },
 ];
@@ -568,7 +576,7 @@ const moduleSections = {
   },
   management: {
     title: 'Управление',
-    tabs: ['order_economics', 'costing', 'contractor_overview', 'automation_control', 'admin_customer_notifications'],
+    tabs: ['work_launch', 'contractor_overview', 'order_economics', 'costing', 'automation_control', 'admin_customer_notifications'],
     roles: ['Administrator', 'Управляющий'],
   },
   procurement: {
@@ -1652,7 +1660,7 @@ export const CostingModule = {
         .filter((row) => this.giftCertificateStatusFilter === 'all' || this.giftCertificateDisplayStatus(row) === this.giftCertificateStatusFilter)
         .filter((row) => !query || [row.code, row.comment, this.relatedName(row.customer), this.giftCertificateStatusName(this.giftCertificateDisplayStatus(row))]
           .join(' ').toLowerCase().includes(query))
-        .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+        .sort((a, b) => this.compareSortValues(this.sortDateValue(b.created_at), this.sortDateValue(a.created_at)));
     },
 
     canCreateOrders() {
@@ -1735,8 +1743,8 @@ export const CostingModule = {
       }
 
       return rows.sort((a, b) => {
-        const aDue = a.due_date ? new Date(a.due_date).getTime() : Number.MAX_SAFE_INTEGER;
-        const bDue = b.due_date ? new Date(b.due_date).getTime() : Number.MAX_SAFE_INTEGER;
+        const aDue = this.sortDateValue(a.due_date) || Number.MAX_SAFE_INTEGER;
+        const bDue = this.sortDateValue(b.due_date) || Number.MAX_SAFE_INTEGER;
         if (aDue !== bDue) return aDue - bDue;
         return (priorityRank[a.priority] ?? 2) - (priorityRank[b.priority] ?? 2);
       });
@@ -1746,7 +1754,7 @@ export const CostingModule = {
       const currentEmployee = Number(this.currentEmployeeId);
       const query = this.activeTab === 'tasks_archive' ? String(this.search || '').trim().toLowerCase() : '';
       const priorityRank = { urgent: 0, high: 1, normal: 2, low: 3 };
-      const closedAt = (row) => new Date(row.completed_at || row.date_updated || row.date_created || 0).getTime();
+      const closedAt = (row) => this.sortDateValue(row.completed_at || row.date_updated || row.date_created) || 0;
       let rows = (this.taskRows || []).filter((row) => ['done', 'cancelled'].includes(row.status));
 
       if (this.taskArchiveScope === 'my') {
@@ -1790,8 +1798,8 @@ export const CostingModule = {
       return rows.sort((a, b) => {
         if (this.taskArchiveSort === 'closed_asc') return closedAt(a) - closedAt(b);
         if (this.taskArchiveSort === 'due_asc') {
-          const aDue = a.due_date ? new Date(a.due_date).getTime() : Number.MAX_SAFE_INTEGER;
-          const bDue = b.due_date ? new Date(b.due_date).getTime() : Number.MAX_SAFE_INTEGER;
+          const aDue = this.sortDateValue(a.due_date) || Number.MAX_SAFE_INTEGER;
+          const bDue = this.sortDateValue(b.due_date) || Number.MAX_SAFE_INTEGER;
           return aDue - bDue;
         }
         if (this.taskArchiveSort === 'priority') return (priorityRank[a.priority] ?? 2) - (priorityRank[b.priority] ?? 2);
@@ -1844,6 +1852,7 @@ export const CostingModule = {
       else if (this.activeTab === 'production') rows = this.visibleProductionRows;
       else if (this.activeTab === 'screen') rows = this.visibleScreenRows;
       else if (this.activeTab === 'contractor_work') rows = this.visibleContractorWorkRows;
+      else if (this.activeTab === 'work_launch') rows = this.visibleWorkLaunchRows;
       else if (this.activeTab === 'contractor_overview') rows = this.visibleContractorOverviewRows;
       else if (this.activeTab === 'production_archive') rows = this.visibleProductionArchiveRows;
       else if (this.activeTab === 'office') { rows = this.visibleOfficeIssueRows; type = 'office_issue'; }
@@ -1921,7 +1930,7 @@ export const CostingModule = {
       if (['estimates', 'costing', 'items_archive', 'purchasing'].includes(this.activeTab)) return baseFilters.filter((filter) => filter.id === 'all');
       if (['admin_finance_dashboard', 'payroll', 'expenses', 'contractor_settlements', 'monthly_results', 'finance', 'gift_certificates', 'clients', 'companies', 'contractors'].includes(this.activeTab) || this.isAdminDictionaryTab) return baseFilters.filter((filter) => filter.id === 'all');
       if (this.activeTab === 'office') return baseFilters.filter((filter) => filter.id === 'all');
-      if (['production', 'screen', 'production_archive', 'contractor_work', 'contractor_overview', 'labels'].includes(this.activeTab)) return baseFilters.filter((filter) => filter.id === 'all');
+      if (['production', 'screen', 'production_archive', 'contractor_work', 'work_launch', 'contractor_overview', 'labels'].includes(this.activeTab)) return baseFilters.filter((filter) => filter.id === 'all');
 
       return baseFilters.filter((filter) => this.queueRows.some((row) => filter.id === 'all' || row.filters.includes(filter.id)));
     },
@@ -2009,7 +2018,7 @@ export const CostingModule = {
     },
 
     hasWorkDeadlineFilters() {
-      return ['production', 'screen', 'production_archive', 'contractor_work', 'contractor_overview', 'labels'].includes(this.activeTab);
+      return ['production', 'screen', 'production_archive', 'contractor_work', 'work_launch', 'contractor_overview', 'labels'].includes(this.activeTab);
     },
 
     activeWorkDeadlineFiltersCount() {
@@ -2367,11 +2376,43 @@ export const CostingModule = {
         .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
     },
 
+    workLaunchContractorOptions() {
+      const options = new Map();
+      (this.contractorWorkRows || [])
+        .filter((row) => this.isPendingExternalWorkRow(row))
+        .forEach((row) => {
+          const id = this.contractorId(row.contractor);
+          const name = this.relatedName(row.contractor);
+          if (id && name) options.set(String(id), name);
+        });
+      return [...options.entries()]
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    },
+
     visibleContractorOverviewRows() {
       const contractorId = String(this.contractorOverviewContractorFilter || '');
       const rows = this.filterRowsByArchiveMode(this.contractorWorkRows || [])
         .filter((row) => !contractorId || String(this.contractorId(row.contractor) || '') === contractorId);
       return this.sortRows(rows, 'contractor_work');
+    },
+
+    visibleWorkLaunchRows() {
+      const contractorId = String(this.contractorOverviewContractorFilter || '');
+      const rows = (this.contractorWorkRows || [])
+        .filter((row) => this.isPendingExternalWorkRow(row))
+        .filter((row) => !contractorId || String(this.contractorId(row.contractor) || '') === contractorId);
+      return this.sortRows(this.filterRows(rows, false), 'contractor_work');
+    },
+
+    workLaunchStats() {
+      const rows = this.visibleWorkLaunchRows || [];
+      return {
+        contractors: new Set(rows.map((row) => String(this.contractorId(row.contractor) || '')).filter(Boolean)).size,
+        positions: rows.length,
+        orders: new Set(rows.map((row) => String(this.orderId(row) || '')).filter(Boolean)).size,
+        overdue: rows.filter((row) => this.isOverdue(row.deadline)).length,
+      };
     },
 
     contractorOverviewStats() {
@@ -3245,6 +3286,7 @@ export const CostingModule = {
         production: ['production_work'],
         screen: ['screen_printing_work'],
         contractor_work: ['contractor_work'],
+        work_launch: ['contractor_work'],
         contractor_overview: ['contractor_work'],
         production_archive: ['production_work', 'screen_printing_work'],
         office: this.officeBucket === 'issued' ? ['office_archive', 'office_archive_items'] : ['office_issue', 'office_rows'],
@@ -3275,7 +3317,7 @@ export const CostingModule = {
         'all_orders', 'my_orders', 'orders_archive',
         'deadlines', 'costing', 'items_archive', 'office', 'finance',
         'order_economics',
-        'production', 'screen', 'contractor_work', 'contractor_overview', 'production_archive',
+        'production', 'screen', 'contractor_work', 'work_launch', 'contractor_overview', 'production_archive',
         'admin_procurement',
         'tasks', 'tasks_archive',
       ].includes(this.activeTab);
@@ -4614,9 +4656,8 @@ export const CostingModule = {
     },
 
     isToday(value) {
-      if (!value) return false;
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return false;
+      const date = this.dateFromValue(value);
+      if (!date) return false;
       const now = new Date();
       return date.getFullYear() === now.getFullYear()
         && date.getMonth() === now.getMonth()
@@ -4624,9 +4665,8 @@ export const CostingModule = {
     },
 
     isCurrentMonth(value) {
-      if (!value) return false;
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return false;
+      const date = this.dateFromValue(value);
+      if (!date) return false;
       const now = new Date();
       return date.getFullYear() === now.getFullYear()
         && date.getMonth() === now.getMonth();
@@ -4643,27 +4683,24 @@ export const CostingModule = {
     },
 
     isCurrentWeek(value) {
-      if (!value) return false;
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return false;
+      const date = this.dateFromValue(value);
+      if (!date) return false;
       date.setHours(0, 0, 0, 0);
       const { start, end } = this.weekRange(0);
       return date >= start && date < end;
     },
 
     isNextWeek(value) {
-      if (!value) return false;
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return false;
+      const date = this.dateFromValue(value);
+      if (!date) return false;
       date.setHours(0, 0, 0, 0);
       const { start, end } = this.weekRange(1);
       return date >= start && date < end;
     },
 
     isNextMonth(value) {
-      if (!value) return false;
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return false;
+      const date = this.dateFromValue(value);
+      if (!date) return false;
       const now = new Date();
       const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
       return date.getFullYear() === nextMonth.getFullYear()
@@ -4671,9 +4708,8 @@ export const CostingModule = {
     },
 
     isOverdue(value) {
-      if (!value) return false;
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return false;
+      const date = this.dateFromValue(value);
+      if (!date) return false;
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       date.setHours(0, 0, 0, 0);
@@ -4730,9 +4766,8 @@ export const CostingModule = {
     },
 
     notificationDate(value) {
-      if (!value) return '';
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return String(value);
+      const date = this.dateFromValue(value);
+      if (!date) return value ? String(value) : '';
       const now = new Date();
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const source = new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -5069,14 +5104,14 @@ export const CostingModule = {
       if (allowed.has('clients') || allowed.has('companies')) tasks.push(this.loadFinanceRows(), this.loadCustomers(), this.loadCompanies(), this.loadGiftCertificates(), this.loadEmployees());
       if (!allowed.has('finance') && !allowed.has('clients') && !allowed.has('companies') && (allowed.has('my_orders') || allowed.has('all_orders') || allowed.has('deadlines') || allowed.has('office'))) tasks.push(this.loadCustomers(), this.loadCompanies());
       if (allowed.has('contractors')) tasks.push(this.loadContractorRows());
-      if (allowed.has('production') || allowed.has('screen') || allowed.has('production_archive') || allowed.has('contractor_work') || allowed.has('contractor_overview') || allowed.has('my_orders')) tasks.push(this.loadProductionStatuses());
+      if (allowed.has('production') || allowed.has('screen') || allowed.has('production_archive') || allowed.has('contractor_work') || allowed.has('work_launch') || allowed.has('contractor_overview') || allowed.has('my_orders')) tasks.push(this.loadProductionStatuses());
       if (allowed.has('my_orders') || allowed.has('all_orders') || allowed.has('orders_archive') || allowed.has('deadlines')) tasks.push(this.loadOrderStatuses());
       const canReadBothWorkAreas = ['Administrator', 'Управляющий'].includes(this.currentRoleName);
       const canReadProductionArea = canReadBothWorkAreas || this.currentRoleName === 'Производство';
       const canReadScreenArea = canReadBothWorkAreas || this.currentRoleName === 'Шелкография';
       if (canReadProductionArea && (allowed.has('production') || allowed.has('production_archive') || allowed.has('labels'))) tasks.push(this.loadWorkRows('production_work'));
       if (canReadScreenArea && (allowed.has('screen') || allowed.has('production_archive') || allowed.has('labels'))) tasks.push(this.loadWorkRows('screen_printing_work'));
-      if (allowed.has('contractor_work') || allowed.has('contractor_overview')) tasks.push(this.loadContractorWorkRows());
+      if (allowed.has('contractor_work') || allowed.has('work_launch') || allowed.has('contractor_overview')) tasks.push(this.loadContractorWorkRows());
       if (allowed.has('office')) tasks.push(this.loadOfficeRows(), this.loadOfficeIssueRows(), this.loadOfficeArchiveRows(), this.loadOfficeArchiveItems(), this.loadPaymentTypes(), this.loadGiftCertificates());
       if (allowed.has('my_orders') || allowed.has('all_orders')) tasks.push(this.loadGiftCertificates());
       if (this.canCreateOrders) tasks.push(this.loadCreateOrderDictionaries());
@@ -5141,7 +5176,7 @@ export const CostingModule = {
           await this.loadWorkRows('production_work');
         } else if (this.activeTab === 'screen') {
           await this.loadWorkRows('screen_printing_work');
-        } else if (['contractor_work', 'contractor_overview'].includes(this.activeTab)) {
+        } else if (['contractor_work', 'work_launch', 'contractor_overview'].includes(this.activeTab)) {
           await this.loadContractorWorkRows();
         } else if (this.activeTab === 'production_archive') {
           const requests = [];
@@ -5325,9 +5360,8 @@ export const CostingModule = {
     },
 
     dateOnly(value) {
-      if (!value) return '';
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return '';
+      const date = this.dateFromValue(value);
+      if (!date) return '';
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, '0');
       const day = String(date.getDate()).padStart(2, '0');
@@ -5477,15 +5511,20 @@ export const CostingModule = {
         if (this.officeSort === 'order_number') return row.order_number || '';
         if (this.officeSort === 'customer') return row.customer_name || '';
         if (this.officeSort === 'payment_due') return this.officePaymentDue(row);
-        if (this.officeSort === 'date') return row.date || '';
-        return row.deadline || row.date || '';
+        if (this.officeSort === 'date') return this.sortDateValue(row.date);
+        return this.sortDateValue(row.deadline);
       };
 
       return sorted.sort((left, right) => {
         const a = value(left);
         const b = value(right);
-        if (typeof a === 'number' || typeof b === 'number') return Number(b || 0) - Number(a || 0);
-        return String(a).localeCompare(String(b), 'ru');
+        const aEmpty = this.isEmptySortValue(a);
+        const bEmpty = this.isEmptySortValue(b);
+        if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+        const direction = this.officeSort === 'payment_due' ? -1 : 1;
+        const primary = this.compareSortValues(a, b) * direction;
+        if (primary) return primary;
+        return this.compareSortValues(this.orderNumber(left), this.orderNumber(right));
       });
     },
 
@@ -5516,7 +5555,24 @@ export const CostingModule = {
         if (aEmpty && bEmpty) return 0;
         if (aEmpty) return 1;
         if (bEmpty) return -1;
-        return this.compareSortValues(a, b) * direction;
+        const primary = this.compareSortValues(a, b) * direction;
+        if (primary) return primary;
+
+        // Stable business tie-breakers keep every view deterministic even when
+        // several orders or positions have the same deadline.
+        const tieBreakers = current.key === 'deadline'
+          ? ['date', 'order_number', 'product']
+          : ['deadline', 'order_number', 'product'];
+        for (const key of tieBreakers) {
+          const tieA = this.sortValue(left, key);
+          const tieB = this.sortValue(right, key);
+          const tieAEmpty = this.isEmptySortValue(tieA);
+          const tieBEmpty = this.isEmptySortValue(tieB);
+          if (tieAEmpty !== tieBEmpty) return tieAEmpty ? 1 : -1;
+          const tie = this.compareSortValues(tieA, tieB);
+          if (tie) return tie;
+        }
+        return this.compareSortValues(this.entityId(left.id), this.entityId(right.id));
       });
     },
 
@@ -5524,7 +5580,7 @@ export const CostingModule = {
       if (!row) return '';
       if (key === 'order_number') return this.orderNumber(row);
       if (key === 'date') return this.sortDateValue(row.date);
-      if (key === 'deadline') return this.sortDateValue(row.deadline || row.date);
+      if (key === 'deadline') return this.sortDateValue(row.deadline);
       if (key === 'customer') return this.detailCustomerName(row) || row.customer_display || '';
       if (key === 'company') return this.detailCompanyName(row);
       if (key === 'manager') return row.manager_name || this.detailManagerName(row);
@@ -5546,9 +5602,44 @@ export const CostingModule = {
     },
 
     sortDateValue(value) {
-      if (!value) return '';
-      const date = new Date(value);
+      if (value === null || value === undefined || value === '') return '';
+      if (value instanceof Date) return Number.isNaN(value.getTime()) ? '' : value.getTime();
+      if (typeof value === 'number') return Number.isFinite(value) ? value : '';
+
+      const source = String(value).trim();
+      if (!source) return '';
+
+      // PostgreSQL DATE values must be interpreted as local calendar dates.
+      // Parsing them as UTC shifts the day in some browser time zones.
+      const isoDate = source.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (isoDate) {
+        const [, year, month, day] = isoDate.map(Number);
+        const date = new Date(year, month - 1, day);
+        return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
+          ? date.getTime()
+          : '';
+      }
+
+      // Some views and imported data may expose a localized date.
+      const ruDate = source.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2}|\d{4})$/);
+      if (ruDate) {
+        const day = Number(ruDate[1]);
+        const month = Number(ruDate[2]);
+        const yearPart = Number(ruDate[3]);
+        const year = ruDate[3].length === 2 ? 2000 + yearPart : yearPart;
+        const date = new Date(year, month - 1, day);
+        return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
+          ? date.getTime()
+          : '';
+      }
+
+      const date = new Date(source);
       return Number.isNaN(date.getTime()) ? '' : date.getTime();
+    },
+
+    dateFromValue(value) {
+      const timestamp = this.sortDateValue(value);
+      return timestamp === '' ? null : new Date(timestamp);
     },
 
     isEmptySortValue(value) {
@@ -6550,7 +6641,7 @@ export const CostingModule = {
       const payloads = [];
       const openPositions = this.contractorOrderSettlementRows
         .filter((row) => Number(row.contractor_id) === Number(form.contractor) && this.parseMoney(row.due) > 0)
-        .sort((left, right) => String(left.order_date || '').localeCompare(String(right.order_date || ''))
+        .sort((left, right) => this.compareSortValues(this.sortDateValue(left.order_date), this.sortDateValue(right.order_date))
           || Number(left.item_id || 0) - Number(right.item_id || 0));
 
       openPositions.forEach((row) => {
@@ -7139,8 +7230,8 @@ export const CostingModule = {
     },
 
     eventTime(value) {
-      const date = new Date(value);
-      return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      const date = this.dateFromValue(value);
+      return date ? date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
     },
 
     eventContext(event) {
@@ -8853,7 +8944,7 @@ export const CostingModule = {
       const customer = this.paymentDialog?.row?.customer;
       return this.customerGiftCertificates(customer)
         .filter((row) => this.giftCertificateDisplayStatus(row) === 'active')
-        .sort((a, b) => new Date(a.valid_until || 0).getTime() - new Date(b.valid_until || 0).getTime());
+        .sort((a, b) => this.compareSortValues(this.sortDateValue(a.valid_until), this.sortDateValue(b.valid_until)));
     },
 
     async selectPaymentGiftCertificate(event) {
@@ -11215,9 +11306,11 @@ export const CostingModule = {
           body: JSON.stringify({ [field]: value || null }),
         });
         this.scheduleBackgroundAreaRefresh();
+        return true;
       } catch (error) {
         this.error = error.message;
         this.scheduleBackgroundAreaRefresh(0);
+        return false;
       } finally {
         const next = { ...this.saving };
         delete next[key];
@@ -11483,6 +11576,53 @@ export const CostingModule = {
         result.push({ id, name: name || `Подрядчик #${id}` });
       });
       return result;
+    },
+
+    isInternalExecutionContractor(value) {
+      const id = this.contractorId(value);
+      const contractor = this.contractors.find((item) => String(item.id) === String(id))
+        || (typeof value === 'object' ? value : null);
+      const name = this.normalizeStatus(contractor?.name || '');
+      return Boolean(contractor?.is_internal_production)
+        || name.includes('собственное производство')
+        || name === 'производство'
+        || name.includes('шелкограф');
+    },
+
+    itemUsesExternalExecutor(item) {
+      const executorId = this.selectedExecutorId(item);
+      if (!executorId) return false;
+      const contractor = this.contractors.find((row) => String(row.id) === String(executorId))
+        || item?.[this.executorField(item)];
+      const kind = String(contractor?.supplier_kind || 'contractor');
+      return !this.isInternalExecutionContractor(contractor) && ['contractor', 'both'].includes(kind);
+    },
+
+    isPendingExternalWorkRow(row) {
+      const item = row?.order_item || {};
+      if (this.normalizedWorkflowStatus(item?.item_status) !== 'sent_to_work') return false;
+      if (this.isInternalExecutionContractor(row?.contractor)) return false;
+      const contractorKind = String(row?.contractor?.supplier_kind || 'contractor');
+      if (!['contractor', 'both'].includes(contractorKind)) return false;
+
+      const rowContractorId = String(this.contractorId(row?.contractor) || '');
+      const firstContractorId = String(this.contractorId(item?.contractor_1) || '');
+      const secondContractorId = String(this.contractorId(item?.contractor_2) || '');
+      const executorId = secondContractorId || firstContractorId;
+      return Boolean(rowContractorId && executorId && rowContractorId === executorId);
+    },
+
+    workLaunchBusy(row) {
+      return Boolean(this.saving[`contractor_work:${row?.id}:production_status`]);
+    },
+
+    async launchExternalContractorWork(row) {
+      const statusId = this.inWorkProductionStatusId();
+      if (!statusId || !this.isPendingExternalWorkRow(row) || this.workLaunchBusy(row)) return;
+      const saved = await this.saveWorkField('contractor_work', row, 'production_status', statusId);
+      if (!saved) return;
+      this.feedbackSavedMessage = `Позиция «${row?.product_name || 'Без названия'}» передана контрагенту и переведена в работу.`;
+      await this.loadContractorWorkRows();
     },
 
     hasExternalItemContractor(row) {
@@ -13259,9 +13399,8 @@ export const CostingModule = {
     },
 
     formatDate(value) {
-      if (!value) return '-';
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return '-';
+      const date = this.dateFromValue(value);
+      if (!date) return '-';
       return new Intl.DateTimeFormat('ru-RU', {
         day: '2-digit',
         month: '2-digit',
@@ -13270,9 +13409,8 @@ export const CostingModule = {
     },
 
     monthKey(value) {
-      if (!value) return '';
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return '';
+      const date = this.dateFromValue(value);
+      if (!date) return '';
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, '0');
       return `${year}-${month}`;
@@ -13518,6 +13656,7 @@ export const CostingModule = {
         production: 'precision_manufacturing',
         screen: 'format_paint',
         production_archive: 'archive',
+        work_launch: 'outbox',
         contractor_overview: 'handshake',
         costing: 'price_check',
         office: 'storefront',
@@ -13906,9 +14045,8 @@ export const CostingModule = {
     },
 
     dateInput(value) {
-      if (!value) return '';
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return '';
+      const date = this.dateFromValue(value);
+      if (!date) return '';
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, '0');
       const day = String(date.getDate()).padStart(2, '0');
@@ -14061,7 +14199,8 @@ export const CostingModule = {
     async sendItemToWork(item) {
       const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
       if (!itemId || !this.canSendItemToWork(item)) return;
-      await this.saveOrderItemField(item, 'item_status', 'in_work');
+      const nextStatus = this.itemUsesExternalExecutor(item) ? 'sent_to_work' : 'in_work';
+      await this.saveOrderItemField(item, 'item_status', nextStatus);
     },
 
     canRequestItemCancellation(item) {
@@ -14403,20 +14542,25 @@ export const CostingModule = {
     async sendOrderToWork(row) {
       const orderId = this.entityId(this.orderId(row));
       if (!orderId || !this.canSendOrderToWork(row)) return;
-      const inWork = this.orderStatuses.find((status) => this.normalizedWorkflowStatus(status.name) === 'в работе');
-      if (!inWork) {
-        this.error = 'Статус «В работе» не найден в справочнике.';
-        return;
-      }
 
       const key = `orders:${orderId}:send_to_work`;
       this.saving = { ...this.saving, [key]: true };
       this.error = '';
       try {
-        await this.request(`/items/orders/${orderId}`, {
-          method: 'PATCH',
-          body: JSON.stringify({ order_status: Number(inWork.id) }),
+        if (this.detailOrderItemsOrderId !== orderId) await this.loadDetailOrderItems(row);
+        const items = (this.detailOrderItems || []).filter((item) => {
+          const status = this.normalizedWorkflowStatus(item?.item_status || 'new');
+          return ['new', 'approval', 'layout_revision'].includes(status);
         });
+        for (const item of items) {
+          const itemId = this.entityId(item?.id);
+          const itemStatus = this.itemUsesExternalExecutor(item) ? 'sent_to_work' : 'in_work';
+          await this.request(`/items/orders_items/${itemId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ item_status: itemStatus }),
+          });
+          this.updateOrderItemCaches(itemId, { item_status: itemStatus });
+        }
         await this.loadAllowedData();
         const fresh = this.detailOrderContext(row);
         if (this.detail?.row && this.detailIsOrder(this.detail.row)) this.detail.row = fresh;
@@ -21567,6 +21711,25 @@ export const CostingModule = {
           gap: 6px;
         }
 
+        .symbolika-work-launch-table th:last-child,
+        .symbolika-work-launch-table td:last-child {
+          inline-size: 190px;
+          min-inline-size: 190px;
+        }
+
+        .symbolika-work-launch-links {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 7px;
+        }
+
+        .symbolika-work-launch-action {
+          inline-size: 100%;
+          min-block-size: 38px;
+          padding-inline: 12px;
+          white-space: nowrap;
+        }
+
         @media (max-width: 760px) {
           .symbolika-contractor-overview-stats {
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -26520,11 +26683,11 @@ export const CostingModule = {
               </button>
               <span class="symbolika-costing-toggle-divider" aria-hidden="true"></span>
             </template>
-            <label v-if="activeTab === 'contractor_overview'" class="symbolika-costing-sort symbolika-contractor-overview-filter">
+            <label v-if="['work_launch', 'contractor_overview'].includes(activeTab)" class="symbolika-costing-sort symbolika-contractor-overview-filter">
               Контрагент
               <select v-model="contractorOverviewContractorFilter" class="symbolika-costing-select">
                 <option value="">Все контрагенты</option>
-                <option v-for="contractor in contractorOverviewContractorOptions" :key="'contractor-overview-' + contractor.id" :value="contractor.id">
+                <option v-for="contractor in (activeTab === 'work_launch' ? workLaunchContractorOptions : contractorOverviewContractorOptions)" :key="'contractor-overview-' + contractor.id" :value="contractor.id">
                   {{ contractor.name }}
                 </option>
               </select>
@@ -26543,6 +26706,7 @@ export const CostingModule = {
               Сбросить срок
             </button>
             <button
+              v-if="activeTab !== 'work_launch'"
               type="button"
               class="symbolika-costing-filter-toggle"
               :class="{ 'is-active': activeWorkStatusFiltersCount || workStatusPanelOpen }"
@@ -26552,7 +26716,7 @@ export const CostingModule = {
               Статус производства
               <span v-if="activeWorkStatusFiltersCount" class="symbolika-costing-segment-count">!</span>
             </button>
-            <button v-if="activeWorkStatusFiltersCount" type="button" class="symbolika-costing-filter" @click="clearWorkStatusFilters">
+            <button v-if="activeTab !== 'work_launch' && activeWorkStatusFiltersCount" type="button" class="symbolika-costing-filter" @click="clearWorkStatusFilters">
               Сбросить статус
             </button>
           </div>
@@ -26583,7 +26747,7 @@ export const CostingModule = {
                 </label>
               </div>
             </div>
-            <div v-if="workStatusPanelOpen" class="symbolika-costing-filter-panel">
+            <div v-if="workStatusPanelOpen && activeTab !== 'work_launch'" class="symbolika-costing-filter-panel">
               <div class="symbolika-costing-filter-panel-title">Фильтр по статусу производства</div>
               <div class="symbolika-costing-filter-chip-list">
                 <button
@@ -30873,6 +31037,96 @@ export const CostingModule = {
             class="symbolika-costing-empty"
           >
             Нет позиций
+          </div>
+        </div>
+
+        <div v-if="activeTab === 'work_launch'" class="symbolika-contractor-overview symbolika-work-launch">
+          <div class="symbolika-contractor-overview-stats">
+            <div class="symbolika-contractor-overview-stat">
+              <span>Ожидают отправки</span>
+              <strong>{{ workLaunchStats.positions }}</strong>
+            </div>
+            <div class="symbolika-contractor-overview-stat">
+              <span>Заказов</span>
+              <strong>{{ workLaunchStats.orders }}</strong>
+            </div>
+            <div class="symbolika-contractor-overview-stat">
+              <span>Контрагентов</span>
+              <strong>{{ workLaunchStats.contractors }}</strong>
+            </div>
+            <div class="symbolika-contractor-overview-stat" :class="{ 'is-alert': workLaunchStats.overdue }">
+              <span>Просрочено</span>
+              <strong>{{ workLaunchStats.overdue }}</strong>
+            </div>
+          </div>
+
+          <div class="symbolika-costing-table-wrap">
+            <table class="symbolika-costing-table symbolika-costing-table-work symbolika-contractor-overview-table symbolika-work-launch-table">
+              <thead>
+                <tr>
+                  <th>Контрагент</th>
+                  <th>Заказ / заказчик</th>
+                  <th>Позиция</th>
+                  <th>Срок</th>
+                  <th>Материалы</th>
+                  <th>Действие</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in visibleWorkLaunchRows"
+                  :key="'work-launch-row-' + row.id"
+                  :class="[rowStateClass(row), 'symbolika-costing-row-clickable']"
+                  @click="openRowDetail('contractor_work', row, $event)"
+                >
+                  <td>
+                    <strong class="symbolika-contractor-overview-name">{{ relatedName(row.contractor) || 'Не указан' }}</strong>
+                    <span class="symbolika-costing-pill is-warning">Ожидает отправки</span>
+                  </td>
+                  <td>
+                    <span class="symbolika-costing-order">{{ orderNumber(row) }}</span>
+                    <div>{{ relatedName(row.customer_company) || relatedName(row.customer) || '-' }}</div>
+                    <div class="symbolika-costing-subtle">{{ relatedName(row.manager_employee, 'full_name') || 'Менеджер не указан' }}</div>
+                  </td>
+                  <td>
+                    <div class="symbolika-costing-product">{{ row.product_name || 'Без названия' }}</div>
+                    <div class="symbolika-costing-subtle">{{ formatQuantity(row.quantity) }} шт.</div>
+                  </td>
+                  <td>
+                    <span class="symbolika-costing-date symbolika-contractor-overview-deadline" :class="deadlineClass(row.deadline)">
+                      <v-icon :name="deadlineIcon(row.deadline)" small />
+                      {{ row.deadline ? formatDate(row.deadline) : 'Не указан' }}
+                    </span>
+                  </td>
+                  <td>
+                    <div class="symbolika-work-launch-links">
+                      <button type="button" class="symbolika-costing-mini-button" @click.stop="copyContractorBrief(row)">
+                        <v-icon name="content_copy" small />
+                        Скопировать ТЗ
+                      </button>
+                      <a v-if="row.url" class="symbolika-costing-mini-button" :href="row.url" target="_blank" rel="noreferrer" @click.stop>
+                        <v-icon name="open_in_new" small />
+                        Макет
+                      </a>
+                    </div>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      class="symbolika-costing-button symbolika-work-launch-action"
+                      :disabled="workLaunchBusy(row)"
+                      @click.stop="launchExternalContractorWork(row)"
+                    >
+                      <v-icon name="send" small />
+                      {{ workLaunchBusy(row) ? 'Отправляем…' : 'Передать контрагенту' }}
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-if="!visibleWorkLaunchRows.length" class="symbolika-costing-empty">
+              Все переданные менеджерами позиции уже отправлены контрагентам
+            </div>
           </div>
         </div>
 
