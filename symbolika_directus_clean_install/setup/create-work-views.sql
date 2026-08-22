@@ -9436,7 +9436,15 @@ BEGIN
     blank_ordered = COALESCE(NEW.blank_ordered, false),
     contractor_1_cost = COALESCE(NEW.contractor_1_cost, 0),
     contractor_2_cost = COALESCE(NEW.contractor_2_cost, 0)
-  WHERE id = NEW.id;
+  WHERE id = NEW.id
+    AND (
+      contractor_1 IS DISTINCT FROM NEW.contractor_1
+      OR contractor_2 IS DISTINCT FROM NEW.contractor_2
+      OR blank_source IS DISTINCT FROM COALESCE(NEW.blank_source, 'none')
+      OR blank_ordered IS DISTINCT FROM COALESCE(NEW.blank_ordered, false)
+      OR contractor_1_cost IS DISTINCT FROM COALESCE(NEW.contractor_1_cost, 0)
+      OR contractor_2_cost IS DISTINCT FROM COALESCE(NEW.contractor_2_cost, 0)
+    );
 
   RETURN NEW;
 END;
