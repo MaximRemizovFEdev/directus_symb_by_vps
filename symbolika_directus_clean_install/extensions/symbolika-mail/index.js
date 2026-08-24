@@ -565,6 +565,7 @@ export default {
     };
 
     let imapSyncQueue = Promise.resolve();
+    const missingImapFolders = new Set();
     const synchronizeImapFolders = (folders, { actor = null, limit = 60 } = {}) => {
       const run = async () => {
         const settings = imapSettings();
@@ -585,10 +586,20 @@ export default {
         const perFolder = Math.min(Math.max(Number(limit || 60), 1), 200);
         try {
           await client.connect();
+          const availableFolders = new Set((await client.list()).map((row) => cleanText(row?.path, 500)).filter(Boolean));
           for (const folder of folders.filter((row) => cleanText(row?.imap_name, 500))) {
+            const imapName = cleanText(folder.imap_name, 500);
+            if (!availableFolders.has(imapName)) {
+              if (!missingImapFolders.has(imapName)) {
+                missingImapFolders.add(imapName);
+                logger.warn({ folder: imapName }, '[Symbolika Mail] configured folder is missing on IMAP server');
+              }
+              continue;
+            }
+            missingImapFolders.delete(imapName);
             let lock;
             try {
-              lock = await client.getMailboxLock(folder.imap_name);
+              lock = await client.getMailboxLock(imapName);
               const total = Number(client.mailbox?.exists || 0);
               if (!total) continue;
               const range = `${Math.max(1, total - perFolder + 1)}:*`;
@@ -622,8 +633,10 @@ export default {
       const requestedLimit = Number(env?.SYMBOLIKA_MAIL_BACKGROUND_SYNC_LIMIT || 60);
       const backgroundLimit = Math.min(Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 60, 1), 200);
       let stopped = false;
+      let backgroundRunning = false;
       const syncAllFolders = async () => {
-        if (stopped) return;
+        if (stopped || backgroundRunning) return;
+        backgroundRunning = true;
         try {
           const folders = await database('symbolika_mail_folders')
             .where('is_active', true)
@@ -636,6 +649,8 @@ export default {
           if (result.synced > 0) logger.info({ synced: result.synced }, '[Symbolika Mail] background sync completed');
         } catch (error) {
           logger.warn({ error: error?.message }, '[Symbolika Mail] background sync failed');
+        } finally {
+          backgroundRunning = false;
         }
       };
       const startupTimer = setTimeout(syncAllFolders, 3000);
