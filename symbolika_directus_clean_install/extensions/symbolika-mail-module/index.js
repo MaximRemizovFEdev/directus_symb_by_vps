@@ -66,6 +66,7 @@ const MailWorkspace = {
       threadLoading: false,
       sending: false,
       syncing: false,
+      markingAllRead: false,
       error: '',
       errorTimer: null,
       notice: '',
@@ -152,6 +153,9 @@ const MailWorkspace = {
     },
     unreadThreadCount() {
       return this.threads.filter((thread) => thread.is_unread).length;
+    },
+    visibleUnreadThreadCount() {
+      return this.visibleThreads.filter((thread) => thread.is_unread).length;
     },
     starredThreadCount() {
       return this.threads.filter((thread) => thread.is_starred).length;
@@ -574,6 +578,36 @@ const MailWorkspace = {
       }
     },
 
+    async markAllRead() {
+      if (this.markingAllRead || !this.visibleUnreadThreadCount) return;
+      this.markingAllRead = true;
+      this.error = '';
+      try {
+        const result = await this.request('/symbolika-mail/threads/read-all', {
+          method: 'POST',
+          body: JSON.stringify({
+            folder_id: this.selectedFolderId,
+            scope: this.mailboxScope,
+            filter: this.threadScope,
+            search: this.search.trim(),
+          }),
+        });
+        const updated = Number(result.updated || 0);
+        this.threads.forEach((thread) => {
+          if (thread.is_unread && (this.threadScope !== 'starred' || thread.is_starred)) thread.is_unread = false;
+        });
+        if (this.selectedThread) this.selectedThread.is_unread = false;
+        await this.loadMailbox(false, true);
+        this.notice = updated
+          ? `Прочитано писем: ${updated}.`
+          : 'Непрочитанных писем по выбранным условиям нет.';
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.markingAllRead = false;
+      }
+    },
+
     openComposer(thread = null) {
       const participant = thread?.participants?.find((row) => row.email && !row.email.endsWith('@symb62.ru'))
         || thread?.participants?.[0]
@@ -888,6 +922,10 @@ const MailWorkspace = {
         .symbolika-mail-list { min-inline-size: 0; overflow: auto; border-inline-end: 1px solid var(--theme--border-color-subdued); background: color-mix(in srgb, var(--theme--background-subdued) 82%, var(--theme--background)); scrollbar-width: thin; }
         .symbolika-mail-list-head { position: sticky; z-index: 4; inset-block-start: 0; display: grid; gap: 10px; padding: 14px 14px 11px; border-block-end: 1px solid var(--theme--border-color-subdued); background: color-mix(in srgb, var(--theme--background-subdued) 94%, transparent); backdrop-filter: blur(16px); }
         .symbolika-mail-list-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-inline-size: 0; }
+        .symbolika-mail-list-title-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+        .symbolika-mail-read-all { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-block-size: 28px; padding: 0 9px; border: 1px solid var(--theme--border-color-subdued); border-radius: 8px; background: var(--theme--background-normal); color: var(--theme--foreground-subdued); font-size: 9px; font-weight: 800; cursor: pointer; white-space: nowrap; }
+        .symbolika-mail-read-all:hover { border-color: rgb(249 115 22 / .42); color: #FB923C; }
+        .symbolika-mail-read-all:disabled { opacity: .5; cursor: wait; }
         .symbolika-mail-list-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
         .symbolika-mail-list-count { display: inline-flex; align-items: center; justify-content: center; min-inline-size: 42px; block-size: 28px; padding-inline: 10px; border: 1px solid var(--theme--border-color-subdued); border-radius: 999px; background: var(--theme--background-normal); color: var(--theme--foreground); font-size: 10px; font-weight: 850; font-variant-numeric: tabular-nums; }
         .symbolika-mail-scopes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
@@ -1344,7 +1382,12 @@ const MailWorkspace = {
               <div class="symbolika-mail-list-head">
                 <div class="symbolika-mail-list-title">
                   <strong>{{ mailboxScope === 'starred' ? 'Избранное' : (selectedFolder?.name || 'Письма') }}</strong>
-                  <span class="symbolika-mail-list-count">{{ visibleThreads.length }}</span>
+                  <span class="symbolika-mail-list-title-actions">
+                    <button v-if="visibleUnreadThreadCount" type="button" class="symbolika-mail-read-all" :disabled="markingAllRead" title="Отметить все письма по выбранным условиям прочитанными" @click="markAllRead">
+                      <v-icon name="done_all" small />{{ markingAllRead ? 'Отмечаем…' : 'Прочитать все' }}
+                    </button>
+                    <span class="symbolika-mail-list-count">{{ visibleThreads.length }}</span>
+                  </span>
                 </div>
                 <div class="symbolika-mail-scopes" aria-label="Фильтр писем">
                   <button type="button" class="symbolika-mail-scope" :class="{ 'is-active': threadScope === 'all' }" @click="threadScope = 'all'">Все <small>{{ threads.length }}</small></button>

@@ -616,6 +616,59 @@ export default {
       }
     });
 
+    router.post('/threads/read-all', async (req, res, next) => {
+      try {
+        const actor = await actorContext(req, res);
+        if (!actor) return;
+
+        const requestedFolder = Number(req.body?.folder_id || 0);
+        const starredScope = cleanText(req.body?.scope, 30) === 'starred';
+        const threadFilter = cleanText(req.body?.filter, 30);
+        const search = cleanText(req.body?.search, 200);
+
+        if (!starredScope) {
+          const folder = await accessibleFolder(requestedFolder, actor);
+          if (!folder) return apiError(res, 400, 'Выберите доступную почтовую папку.');
+        }
+
+        let query = threadQuery(actor)
+          .where('t.is_archived', false)
+          .where('t.is_unread', true);
+        if (starredScope) query = query.where('t.is_starred', true);
+        else query = query.where('t.folder_id', requestedFolder);
+        if (threadFilter === 'starred') query = query.where('t.is_starred', true);
+        if (search) {
+          query = query.where((builder) => builder
+            .whereILike('t.subject', `%${search}%`)
+            .orWhereILike('t.preview', `%${search}%`)
+            .orWhereRaw("t.participants::text ILIKE ?", [`%${search}%`])
+            .orWhereExists(function messageTextSearch() {
+              this.select(database.raw('1'))
+                .from('symbolika_mail_messages as smm')
+                .whereRaw('smm.thread_id = t.id')
+                .whereILike('smm.body_text', `%${search}%`);
+            }));
+        }
+
+        const rows = await query;
+        const threadIds = [...new Set(rows.map((row) => Number(row.id)).filter(Number.isInteger))];
+        if (threadIds.length) {
+          await database.transaction(async (trx) => {
+            await trx('symbolika_mail_threads')
+              .whereIn('id', threadIds)
+              .update({ is_unread: false, date_updated: new Date() });
+            await trx('symbolika_mail_messages')
+              .whereIn('thread_id', threadIds)
+              .update({ is_read: true });
+          });
+        }
+
+        return res.json({ data: { updated: threadIds.length } });
+      } catch (error) {
+        return next(error);
+      }
+    });
+
     router.get('/threads/:id', async (req, res, next) => {
       try {
         const actor = await actorContext(req, res);
