@@ -104,8 +104,42 @@ docker compose stop directus >/dev/null 2>&1 || true
 docker run --rm -v "${PROJECT_DIR}/extensions/symbolika-calculations:/app" -w /app node:20-alpine npm ci --omit=dev
 docker run --rm -v "${PROJECT_DIR}/extensions/symbolika-mail:/app" -w /app node:20-alpine npm ci --omit=dev
 
-log "Применение актуального SQL-слоя"
-docker exec -i "$DB_CONTAINER" psql -v ON_ERROR_STOP=1 -U directus -d directus < setup/create-work-views.sql
+log "Применение новых транзакционных миграций"
+docker exec "$DB_CONTAINER" psql -v ON_ERROR_STOP=1 -U directus -d directus -c '
+  CREATE TABLE IF NOT EXISTS public.symbolika_schema_migrations (
+    name TEXT PRIMARY KEY,
+    checksum TEXT NOT NULL,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+' >/dev/null
+
+shopt -s nullglob
+migration_files=(setup/migrations/*.sql)
+for migration_file in "${migration_files[@]}"; do
+  migration_name="$(basename "$migration_file")"
+  [[ "$migration_name" =~ ^[0-9A-Za-z._-]+\.sql$ ]] \
+    || fail "Invalid migration filename: ${migration_name}"
+  migration_checksum="$(sha256sum "$migration_file" | awk '{print $1}')"
+  applied_checksum="$(
+    docker exec "$DB_CONTAINER" psql -At -U directus -d directus \
+      -c "SELECT checksum FROM public.symbolika_schema_migrations WHERE name = '${migration_name}'" \
+      2>/dev/null || true
+  )"
+
+  if test -n "$applied_checksum"; then
+    test "$applied_checksum" = "$migration_checksum" \
+      || fail "Migration ${migration_name} was already applied, but its checksum has changed"
+    log "Migration already applied: ${migration_name}"
+    continue
+  fi
+
+  log "Applying migration: ${migration_name}"
+  docker exec -i "$DB_CONTAINER" psql -q -v ON_ERROR_STOP=1 -U directus -d directus < "$migration_file"
+  docker exec "$DB_CONTAINER" psql -v ON_ERROR_STOP=1 -U directus -d directus \
+    -c "INSERT INTO public.symbolika_schema_migrations (name, checksum) VALUES ('${migration_name}', '${migration_checksum}')" \
+    >/dev/null
+done
+shopt -u nullglob
 
 log "Пересоздание Directus"
 docker compose up -d --force-recreate directus

@@ -142,11 +142,19 @@ pg_restore --list backups/directus.dump
 
 ## Частые команды
 
-Применить SQL-настройки:
+Применить SQL-настройки при локальной разработке или чистой установке:
 
 ```powershell
 cmd /c "docker exec -i symbolika-db psql -v ON_ERROR_STOP=1 -U directus -d directus < symbolika_directus_clean_install\setup\create-work-views.sql"
 ```
+
+На рабочем VPS полный `create-work-views.sql` при каждом обновлении не выполнять. Все изменения существующей рабочей схемы добавлять отдельными транзакционными файлами в:
+
+```text
+symbolika_directus_clean_install/setup/migrations/
+```
+
+`setup/update-server.sh` применяет только ещё не выполненные миграции и записывает их имя и checksum в `symbolika_schema_migrations`. Уже применённый файл миграции не изменять — добавлять следующий файл.
 
 Проверить JS:
 
