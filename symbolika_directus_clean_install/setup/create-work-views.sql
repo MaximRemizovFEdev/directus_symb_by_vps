@@ -7462,11 +7462,91 @@ CREATE TABLE IF NOT EXISTS symbolika_news (
 CREATE INDEX IF NOT EXISTS symbolika_news_status_published_idx ON symbolika_news(status, published_at DESC);
 
 CREATE TABLE IF NOT EXISTS symbolika_news_reads (
+  id BIGSERIAL PRIMARY KEY,
   news BIGINT NOT NULL REFERENCES symbolika_news(id) ON DELETE CASCADE,
   "user" UUID NOT NULL REFERENCES directus_users(id) ON DELETE CASCADE,
-  read_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (news, "user")
+  read_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Directus requires a single-column primary key. Older installations used the
+-- composite (news, user) key, so migrate them without losing read marks.
+ALTER TABLE symbolika_news_reads ADD COLUMN IF NOT EXISTS id BIGINT;
+CREATE SEQUENCE IF NOT EXISTS symbolika_news_reads_id_seq;
+ALTER SEQUENCE symbolika_news_reads_id_seq OWNED BY symbolika_news_reads.id;
+ALTER TABLE symbolika_news_reads
+  ALTER COLUMN id SET DEFAULT nextval('symbolika_news_reads_id_seq');
+UPDATE symbolika_news_reads
+SET id = nextval('symbolika_news_reads_id_seq')
+WHERE id IS NULL;
+SELECT setval(
+  'symbolika_news_reads_id_seq',
+  COALESCE((SELECT MAX(id) FROM symbolika_news_reads), 1),
+  EXISTS (SELECT 1 FROM symbolika_news_reads)
+);
+
+DO $$
+DECLARE
+  current_primary_key TEXT;
+BEGIN
+  SELECT constraint_name
+  INTO current_primary_key
+  FROM information_schema.table_constraints
+  WHERE table_schema = 'public'
+    AND table_name = 'symbolika_news_reads'
+    AND constraint_type = 'PRIMARY KEY';
+
+  IF current_primary_key IS NOT NULL AND NOT EXISTS (
+    SELECT 1
+    FROM information_schema.key_column_usage
+    WHERE table_schema = 'public'
+      AND table_name = 'symbolika_news_reads'
+      AND constraint_name = current_primary_key
+    GROUP BY constraint_name
+    HAVING array_agg(column_name::TEXT ORDER BY ordinal_position) = ARRAY['id']::TEXT[]
+  ) THEN
+    EXECUTE format('ALTER TABLE public.symbolika_news_reads DROP CONSTRAINT %I', current_primary_key);
+    current_primary_key := NULL;
+  END IF;
+
+  IF current_primary_key IS NULL THEN
+    ALTER TABLE symbolika_news_reads
+      ADD CONSTRAINT symbolika_news_reads_pkey PRIMARY KEY (id);
+  END IF;
+END $$;
+
+ALTER TABLE symbolika_news_reads ALTER COLUMN id SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS symbolika_news_reads_news_user_uidx
+  ON symbolika_news_reads (news, "user");
+
+-- Historical snapshots are preserved, but kept outside the working schema so
+-- Directus does not expose them as collections or warn about missing keys.
+CREATE SCHEMA IF NOT EXISTS symbolika_archive;
+DO $$
+DECLARE
+  backup_table TEXT;
+BEGIN
+  FOREACH backup_table IN ARRAY ARRAY[
+    'directus_fields_backup_before_access_v2',
+    'directus_fields_backup_before_access_v4',
+    'directus_fields_backup_before_access_v5',
+    'directus_fields_backup_before_readonly_v3',
+    'directus_permissions_backup_before_access_v2',
+    'directus_permissions_backup_before_access_v4',
+    'directus_permissions_backup_before_access_v5'
+  ]
+  LOOP
+    IF EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_class AS relation
+      JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+      WHERE namespace.nspname = 'public'
+        AND relation.relname = backup_table
+        AND relation.relkind IN ('r', 'p')
+    ) THEN
+      EXECUTE format('ALTER TABLE public.%I SET SCHEMA symbolika_archive', backup_table);
+    END IF;
+  END LOOP;
+END $$;
 
 SELECT refresh_orders_due_tables();
 SELECT refresh_customer_reconciliation();

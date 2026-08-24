@@ -29,4 +29,6 @@ tmp-*
 *.sql
 !symbolika_directus_clean_install/setup/create-work-views.sql
 !symbolika_directus_clean_install/setup/create-tz-constructor.sql
+!symbolika_directus_clean_install/setup/migrations/
+!symbolika_directus_clean_install/setup/migrations/*.sql
 !.gitignore
