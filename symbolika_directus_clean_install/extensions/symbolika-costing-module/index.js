@@ -1974,7 +1974,7 @@ export const CostingModule = {
         { title: 'Производство', tabs: ['production', 'screen', 'labels'] },
         { title: 'Склад', tabs: ['admin_inventory'] },
         { title: 'Закупки', tabs: ['admin_procurement'] },
-        { title: 'Управление', tabs: ['order_economics', 'costing', 'contractor_overview', 'automation_control'] },
+        { title: 'Управление', tabs: ['work_launch', 'contractor_overview', 'order_economics', 'costing', 'automation_control', 'admin_customer_notifications'] },
         { title: 'Офис', tabs: ['office'] },
         { title: 'Админка', tabs: ['admin_employees', 'admin_users', 'admin_positions', 'contractors', 'admin_categories', 'admin_subcategories', 'admin_methods', 'admin_routing', 'admin_order_statuses', 'admin_production_statuses'] },
         { title: 'Финансы админки', tabs: ['admin_finance_dashboard', 'payroll', 'expenses', 'contractor_settlements', 'monthly_results'] },
