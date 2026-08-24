@@ -1,4 +1,18 @@
-﻿const fields = [
+﻿import {
+  compareSortValues as compareCoreSortValues,
+  createdRecordId as extractCreatedRecordId,
+  dateFromValue as parseDateValue,
+  dateOnly as formatDateOnly,
+  entityId as normalizeEntityId,
+  formatFileSize as formatCoreFileSize,
+  isEmptySortValue as isCoreEmptySortValue,
+  matchesDateRange as valueMatchesDateRange,
+  normalizeAppearanceTheme as normalizeCoreAppearanceTheme,
+  normalizeExternalHttpUrl,
+  sortDateValue as parseSortDateValue,
+} from './lib/core-utils.js';
+
+const fields = [
   'id',
   'order',
   'order_link',
@@ -3612,7 +3626,7 @@ export const CostingModule = {
       }, 180);
     },
     normalizeAppearanceTheme(value) {
-      return this.appearanceThemes.some((theme) => theme.id === value) ? value : 'graphite';
+      return normalizeCoreAppearanceTheme(value, this.appearanceThemes);
     },
 
     applyAppearanceTheme(value) {
@@ -3658,27 +3672,11 @@ export const CostingModule = {
     },
 
     contractorWebsiteUrl(value) {
-      const raw = String(value || '').trim();
-      if (!raw) return '';
-      const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-      try {
-        const url = new URL(candidate);
-        return ['http:', 'https:'].includes(url.protocol) && url.hostname ? url.href : '';
-      } catch {
-        return '';
-      }
+      return normalizeExternalHttpUrl(value);
     },
 
     layoutExternalUrl(value) {
-      const raw = String(value || '').trim();
-      if (!raw) return '';
-      const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-      try {
-        const url = new URL(candidate);
-        return ['http:', 'https:'].includes(url.protocol) && url.hostname ? url.href : '';
-      } catch {
-        return '';
-      }
+      return normalizeExternalHttpUrl(value);
     },
 
     setTab(tab) {
@@ -5418,9 +5416,7 @@ export const CostingModule = {
     },
 
     entityId(value) {
-      if (value === null || value === undefined || value === '') return '';
-      if (typeof value === 'object') return String(value.id ?? value.value ?? '');
-      return String(value);
+      return normalizeEntityId(value);
     },
 
     matchesFinanceEntityFilter(row) {
@@ -5434,20 +5430,11 @@ export const CostingModule = {
     },
 
     dateOnly(value) {
-      const date = this.dateFromValue(value);
-      if (!date) return '';
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
+      return formatDateOnly(value);
     },
 
     matchesDateRange(value, from, to) {
-      const current = this.dateOnly(value);
-      if (!current) return !from && !to;
-      if (from && current < from) return false;
-      if (to && current > to) return false;
-      return true;
+      return valueMatchesDateRange(value, from, to);
     },
 
     matchesFinanceDateFilter(row) {
@@ -5676,55 +5663,19 @@ export const CostingModule = {
     },
 
     sortDateValue(value) {
-      if (value === null || value === undefined || value === '') return '';
-      if (value instanceof Date) return Number.isNaN(value.getTime()) ? '' : value.getTime();
-      if (typeof value === 'number') return Number.isFinite(value) ? value : '';
-
-      const source = String(value).trim();
-      if (!source) return '';
-
-      // PostgreSQL DATE values must be interpreted as local calendar dates.
-      // Parsing them as UTC shifts the day in some browser time zones.
-      const isoDate = source.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (isoDate) {
-        const [, year, month, day] = isoDate.map(Number);
-        const date = new Date(year, month - 1, day);
-        return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
-          ? date.getTime()
-          : '';
-      }
-
-      // Some views and imported data may expose a localized date.
-      const ruDate = source.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2}|\d{4})$/);
-      if (ruDate) {
-        const day = Number(ruDate[1]);
-        const month = Number(ruDate[2]);
-        const yearPart = Number(ruDate[3]);
-        const year = ruDate[3].length === 2 ? 2000 + yearPart : yearPart;
-        const date = new Date(year, month - 1, day);
-        return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
-          ? date.getTime()
-          : '';
-      }
-
-      const date = new Date(source);
-      return Number.isNaN(date.getTime()) ? '' : date.getTime();
+      return parseSortDateValue(value);
     },
 
     dateFromValue(value) {
-      const timestamp = this.sortDateValue(value);
-      return timestamp === '' ? null : new Date(timestamp);
+      return parseDateValue(value);
     },
 
     isEmptySortValue(value) {
-      return value === null || value === undefined || value === '' || value === '-';
+      return isCoreEmptySortValue(value);
     },
 
     compareSortValues(a, b) {
-      if (typeof a === 'number' || typeof b === 'number') {
-        return Number(a || 0) - Number(b || 0);
-      }
-      return String(a).localeCompare(String(b), 'ru', { numeric: true, sensitivity: 'base' });
+      return compareCoreSortValues(a, b);
     },
 
     async hydrateOrderDetailRow(row) {
@@ -6995,11 +6946,7 @@ export const CostingModule = {
     },
 
     createdRecordId(payload) {
-      const data = payload?.data;
-      const value = Array.isArray(data) ? data[0] : data;
-      const id = value && typeof value === 'object' ? value.id : value;
-      const numericId = Number(id || 0);
-      return Number.isFinite(numericId) && numericId > 0 ? numericId : null;
+      return extractCreatedRecordId(payload);
     },
 
     async recoverCreatedOrderItemId(orderId, sourceItem, claimedIds = []) {
@@ -7636,11 +7583,7 @@ export const CostingModule = {
     },
 
     formatFileSize(value) {
-      const bytes = Number(value || 0);
-      if (!bytes) return '';
-      if (bytes < 1024) return `${bytes} Б`;
-      if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} КБ`;
-      return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} МБ`;
+      return formatCoreFileSize(value);
     },
 
     async findLinkedProcurement(requestId) {

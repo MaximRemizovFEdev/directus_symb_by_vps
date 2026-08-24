@@ -2,6 +2,9 @@
   "name": "directus-extension-symbolika-costing-module",
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "directus:extension": {
     "type": "module",
     "path": "index.js",
