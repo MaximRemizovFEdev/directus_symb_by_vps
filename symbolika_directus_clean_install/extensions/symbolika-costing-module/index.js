@@ -12518,7 +12518,8 @@ export const CostingModule = {
       const itemId = this.entityId(row?.order_item) || row?.id;
       if (!itemId || !row?.layout_preview_url) return '';
       const version = encodeURIComponent(row.layout_preview_uploaded_at || row.layout_preview_disk_name || 'current');
-      return `/symbolika-yandex-disk/orders-items/${itemId}/preview/content?v=${version}`;
+      const publicKey = encodeURIComponent(String(row.layout_preview_url));
+      return `/symbolika-yandex-disk/orders-items/${itemId}/preview/content?public_key=${publicKey}&v=${version}`;
     },
 
     openLayoutPreviewLightbox(row) {

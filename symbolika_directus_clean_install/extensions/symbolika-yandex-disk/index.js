@@ -761,18 +761,30 @@ export default {
 
     router.get('/orders-items/:id/preview/content', async (req, res) => {
       try {
-        if (!requireUser(req, res)) return;
         if (!token) throw apiError('Интеграция с Яндекс Диском не настроена.', 503);
         const itemId = Number(req.params.id);
         if (!Number.isInteger(itemId) || itemId <= 0) throw apiError('Некорректная позиция заказа.', 400);
-        const schema = await getSchema();
-        const itemService = new services.ItemsService('orders_items', { schema, accountability: req.accountability });
-        await itemService.readOne(itemId, { fields: ['id'] });
         const item = await database('orders_items')
           .where('id', itemId)
-          .select('layout_preview_disk_path', 'layout_preview_disk_name', 'layout_preview_disk_mime_type')
+          .select('layout_preview_url', 'layout_preview_disk_path', 'layout_preview_disk_name', 'layout_preview_disk_mime_type')
           .first();
         if (!item?.layout_preview_disk_path) throw apiError('Превью макета не найдено.', 404);
+
+        // The Directus Admin App keeps its access token in the API client, so
+        // a plain <img> request cannot add the Authorization header. Preview
+        // files are already published on Yandex Disk; the unguessable public
+        // link therefore doubles as the image access key. Authenticated API
+        // callers without this key still pass the normal permission check.
+        const suppliedPublicKey = String(req.query.public_key || '').trim();
+        const storedPublicKey = String(item.layout_preview_url || '').trim();
+        const publicPreviewAccess = Boolean(storedPublicKey && suppliedPublicKey === storedPublicKey);
+        if (!publicPreviewAccess) {
+          if (!requireUser(req, res)) return;
+          const schema = await getSchema();
+          const itemService = new services.ItemsService('orders_items', { schema, accountability: req.accountability });
+          await itemService.readOne(itemId, { fields: ['id'] });
+        }
+
         const download = await requestYandex('/resources/download', { query: { path: item.layout_preview_disk_path } });
         if (!download?.href) throw apiError('Яндекс Диск не вернул адрес превью.', 502);
         // Serve the preview through Directus instead of redirecting an <img>
