@@ -804,12 +804,13 @@ export default {
         const mimeType = ['image/jpeg', 'image/png'].includes(storedMimeType)
           ? storedMimeType
           : (['image/jpeg', 'image/png'].includes(responseMimeType) ? responseMimeType : 'image/png');
-        const safeName = cleanSegment(item.layout_preview_disk_name || 'preview', 'preview')
-          .replace(/["\\\r\n]/g, '-');
         res.setHeader('Cache-Control', 'private, max-age=300');
         res.setHeader('Content-Type', mimeType);
         res.setHeader('Content-Length', String(previewBuffer.length));
-        res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
+        // Do not put the original Cyrillic filename into a raw HTTP header:
+        // Node rejects non-Latin-1 header characters and turns a valid image
+        // response into HTTP 500. The UI already displays the stored name.
+        res.setHeader('Content-Disposition', 'inline');
         res.setHeader('X-Content-Type-Options', 'nosniff');
         return res.status(200).send(previewBuffer);
       } catch (error) {
