@@ -25,6 +25,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     mail: false,
     finance: true,
     birthdays: true,
+    news: true,
   };
 
   const prevOrders = new Map();
@@ -359,6 +360,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     if (collection === 'office_issue' || collection === 'office_items_in_office') return `/admin/symbolika-orders?order=${encodeURIComponent(item)}`;
     if (collection === 'customers' || collection === 'customer_companies') return '/admin/symbolika-orders';
     if (collection === 'employees') return '/admin/symbolika-notifications-module';
+    if (collection === 'symbolika_news') return `/admin/symbolika-news-module?news=${encodeURIComponent(item)}`;
     return '/admin/symbolika-orders';
   }
 

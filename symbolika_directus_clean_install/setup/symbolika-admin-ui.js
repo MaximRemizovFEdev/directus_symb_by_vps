@@ -94,6 +94,7 @@
     '/admin/symbolika-orders',
     '/admin/symbolika-tasks',
     '/admin/symbolika-mail-module',
+    '/admin/symbolika-news-module',
     '/admin/symbolika-profile-module',
   ];
   const roleModulePaths = new Map([
@@ -142,6 +143,7 @@
     { path: '/admin/symbolika-production', label: '\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e', icon: 'production' },
     { path: '/admin/symbolika-procurement', label: '\u0417\u0430\u043a\u0443\u043f\u043a\u0438', icon: 'procurement' },
     { path: '/admin/symbolika-mail-module', label: '\u041f\u043e\u0447\u0442\u0430', icon: 'mail' },
+    { path: '/admin/symbolika-news-module', label: '\u041d\u043e\u0432\u043e\u0441\u0442\u0438', icon: 'news' },
     { path: '/admin/symbolika-management', label: '\u0423\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435', icon: 'management' },
     { path: '/admin/symbolika-admin', label: '\u0410\u0434\u043c\u0438\u043d\u043a\u0430', icon: 'admin' },
     { path: '/admin/symbolika-profile-module', label: '\u041a\u0430\u0431\u0438\u043d\u0435\u0442', icon: 'profile' },
@@ -234,6 +236,7 @@
       production: '<path d="M4 4h6v6H4V4Zm2 2v2h2V6H6Zm8-2h6v6h-6V4Zm2 2v2h2V6h-2ZM4 14h6v6H4v-6Zm2 2v2h2v-2H6Zm9-3h4v2h-4v4h-2v-4h2v-2Zm2 4h3v3h-3v-3Z"/>',
       procurement: '<path d="M7 4h2l1 3h10l-2 8H9L7 6H4V4h3Zm3.7 5 .8 4h5l1-4h-6.8ZM10 17a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"/>',
       mail: '<path d="M3 5h18v14H3V5Zm2 2v.4l7 4.7 7-4.7V7H5Zm14 10V9.8l-7 4.7-7-4.7V17h14Z"/>',
+      news: '<path d="M4 4h16v16H4V4Zm2 2v12h12V6H6Zm2 2h8v2H8V8Zm0 4h5v2H8v-2Zm0 4h8v1H8v-1Zm7-4h1v2h-1v-2Z"/>',
       management: '<path d="M4 19h16v2H4v-2Zm2-2V9h3v8H6Zm5 0V3h3v14h-3Zm5 0v-6h3v6h-3Z"/>',
       admin: '<path d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3Zm0 2.2L18 6.5V11c0 3.8-2.4 7.6-6 8.8-3.6-1.2-6-5-6-8.8V6.5l6-2.3Zm0 3.3a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Zm-4 8.8c.8-1.8 2.2-2.8 4-2.8s3.2 1 4 2.8c-1 1-2.4 1.8-4 2.3-1.6-.5-3-1.3-4-2.3Z"/>',
       profile: '<path d="M12 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6ZM4 22v-3c0-3.3 3.6-5 8-5s8 1.7 8 5v3h-2v-3c0-1.7-2.7-3-6-3s-6 1.3-6 3v3H4Z"/>',

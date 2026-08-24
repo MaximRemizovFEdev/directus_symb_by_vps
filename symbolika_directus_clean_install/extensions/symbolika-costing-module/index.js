@@ -534,6 +534,7 @@ const notificationTopicChoices = [
   { id: 'mail', title: 'Новые письма', description: 'Входящие письма в доступных вам почтовых папках.', icon: 'mail' },
   { id: 'finance', title: 'Финансы', description: 'Оплаты, задолженности и финансовые события.', icon: 'payments' },
   { id: 'birthdays', title: 'Дни рождения', description: 'Напоминания о днях рождения коллег за неделю и в сам день.', icon: 'cake' },
+  { id: 'news', title: 'Новости компании', description: 'Новые объявления и публикации для сотрудников.', icon: 'newspaper' },
 ];
 
 const tableSortOptions = [
@@ -4758,11 +4759,11 @@ export const CostingModule = {
     },
 
     notificationKindLabel(kind) {
-      return ({ order: 'Заказ', item: 'Позиция', task: 'Задача', procurement: 'Закупка', mail: 'Почта', birthday: 'День рождения', system: 'Система' })[kind] || 'Система';
+      return ({ order: 'Заказ', item: 'Позиция', task: 'Задача', procurement: 'Закупка', mail: 'Почта', birthday: 'День рождения', news: 'Новости', system: 'Система' })[kind] || 'Система';
     },
 
     notificationKindIcon(kind) {
-      return ({ order: 'assignment', item: 'inventory_2', task: 'task_alt', procurement: 'local_shipping', mail: 'mail', birthday: 'cake', system: 'notifications' })[kind] || 'notifications';
+      return ({ order: 'assignment', item: 'inventory_2', task: 'task_alt', procurement: 'local_shipping', mail: 'mail', birthday: 'cake', news: 'newspaper', system: 'notifications' })[kind] || 'notifications';
     },
 
     notificationDate(value) {

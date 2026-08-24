@@ -7352,6 +7352,30 @@ SELECT
 FROM orders_items oi
 WHERE EXISTS (SELECT 1 FROM orders_overview oo WHERE oo.id = oi."order");
 
+CREATE TABLE IF NOT EXISTS symbolika_news (
+  id BIGSERIAL PRIMARY KEY,
+  status VARCHAR(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'archived')),
+  title VARCHAR(240) NOT NULL,
+  summary VARCHAR(500),
+  content_html TEXT NOT NULL,
+  cover_url TEXT,
+  author_employee INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+  created_by UUID REFERENCES directus_users(id) ON DELETE SET NULL,
+  updated_by UUID REFERENCES directus_users(id) ON DELETE SET NULL,
+  published_at TIMESTAMPTZ,
+  notifications_sent_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS symbolika_news_status_published_idx ON symbolika_news(status, published_at DESC);
+
+CREATE TABLE IF NOT EXISTS symbolika_news_reads (
+  news BIGINT NOT NULL REFERENCES symbolika_news(id) ON DELETE CASCADE,
+  "user" UUID NOT NULL REFERENCES directus_users(id) ON DELETE CASCADE,
+  read_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (news, "user")
+);
+
 SELECT refresh_orders_due_tables();
 SELECT refresh_customer_reconciliation();
 

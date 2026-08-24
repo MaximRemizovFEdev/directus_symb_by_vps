@@ -1,7 +1,7 @@
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const APPEARANCE_THEMES = new Set(['graphite', 'espresso', 'pearl', 'frost']);
-const NOTIFICATION_TOPICS = ['order_status', 'item_status', 'new_tasks', 'task_updates', 'production', 'procurement', 'mail', 'finance', 'birthdays'];
+const NOTIFICATION_TOPICS = ['order_status', 'item_status', 'new_tasks', 'task_updates', 'production', 'procurement', 'mail', 'finance', 'birthdays', 'news'];
 const DEFAULT_NOTIFICATION_TOPICS = {
   order_status: true,
   item_status: true,
@@ -12,6 +12,7 @@ const DEFAULT_NOTIFICATION_TOPICS = {
   mail: false,
   finance: true,
   birthdays: true,
+  news: true,
 };
 
 function cleanText(value, maxLength) {
@@ -62,6 +63,7 @@ function notificationLink(collection, item) {
   if (collection === 'production_work' || collection === 'screen_printing_work') return `/admin/symbolika-production${query('item')}`;
   if (collection === 'customers' || collection === 'customer_companies') return '/admin/symbolika-orders';
   if (collection === 'employees') return '/admin/symbolika-notifications-module';
+  if (collection === 'symbolika_news') return `/admin/symbolika-news-module${query('news')}`;
   return '/admin/symbolika-orders';
 }
 
@@ -72,6 +74,7 @@ function notificationKind(collection) {
   if (collection === 'symbolika_mail_threads') return 'mail';
   if (collection === 'procurement_requests') return 'procurement';
   if (collection === 'employees') return 'birthday';
+  if (collection === 'symbolika_news') return 'news';
   return 'system';
 }
 
