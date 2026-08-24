@@ -7881,8 +7881,24 @@ export const CostingModule = {
       }
       if (name === 'applicationMethods') {
         const categoryId = row?.product_category || row?.category || this.adminForm.product_category || this.adminForm.category;
-        if (categoryId) return this.applicationMethods.filter((item) => !item.category || Number(this.entityId(item.category)) === Number(categoryId));
-        return this.applicationMethods;
+        const selectedId = String(this.entityId(row?.application_method || this.adminForm.application_method) || '');
+        const candidates = categoryId
+          ? this.applicationMethods.filter((item) => !item.category || Number(this.entityId(item.category)) === Number(categoryId))
+          : this.applicationMethods;
+        const uniqueByName = new Map();
+
+        candidates.forEach((item) => {
+          const key = String(item?.name || '').trim().toLocaleLowerCase('ru-RU');
+          const current = uniqueByName.get(key);
+          const itemId = String(this.entityId(item) || '');
+          const currentId = String(this.entityId(current) || '');
+          const shouldReplace = !current
+            || (selectedId && itemId === selectedId)
+            || (currentId !== selectedId && !current?.category && Boolean(item?.category));
+          if (shouldReplace) uniqueByName.set(key, item);
+        });
+
+        return Array.from(uniqueByName.values());
       }
       if (name === 'employeePositions') return this.employeePositions;
       if (name === 'directusUsers') return this.directusUsers;
@@ -10034,9 +10050,24 @@ export const CostingModule = {
       const contractorIds = [...new Set(this.matchingCapabilities(item, capabilityType)
         .map((row) => Number(this.entityId(row.contractor) || 0))
         .filter(Boolean))];
-      return contractorIds
+      const configured = contractorIds
         .map((id) => this.contractors.find((contractor) => Number(contractor.id) === id))
         .filter((contractor) => contractor && (contractor.approval_status || 'approved') === 'approved');
+      if (configured.length) return configured;
+
+      const approved = (this.contractors || [])
+        .filter((contractor) => contractor && (contractor.approval_status || 'approved') === 'approved');
+      // No capability means an unresolved route, not an invalid category.
+      // Admin and Managing can resolve it manually; other roles only see an
+      // already selected contractor and otherwise get the explicit fallback.
+      if (this.hasManagerOverrideAccess) return approved;
+      const selectedField = capabilityType === 'blank_supplier'
+        ? 'contractor_1'
+        : (this.itemNeedsBlank(item) ? 'contractor_2' : 'contractor_1');
+      const selectedId = Number(this.entityId(item?.[selectedField]) || 0);
+      return selectedId
+        ? approved.filter((contractor) => Number(contractor.id) === selectedId)
+        : [];
     },
 
     executorOptions(item) {
@@ -10478,6 +10509,12 @@ export const CostingModule = {
       const customSize = customWidth && customHeight ? `${customWidth}×${customHeight} мм` : '';
       if (customSize && context.format === 'Свой размер') context.format = customSize;
       if (customSize && context.size === 'Свой размер') context.size = customSize;
+      const laminationType = String(values.lamination_type || '').trim();
+      if (laminationType) {
+        context.lamination_text = laminationType.toLocaleLowerCase('ru-RU') === 'без ламинации'
+          ? 'без ламинации'
+          : `ламинация ${laminationType.toLocaleLowerCase('ru-RU')}`;
+      }
       return context;
     },
 
@@ -32825,8 +32862,7 @@ export const CostingModule = {
                 <label v-if="itemNeedsBlank(item) && item.blank_source === 'supplier'" class="symbolika-costing-label symbolika-costing-new-order-route symbolika-mobile-item-extra">
                   Поставщик заготовки
                   <select v-model="item.contractor_1" class="symbolika-costing-select" @change="item.contractor_1_cost = ''">
-                    <option value="">Не выбран</option>
-                    <option v-if="!blankSupplierOptions(item).length" value="" disabled>Нет отмеченных поставщиков</option>
+                    <option value="">Контрагент не определён</option>
                     <option v-for="contractor in blankSupplierOptions(item)" :key="contractor.id" :value="contractor.id">
                       {{ contractor.name }}
                     </option>
@@ -32841,7 +32877,7 @@ export const CostingModule = {
                 <label v-if="itemCategoryId(item)" class="symbolika-costing-label symbolika-costing-new-order-route symbolika-mobile-item-extra">
                   {{ executorOptions(item).length === 1 ? 'Исполнитель (автоматически)' : 'Исполнитель работ' }}
                   <select v-model="item[executorField(item)]" class="symbolika-costing-select" :disabled="executorOptions(item).length <= 1" @change="item[executorCostField(item)] = ''">
-                    <option value="">{{ executorOptions(item).length ? 'Выберите исполнителя' : 'Маршрут не настроен' }}</option>
+                    <option value="">{{ executorOptions(item).length ? 'Выберите исполнителя' : 'Контрагент не определён' }}</option>
                     <option v-for="contractor in executorOptions(item)" :key="'executor-' + contractor.id" :value="contractor.id">
                       {{ contractor.name }}
                     </option>
@@ -34389,8 +34425,7 @@ export const CostingModule = {
                   <label v-if="itemNeedsBlank(detailItemForm) && detailItemForm.blank_source === 'supplier'" class="symbolika-costing-label">
                     Поставщик заготовки
                     <select v-model="detailItemForm.contractor_1" class="symbolika-costing-select" @change="detailItemForm.contractor_1_cost = ''">
-                      <option value="">Не выбран</option>
-                      <option v-if="!blankSupplierOptions(detailItemForm).length" value="" disabled>Нет отмеченных поставщиков</option>
+                      <option value="">Контрагент не определён</option>
                       <option v-for="contractor in blankSupplierOptions(detailItemForm)" :key="contractor.id" :value="contractor.id">
                         {{ contractor.name }}
                       </option>
@@ -34405,7 +34440,7 @@ export const CostingModule = {
                   <label v-if="itemCategoryId(detailItemForm)" class="symbolika-costing-label">
                     {{ executorOptions(detailItemForm).length === 1 ? 'Исполнитель (автоматически)' : 'Исполнитель работ' }}
                     <select v-model="detailItemForm[executorField(detailItemForm)]" class="symbolika-costing-select" :disabled="executorOptions(detailItemForm).length <= 1" @change="detailItemForm[executorCostField(detailItemForm)] = ''">
-                      <option value="">{{ executorOptions(detailItemForm).length ? 'Выберите исполнителя' : 'Маршрут не настроен' }}</option>
+                      <option value="">{{ executorOptions(detailItemForm).length ? 'Выберите исполнителя' : 'Контрагент не определён' }}</option>
                       <option v-for="contractor in executorOptions(detailItemForm)" :key="'detail-executor-' + contractor.id" :value="contractor.id">
                         {{ contractor.name }}
                       </option>
@@ -34812,8 +34847,7 @@ export const CostingModule = {
                   :disabled="!contractorSelectionsEditable(detail.row)"
                   @change="saveOrderItemContractor(detail.row, 'contractor_1', $event.target.value)"
                 >
-                  <option value="">Не выбран</option>
-                  <option v-if="!blankSupplierOptions(detail.row).length" value="" disabled>Нет отмеченных поставщиков</option>
+                  <option value="">Контрагент не определён</option>
                   <option v-for="contractor in blankSupplierOptions(detail.row)" :key="contractor.id" :value="contractor.id">
                     {{ contractor.name }}
                   </option>
@@ -34843,7 +34877,7 @@ export const CostingModule = {
                   :disabled="!contractorSelectionsEditable(detail.row) || executorOptions(detail.row).length <= 1"
                   @change="saveOrderItemContractor(detail.row, executorField(detail.row), $event.target.value)"
                 >
-                  <option value="">{{ executorOptions(detail.row).length ? 'Выберите исполнителя' : 'Маршрут не настроен' }}</option>
+                  <option value="">{{ executorOptions(detail.row).length ? 'Выберите исполнителя' : 'Контрагент не определён' }}</option>
                   <option v-for="contractor in executorOptions(detail.row)" :key="'saved-executor-' + contractor.id" :value="contractor.id">
                     {{ contractor.name }}
                   </option>

@@ -326,12 +326,12 @@ INSERT INTO _tz_constructor_seed (
     {"key":"custom_width_mm","label":"Ширина, мм","type":"number","required":true,"show_when":{"format":"Свой размер"}},
     {"key":"custom_height_mm","label":"Высота, мм","type":"number","required":true,"show_when":{"format":"Свой размер"}},
     {"key":"folds","label":"Подвороты","type":"checkbox","required":false},
-    {"key":"lamination_type","label":"Ламинация","type":"select","required":true,"options":["Матовая","Глянцевая"]},
+    {"key":"lamination_type","label":"Ламинация","type":"select","required":true,"options":["Без ламинации","Матовая","Глянцевая"]},
     {"key":"pipe_holder","label":"Держатель под трубу","type":"checkbox","required":false},
     {"key":"mounting_tape","label":"Скотч для крепления","type":"checkbox","required":false},
     {"key":"comment","label":"Комментарий к ТЗ","type":"textarea","required":false}
   ]$json$::jsonb,
-  '{{quantity}} табличек {{material}}, {{format}}, ламинация {{lamination_type}}{{#folds}}, с подворотами{{/folds}}{{#pipe_holder}}, держатель под трубу{{/pipe_holder}}{{#mounting_tape}}, скотч для крепления{{/mounting_tape}}{{#comment}}. {{comment}}{{/comment}}',
+  '{{quantity}} табличек {{material}}, {{format}}, {{lamination_text}}{{#folds}}, с подворотами{{/folds}}{{#pipe_holder}}, держатель под трубу{{/pipe_holder}}{{#mounting_tape}}, скотч для крепления{{/mounting_tape}}{{#comment}}. {{comment}}{{/comment}}',
   '2 таблички ПВХ 5 мм, А3, ламинация матовая, скотч для крепления',
   120
 ),

@@ -14830,7 +14830,9 @@ AS $$
 DECLARE
   needs_blank boolean := false;
   selected_executor integer;
+  executor_candidates_exist boolean := false;
   executor_allowed boolean := false;
+  supplier_candidates_exist boolean := false;
   supplier_allowed boolean := false;
 BEGIN
   IF symbolika_normalize_item_status(NEW.item_status) IN ('sent_to_work', 'in_work') THEN
@@ -14863,11 +14865,23 @@ BEGIN
     ), best AS (
       SELECT MAX(specificity) AS specificity FROM matching
     )
-    SELECT EXISTS (
+    SELECT EXISTS (SELECT 1 FROM matching), EXISTS (
       SELECT 1 FROM matching, best
       WHERE matching.specificity = best.specificity
         AND matching.contractor = selected_executor
-    ) INTO executor_allowed;
+    ) INTO executor_candidates_exist, executor_allowed;
+
+    -- A configured capability list is restrictive. If there is no matching
+    -- route at all, an administrator or managing user may resolve the route
+    -- manually in costing by selecting any approved contractor.
+    IF NOT executor_candidates_exist AND selected_executor IS NOT NULL THEN
+      SELECT EXISTS (
+        SELECT 1
+        FROM contractors contractor
+        WHERE contractor.id = selected_executor
+          AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+      ) INTO executor_allowed;
+    END IF;
 
     IF selected_executor IS NULL OR NOT executor_allowed THEN
       RAISE EXCEPTION USING MESSAGE = U&'\0414\043b\044f \0437\0430\043f\0443\0441\043a\0430 \043f\043e\0437\0438\0446\0438\0438 \0432\044b\0431\0435\0440\0438\0442\0435 \0434\043e\043f\0443\0441\0442\0438\043c\043e\0433\043e \0438\0441\043f\043e\043b\043d\0438\0442\0435\043b\044f \0440\0430\0431\043e\0442';
@@ -14889,11 +14903,20 @@ BEGIN
       ), best AS (
         SELECT MAX(specificity) AS specificity FROM matching
       )
-      SELECT EXISTS (
+      SELECT EXISTS (SELECT 1 FROM matching), EXISTS (
         SELECT 1 FROM matching, best
         WHERE matching.specificity = best.specificity
           AND matching.contractor = NEW.contractor_1
-      ) INTO supplier_allowed;
+      ) INTO supplier_candidates_exist, supplier_allowed;
+
+      IF NOT supplier_candidates_exist AND NEW.contractor_1 IS NOT NULL THEN
+        SELECT EXISTS (
+          SELECT 1
+          FROM contractors contractor
+          WHERE contractor.id = NEW.contractor_1
+            AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+        ) INTO supplier_allowed;
+      END IF;
 
       IF NEW.contractor_1 IS NULL OR NOT supplier_allowed THEN
         RAISE EXCEPTION USING MESSAGE = U&'\0414\043b\044f \0437\0430\043f\0443\0441\043a\0430 \043f\043e\0437\0438\0446\0438\0438 \0432\044b\0431\0435\0440\0438\0442\0435 \0434\043e\043f\0443\0441\0442\0438\043c\043e\0433\043e \043f\043e\0441\0442\0430\0432\0449\0438\043a\0430 \0437\0430\0433\043e\0442\043e\0432\043a\0438';
@@ -15105,7 +15128,9 @@ DECLARE
   item_label text;
   needs_blank boolean;
   selected_executor integer;
+  executor_candidates_exist boolean;
   executor_allowed boolean;
+  supplier_candidates_exist boolean;
   supplier_allowed boolean;
 BEGIN
   SELECT orders.* INTO order_row FROM orders WHERE orders.id = order_id;
@@ -15175,11 +15200,19 @@ BEGIN
         AND (capability.product_subcategory IS NULL OR capability.product_subcategory = item_row.product_subcategory)
         AND (capability.application_method IS NULL OR capability.application_method = item_row.application_method)
     ), best AS (SELECT MAX(specificity) AS specificity FROM matching)
-    SELECT EXISTS (
+    SELECT EXISTS (SELECT 1 FROM matching), EXISTS (
       SELECT 1 FROM matching, best
       WHERE matching.specificity = best.specificity
         AND matching.contractor = selected_executor
-    ) INTO executor_allowed;
+    ) INTO executor_candidates_exist, executor_allowed;
+    IF NOT COALESCE(executor_candidates_exist, false) AND selected_executor IS NOT NULL THEN
+      SELECT EXISTS (
+        SELECT 1
+        FROM contractors contractor
+        WHERE contractor.id = selected_executor
+          AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+      ) INTO executor_allowed;
+    END IF;
     IF selected_executor IS NULL OR NOT COALESCE(executor_allowed, false) THEN
       missing_values := array_append(missing_values, item_label || U&': \0438\0441\043f\043e\043b\043d\0438\0442\0435\043b\044c \0440\0430\0431\043e\0442');
     END IF;
@@ -15198,11 +15231,19 @@ BEGIN
           AND (capability.product_subcategory IS NULL OR capability.product_subcategory = item_row.product_subcategory)
           AND (capability.application_method IS NULL OR capability.application_method = item_row.application_method)
       ), best AS (SELECT MAX(specificity) AS specificity FROM matching)
-      SELECT EXISTS (
+      SELECT EXISTS (SELECT 1 FROM matching), EXISTS (
         SELECT 1 FROM matching, best
         WHERE matching.specificity = best.specificity
           AND matching.contractor = item_row.contractor_1
-      ) INTO supplier_allowed;
+      ) INTO supplier_candidates_exist, supplier_allowed;
+      IF NOT COALESCE(supplier_candidates_exist, false) AND item_row.contractor_1 IS NOT NULL THEN
+        SELECT EXISTS (
+          SELECT 1
+          FROM contractors contractor
+          WHERE contractor.id = item_row.contractor_1
+            AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+        ) INTO supplier_allowed;
+      END IF;
       IF item_row.contractor_1 IS NULL OR NOT COALESCE(supplier_allowed, false) THEN
         missing_values := array_append(missing_values, item_label || U&': \043f\043e\0441\0442\0430\0432\0449\0438\043a \0437\0430\0433\043e\0442\043e\0432\043a\0438');
       END IF;
