@@ -263,15 +263,31 @@ export default {
           duplex: 'half',
         });
         if (!uploadResponse.ok) throw apiError(`Не удалось загрузить файл на Яндекс Диск: HTTP ${uploadResponse.status}.`, 502);
-        const meta = await requestYandex('/resources', {
-          query: { path: diskPath, fields: 'name,path,size,mime_type,created,modified,md5' },
+        let meta = await requestYandex('/resources', {
+          query: { path: diskPath, fields: 'name,path,size,mime_type,public_url,created,modified,md5' },
         });
+        // Publishing is part of the background upload, not order submission.
+        // This gives the draft a stable usable URL before an order/item exists,
+        // so saving the order never has to wait for a slow Yandex move operation.
+        if (publishFiles && !meta.public_url) {
+          try {
+            await requestYandex('/resources/publish', { method: 'PUT', query: { path: diskPath } });
+            meta = await requestYandex('/resources', {
+              query: { path: diskPath, fields: 'name,path,size,mime_type,public_url,created,modified,md5' },
+            });
+          } catch (publishError) {
+            // Attaching retries publication. A transient publish failure must
+            // not discard a file which has already been uploaded successfully.
+            logger.warn(`[Symbolika Yandex Disk] draft publish (${diskPath}): ${publishError.message}`);
+          }
+        }
         return res.json({ data: {
           draft_token: draftToken,
           path: diskPath,
           name: meta.name || fileName,
           size: Number(meta.size || declaredSize),
           mime_type: meta.mime_type || req.headers['content-type'] || '',
+          public_url: meta.public_url || '',
         } });
       } catch (error) {
         logger.error(`[Symbolika Yandex Disk] draft upload: ${error.message}`);
@@ -293,9 +309,17 @@ export default {
 
         const schema = await getSchema();
         const { itemService, item, order } = await loadLayoutContext(itemId, req.accountability, schema);
-        const sourceMeta = await requestYandex('/resources', {
-          query: { path: sourcePath, fields: 'name,path,size,mime_type' },
+        let sourceMeta = await requestYandex('/resources', {
+          query: { path: sourcePath, fields: 'name,path,size,mime_type,public_url' },
         });
+        if (publishFiles && !sourceMeta.public_url) {
+          await requestYandex('/resources/publish', { method: 'PUT', query: { path: sourcePath } });
+          sourceMeta = await requestYandex('/resources', {
+            query: { path: sourcePath, fields: 'name,path,size,mime_type,public_url' },
+          });
+        }
+        const provisionalLink = sourceMeta.public_url || '';
+        if (publishFiles && !provisionalLink) throw apiError('Файл загружен, но публичная ссылка не была создана.', 502);
         const fileName = buildLayoutFileName({
           orderDate: order.date,
           customerName: order.company_name || order.customer_name,
@@ -308,46 +332,81 @@ export default {
         const folderPath = `${root}/${orderFolder}/${itemFolder}`;
         await ensureFolderTree(folderPath);
         const diskPath = `${folderPath}/${fileName}`;
-        const moveOperation = await requestYandex('/resources/move', {
-          method: 'POST',
-          query: { from: sourcePath, path: diskPath, overwrite: true },
-        });
-        await waitForYandexOperation(moveOperation, diskPath);
-        if (publishFiles) await requestYandex('/resources/publish', { method: 'PUT', query: { path: diskPath } });
-        const meta = await requestYandex('/resources', {
-          query: { path: diskPath, fields: 'name,path,size,mime_type,public_url,created,modified,md5' },
-        });
-        const link = meta.public_url || '';
-        if (publishFiles && !link) throw apiError('Файл загружен, но публичная ссылка не была создана.', 502);
-        await itemService.updateOne(itemId, { url: link || null });
+        // Attach the already published draft immediately. Renaming/moving on
+        // Yandex Disk can take 30-40 seconds, so it is finalized after the HTTP
+        // response. The provisional public URL remains usable during the move.
+        await itemService.updateOne(itemId, { url: provisionalLink || null });
         await database('orders_items').where('id', itemId).update({
-          layout_disk_path: diskPath,
-          layout_disk_name: meta.name || fileName,
-          layout_disk_size: Number(meta.size || sourceMeta.size || 0),
-          layout_disk_mime_type: meta.mime_type || sourceMeta.mime_type || null,
+          layout_disk_path: sourcePath,
+          layout_disk_name: sourceMeta.name || fileName,
+          layout_disk_size: Number(sourceMeta.size || 0),
+          layout_disk_mime_type: sourceMeta.mime_type || null,
           layout_disk_uploaded_by: userId,
           layout_disk_uploaded_at: database.fn.now(),
         });
         const oldDiskPath = String(item.layout_disk_path || '').trim();
-        if (deleteReplacedFiles && oldDiskPath && oldDiskPath !== diskPath && isManagedOldPath(oldDiskPath, { root, orderFolder, itemFolder })) {
-          try {
-            await requestYandex('/resources', { method: 'DELETE', query: { path: oldDiskPath, permanently: true } });
-          } catch (cleanupError) {
-            logger.warn(`[Symbolika Yandex Disk] old file cleanup (${oldDiskPath}): ${cleanupError.message}`);
+
+        const finishMove = async (moveOperation) => {
+          await waitForYandexOperation(moveOperation, diskPath);
+          if (publishFiles) await requestYandex('/resources/publish', { method: 'PUT', query: { path: diskPath } });
+          const meta = await requestYandex('/resources', {
+            query: { path: diskPath, fields: 'name,path,size,mime_type,public_url,created,modified,md5' },
+          });
+          const finalLink = meta.public_url || provisionalLink;
+          const finalizedRows = await database('orders_items')
+            .where('id', itemId)
+            .andWhere('layout_disk_path', sourcePath)
+            .update({
+              url: finalLink || null,
+              layout_disk_path: diskPath,
+              layout_disk_name: meta.name || fileName,
+              layout_disk_size: Number(meta.size || sourceMeta.size || 0),
+              layout_disk_mime_type: meta.mime_type || sourceMeta.mime_type || null,
+            });
+          // Do not let an older background move overwrite a layout which the
+          // user has already replaced while finalization was still running.
+          if (!finalizedRows) return;
+          if (deleteReplacedFiles && oldDiskPath && oldDiskPath !== diskPath && isManagedOldPath(oldDiskPath, { root, orderFolder, itemFolder })) {
+            try {
+              await requestYandex('/resources', { method: 'DELETE', query: { path: oldDiskPath, permanently: true } });
+            } catch (cleanupError) {
+              logger.warn(`[Symbolika Yandex Disk] old file cleanup (${oldDiskPath}): ${cleanupError.message}`);
+            }
           }
-        }
+          try {
+            await requestYandex('/resources', { method: 'DELETE', query: { path: draftRoot, permanently: true } });
+          } catch (cleanupError) {
+            if (cleanupError.yandexCode !== 'DiskNotFoundError') logger.warn(`[Symbolika Yandex Disk] draft folder cleanup (${draftRoot}): ${cleanupError.message}`);
+          }
+        };
+
         try {
-          await requestYandex('/resources', { method: 'DELETE', query: { path: draftRoot, permanently: true } });
-        } catch (cleanupError) {
-          if (cleanupError.yandexCode !== 'DiskNotFoundError') logger.warn(`[Symbolika Yandex Disk] draft folder cleanup (${draftRoot}): ${cleanupError.message}`);
+          const moveOperation = await requestYandex('/resources/move', {
+            method: 'POST',
+            query: { from: sourcePath, path: diskPath, overwrite: true },
+          });
+          if (moveOperation?.href) {
+            void finishMove(moveOperation).catch((moveError) => {
+              // The position still points to the published draft, so a failed
+              // cosmetic move never loses the uploaded layout.
+              logger.warn(`[Symbolika Yandex Disk] background draft attach (${sourcePath}): ${moveError.message}`);
+            });
+          } else {
+            await finishMove(moveOperation);
+          }
+        } catch (moveError) {
+          // Keep the valid published draft attached. A later replacement or
+          // maintenance pass can normalize its folder/name.
+          logger.warn(`[Symbolika Yandex Disk] draft move start (${sourcePath}): ${moveError.message}`);
         }
         return res.json({ data: {
           item_id: itemId,
-          url: link,
-          name: meta.name || fileName,
-          size: Number(meta.size || sourceMeta.size || 0),
-          mime_type: meta.mime_type || sourceMeta.mime_type || '',
-          path: diskPath,
+          url: provisionalLink,
+          name: sourceMeta.name || fileName,
+          size: Number(sourceMeta.size || 0),
+          mime_type: sourceMeta.mime_type || '',
+          path: sourcePath,
+          finalizing: true,
         } });
       } catch (error) {
         logger.error(`[Symbolika Yandex Disk] draft attach: ${error.message}`);

@@ -12211,6 +12211,9 @@ export const CostingModule = {
         row.url = result.url || row.url || '';
         row._draft_upload_result = null;
         row._draft_upload_promise = null;
+        // The server owns cleanup while the slow Yandex move is finalized in
+        // background. Prevent the form from deleting the source draft early.
+        row._draft_upload_token = null;
         row._upload_status = 'done';
         row._upload_progress = 100;
         row._upload_error = '';
