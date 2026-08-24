@@ -15,6 +15,7 @@ const BRAND_LOGO_FILE = fileURLToPath(new URL('./assets/symbolika-logo.png', imp
 const BRAND_LOGO_URL = 'https://symbcorp.ru/symbolika-mail/brand-logo.png';
 const SIGNATURE_ICON_BASE_URL = 'https://symbcorp.ru/symbolika-mail/signature-icon';
 const LEGACY_BRAND_LOGO_URL = 'https://static.tildacdn.com/tild6465-3739-4736-b565-653037393965/2.png';
+const BACKGROUND_SYNC_STATE_KEY = Symbol.for('symbolika.mail.background-sync');
 
 function cleanText(value, max = 5000) {
   return String(value ?? '').trim().slice(0, max);
@@ -549,6 +550,113 @@ export default {
       return true;
     };
 
+    const imapSettings = () => {
+      const host = cleanText(env?.SYMBOLIKA_IMAP_HOST, 255);
+      const user = cleanText(env?.SYMBOLIKA_IMAP_USER, 255);
+      const pass = String(env?.SYMBOLIKA_IMAP_PASSWORD || '');
+      const port = Number(env?.SYMBOLIKA_IMAP_PORT || 993);
+      return {
+        host,
+        user,
+        pass,
+        port: Number.isFinite(port) && port > 0 ? port : 993,
+        configured: Boolean(host && user && pass),
+      };
+    };
+
+    let imapSyncQueue = Promise.resolve();
+    const synchronizeImapFolders = (folders, { actor = null, limit = 60 } = {}) => {
+      const run = async () => {
+        const settings = imapSettings();
+        if (!settings.configured) {
+          const error = new Error('IMAP не настроен.');
+          error.code = 'IMAP_NOT_CONFIGURED';
+          throw error;
+        }
+
+        const client = new ImapFlow({
+          host: settings.host,
+          port: settings.port,
+          secure: boolEnv(env?.SYMBOLIKA_IMAP_SECURE, settings.port === 993),
+          auth: { user: settings.user, pass: settings.pass },
+          logger: false,
+        });
+        let synced = 0;
+        const perFolder = Math.min(Math.max(Number(limit || 60), 1), 200);
+        try {
+          await client.connect();
+          for (const folder of folders.filter((row) => cleanText(row?.imap_name, 500))) {
+            let lock;
+            try {
+              lock = await client.getMailboxLock(folder.imap_name);
+              const total = Number(client.mailbox?.exists || 0);
+              if (!total) continue;
+              const range = `${Math.max(1, total - perFolder + 1)}:*`;
+              for await (const message of client.fetch(range, { source: true, uid: true, internalDate: true })) {
+                const parsed = await simpleParser(message.source);
+                if (!parsed.date && message.internalDate) parsed.date = message.internalDate;
+                if (await upsertIncomingMessage(folder, parsed, actor)) synced += 1;
+              }
+            } catch (error) {
+              logger.warn({ folder: folder.imap_name, error: error?.message }, '[Symbolika Mail] folder sync failed');
+            } finally {
+              lock?.release?.();
+            }
+          }
+          return { synced };
+        } finally {
+          try { await client.logout(); } catch { /* connection already closed */ }
+        }
+      };
+
+      const queued = imapSyncQueue.then(run, run);
+      imapSyncQueue = queued.catch(() => undefined);
+      return queued;
+    };
+
+    globalThis[BACKGROUND_SYNC_STATE_KEY]?.stop?.();
+    const backgroundSyncEnabled = boolEnv(env?.SYMBOLIKA_MAIL_BACKGROUND_SYNC_ENABLED, true);
+    if (mailMode() === 'imap' && backgroundSyncEnabled && imapSettings().configured) {
+      const requestedInterval = Number(env?.SYMBOLIKA_MAIL_BACKGROUND_SYNC_INTERVAL_MS || 20000);
+      const intervalMs = Math.min(Math.max(Number.isFinite(requestedInterval) ? requestedInterval : 20000, 10000), 600000);
+      const requestedLimit = Number(env?.SYMBOLIKA_MAIL_BACKGROUND_SYNC_LIMIT || 60);
+      const backgroundLimit = Math.min(Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 60, 1), 200);
+      let stopped = false;
+      const syncAllFolders = async () => {
+        if (stopped) return;
+        try {
+          const folders = await database('symbolika_mail_folders')
+            .where('is_active', true)
+            .whereNotNull('imap_name')
+            .whereNot('imap_name', '')
+            .orderBy('sort', 'asc')
+            .orderBy('name', 'asc');
+          if (!folders.length) return;
+          const result = await synchronizeImapFolders(folders, { limit: backgroundLimit });
+          if (result.synced > 0) logger.info({ synced: result.synced }, '[Symbolika Mail] background sync completed');
+        } catch (error) {
+          logger.warn({ error: error?.message }, '[Symbolika Mail] background sync failed');
+        }
+      };
+      const startupTimer = setTimeout(syncAllFolders, 3000);
+      const intervalTimer = setInterval(syncAllFolders, intervalMs);
+      startupTimer.unref?.();
+      intervalTimer.unref?.();
+      globalThis[BACKGROUND_SYNC_STATE_KEY] = {
+        stop() {
+          stopped = true;
+          clearTimeout(startupTimer);
+          clearInterval(intervalTimer);
+        },
+      };
+      logger.info({ interval_ms: intervalMs }, '[Symbolika Mail] background sync enabled');
+    } else {
+      globalThis[BACKGROUND_SYNC_STATE_KEY] = { stop() {} };
+      if (mailMode() === 'imap' && backgroundSyncEnabled) {
+        logger.warn('[Symbolika Mail] background sync disabled because IMAP is not configured');
+      }
+    }
+
     router.get('/bootstrap', async (req, res, next) => {
       try {
         const actor = await actorContext(req, res);
@@ -910,49 +1018,16 @@ export default {
     });
 
     router.post('/sync', async (req, res, next) => {
-      let client;
       try {
         const actor = await actorContext(req, res);
         if (!actor) return;
         if (mailMode() !== 'imap') return res.json({ data: { mode: 'mock', synced: 0, message: 'Демо-режим: тестовые письма уже загружены.' } });
-        const host = env?.SYMBOLIKA_IMAP_HOST;
-        const user = env?.SYMBOLIKA_IMAP_USER;
-        const pass = env?.SYMBOLIKA_IMAP_PASSWORD;
-        const port = Number(env?.SYMBOLIKA_IMAP_PORT || 993);
-        if (!host || !user || !pass) return apiError(res, 503, 'IMAP не настроен.');
-        client = new ImapFlow({
-          host,
-          port,
-          secure: boolEnv(env?.SYMBOLIKA_IMAP_SECURE, port === 993),
-          auth: { user, pass },
-          logger: false,
-        });
-        await client.connect();
+        if (!imapSettings().configured) return apiError(res, 503, 'IMAP не настроен.');
         const folders = (await folderRows(actor)).filter((folder) => folder.imap_name);
-        let synced = 0;
         const perFolder = Math.min(Math.max(Number(req.body?.limit || 60), 1), 200);
-        for (const folder of folders) {
-          let lock;
-          try {
-            lock = await client.getMailboxLock(folder.imap_name);
-            const total = Number(client.mailbox?.exists || 0);
-            if (!total) continue;
-            const range = `${Math.max(1, total - perFolder + 1)}:*`;
-            for await (const message of client.fetch(range, { source: true, uid: true, internalDate: true })) {
-              const parsed = await simpleParser(message.source);
-              if (!parsed.date && message.internalDate) parsed.date = message.internalDate;
-              if (await upsertIncomingMessage(folder, parsed, actor)) synced += 1;
-            }
-          } catch (error) {
-            logger.warn({ folder: folder.imap_name, error: error?.message }, '[Symbolika Mail] folder sync failed');
-          } finally {
-            lock?.release?.();
-          }
-        }
-        await client.logout();
-        return res.json({ data: { mode: 'imap', synced } });
+        const result = await synchronizeImapFolders(folders, { actor, limit: perFolder });
+        return res.json({ data: { mode: 'imap', synced: result.synced } });
       } catch (error) {
-        try { await client?.logout?.(); } catch { /* connection already closed */ }
         return next(error);
       }
     });

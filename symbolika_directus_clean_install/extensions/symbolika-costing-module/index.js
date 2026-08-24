@@ -428,6 +428,7 @@ const tabs = [
   { id: 'tasks', title: 'Задачи', collection: 'symbolika_tasks' },
   { id: 'tasks_archive', title: 'Архив задач', collection: 'symbolika_tasks' },
   { id: 'events', title: 'Лента событий', collection: 'symbolika_event_feed' },
+  { id: 'news', title: 'Новости', collection: '' },
   { id: 'automation_control', title: 'Контроль автоматизаций', collection: 'symbolika_automation_issues' },
   { id: 'problems', title: 'Требует внимания', collection: '' },
   { id: 'search', title: 'Поиск', collection: '' },
@@ -557,17 +558,17 @@ const moduleSections = {
   },
   orders: {
     title: 'Заказы',
-    tabs: ['dashboard', 'events', 'problems', 'search', 'all_orders', 'my_orders', 'estimates', 'clients', 'companies', 'finance', 'client_operations', 'gift_certificates', 'office'],
+    tabs: ['dashboard', 'events', 'news', 'problems', 'search', 'all_orders', 'my_orders', 'estimates', 'clients', 'companies', 'finance', 'client_operations', 'gift_certificates', 'office'],
     roles: ['Administrator', 'Управляющий', 'Менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
   },
   tasks: {
     title: 'Задачи',
-    tabs: ['tasks', 'tasks_archive', 'events'],
+    tabs: ['tasks', 'tasks_archive', 'events', 'news'],
     roles: ['Administrator', 'Управляющий', 'Менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
   },
   production: {
     title: 'Производство',
-    tabs: ['events', 'production', 'screen', 'labels', 'admin_inventory'],
+    tabs: ['events', 'news', 'production', 'screen', 'labels', 'admin_inventory'],
     roles: ['Administrator', 'Управляющий', 'Производство', 'Шелкография'],
   },
   contractor: {
@@ -577,27 +578,27 @@ const moduleSections = {
   },
   management: {
     title: 'Управление',
-    tabs: ['work_launch', 'contractor_overview', 'order_economics', 'costing', 'automation_control', 'admin_customer_notifications'],
+    tabs: ['news', 'work_launch', 'contractor_overview', 'order_economics', 'costing', 'automation_control', 'admin_customer_notifications'],
     roles: ['Administrator', 'Управляющий'],
   },
   procurement: {
     title: 'Закупки',
-    tabs: ['admin_procurement'],
+    tabs: ['news', 'admin_procurement'],
     roles: ['Administrator', 'Управляющий', 'Менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
   },
   finance: {
     title: 'Финансы',
-    tabs: ['finance', 'client_operations', 'gift_certificates'],
+    tabs: ['news', 'finance', 'client_operations', 'gift_certificates'],
     roles: ['Administrator', 'Управляющий', 'Менеджер'],
   },
   clients: {
     title: 'Клиенты',
-    tabs: ['clients', 'companies'],
+    tabs: ['news', 'clients', 'companies'],
     roles: ['Administrator', 'Управляющий', 'Менеджер'],
   },
   admin: {
     title: 'Админка',
-    tabs: adminWorkspaceTabs,
+    tabs: ['news', ...adminWorkspaceTabs],
     roles: ['Administrator'],
   },
 };
@@ -1470,7 +1471,7 @@ export const CostingModule = {
     },
 
     availableTabs() {
-      const workTabs = ['profile', 'dashboard', 'queue', 'tasks', 'tasks_archive', 'events', 'problems', 'search'];
+      const workTabs = ['profile', 'dashboard', 'queue', 'tasks', 'tasks_archive', 'events', 'news', 'problems', 'search'];
       const withWorkTabs = (ids) => tabs.filter((tab) => workTabs.includes(tab.id) || ids.includes(tab.id));
       let roleTabs = [];
       if (this.currentRoleName === 'Administrator') roleTabs = tabs;
@@ -1479,7 +1480,7 @@ export const CostingModule = {
       else if (this.currentRoleName === 'Шелкография') roleTabs = withWorkTabs(['my_orders', 'screen', 'labels', 'admin_inventory', 'admin_procurement']);
       else if (this.currentRoleName === 'Контрагент') roleTabs = tabs.filter((tab) => tab.id === 'contractor_work');
       else if (this.currentRoleName === 'Менеджер') roleTabs = withWorkTabs(['my_orders', 'estimates', 'office', 'finance', 'client_operations', 'gift_certificates', 'clients', 'companies', 'admin_procurement']);
-      else if (this.currentRoleName === 'Дизайнер') roleTabs = tabs.filter((tab) => ['my_orders', 'tasks', 'tasks_archive', 'events', 'admin_procurement'].includes(tab.id));
+      else if (this.currentRoleName === 'Дизайнер') roleTabs = tabs.filter((tab) => ['my_orders', 'tasks', 'tasks_archive', 'events', 'news', 'admin_procurement'].includes(tab.id));
       else roleTabs = [];
 
       const section = moduleSections[this.moduleSection];
@@ -1967,7 +1968,7 @@ export const CostingModule = {
     navigationGroups() {
       const groups = [
         { title: 'Личный кабинет', tabs: ['profile'] },
-        { title: 'Работа', tabs: ['dashboard', 'queue', 'tasks', 'tasks_archive', 'events', 'problems', 'search'] },
+        { title: 'Работа', tabs: ['dashboard', 'queue', 'tasks', 'tasks_archive', 'events', 'news', 'problems', 'search'] },
         { title: 'Заказы', tabs: ['all_orders', 'my_orders', 'estimates'] },
         { title: 'Клиенты и расчёты', tabs: ['clients', 'companies', 'finance', 'client_operations', 'gift_certificates'] },
         { title: 'Работа контрагента', tabs: ['contractor_work'] },
@@ -3681,6 +3682,10 @@ export const CostingModule = {
     },
 
     setTab(tab) {
+      if (tab === 'news') {
+        window.location.assign('/admin/symbolika-news-module');
+        return;
+      }
       if (!this.availableTabs.some((item) => item.id === tab)) return;
       this.activeTab = tab;
       this.persistActiveTab(tab);
@@ -13828,6 +13833,7 @@ export const CostingModule = {
         tasks: 'checklist',
         tasks_archive: 'archive',
         events: 'history',
+        news: 'newspaper',
         automation_control: 'rule',
         problems: 'priority_high',
         search: 'search',

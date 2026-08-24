@@ -1459,6 +1459,9 @@
     if (notification.collection === 'customers' || notification.collection === 'customer_companies') {
       return '/admin/symbolika-orders';
     }
+    if (notification.collection === 'symbolika_mail_threads') {
+      return `/admin/symbolika-mail-module?thread=${encodeURIComponent(notification.item)}`;
+    }
     return '/admin/symbolika-orders';
   }
 
@@ -1509,6 +1512,7 @@
         _and: [
           { recipient: { _eq: userId } },
           { status: { _eq: 'inbox' } },
+          { collection: { _eq: 'symbolika_mail_threads' } },
           pushUi.lastNotificationTime
             ? { timestamp: { _gt: pushUi.lastNotificationTime } }
             : {},
@@ -1541,9 +1545,13 @@
   }
 
   function startNotificationPolling() {
-    // Browser push is already delivered by the service worker. Polling Directus
-    // notifications and calling new Notification() here duplicates the same toast.
-    return;
+    // Most operational notifications are delivered by the service worker.
+    // Mail is synchronized by the server endpoint itself, so poll only mail
+    // notifications while any system page is open. This avoids duplicate order
+    // and task notifications and no longer depends on the mail module being open.
+    if (pushUi.pollTimer || Notification.permission !== 'granted') return;
+    pollDirectusNotifications();
+    pushUi.pollTimer = window.setInterval(pollDirectusNotifications, 10000);
   }
 
   async function enablePushNotifications() {
