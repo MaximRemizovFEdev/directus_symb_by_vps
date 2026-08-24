@@ -1246,6 +1246,8 @@ export const CostingModule = {
       procurementBatches: [],
       procurementExpandedBatches: {},
       procurementExpandedLines: {},
+      procurementViewMode: 'all',
+      procurementSupplierFilter: '',
       adminEditing: null,
       procurementShowClosed: false,
       adminForm: {},
@@ -1635,24 +1637,87 @@ export const CostingModule = {
       });
     },
 
+    procurementSupplierOptions() {
+      const suppliers = new Map();
+      this.procurementGroups.forEach((group) => {
+        const supplierId = this.entityId(group.supplier);
+        const purchasePlace = String(group.purchase_place || '').trim();
+        const value = supplierId
+          ? `supplier:${supplierId}`
+          : (purchasePlace ? `place:${purchasePlace.toLocaleLowerCase('ru')}` : '');
+        if (!value) return;
+
+        const relatedLabel = this.adminRelatedLabel('contractors', group.supplier);
+        const label = relatedLabel === '-' ? purchasePlace : relatedLabel;
+        const current = suppliers.get(value) || {
+          value,
+          label,
+          groups: 0,
+          requests: 0,
+          total: 0,
+        };
+        current.groups += 1;
+        current.requests += group.rows.length;
+        current.total += group.estimated_total;
+        suppliers.set(value, current);
+      });
+
+      return [...suppliers.values()].sort((left, right) => left.label.localeCompare(right.label, 'ru'));
+    },
+
+    visibleProcurementGroups() {
+      if (this.procurementViewMode !== 'suppliers') return this.procurementGroups;
+      return this.procurementGroups.filter((group) => {
+        const supplierId = this.entityId(group.supplier);
+        const purchasePlace = String(group.purchase_place || '').trim();
+        const value = supplierId
+          ? `supplier:${supplierId}`
+          : (purchasePlace ? `place:${purchasePlace.toLocaleLowerCase('ru')}` : '');
+        if (!value) return false;
+        return !this.procurementSupplierFilter || value === this.procurementSupplierFilter;
+      });
+    },
+
+    procurementSupplierSummary() {
+      return this.visibleProcurementGroups.reduce((summary, group) => {
+        summary.groups += 1;
+        summary.requests += group.rows.length;
+        summary.positions += this.procurementGroupLines(group).length;
+        summary.total += group.estimated_total;
+        return summary;
+      }, { groups: 0, requests: 0, positions: 0, total: 0 });
+    },
+
     canSeeCostingTotals() {
       return this.currentRoleName === 'Administrator';
     },
 
-    canEditItemCosts() {
+    hasManagerWorkflowAccess() {
+      // Administrator and Managing inherit every operation that belongs to
+      // the manager workflow. Keep this as the single source of truth so a
+      // newly added manager field/action is not accidentally hidden from the
+      // roles that supervise and correct managers' work.
       return ['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName);
+    },
+
+    hasManagerOverrideAccess() {
+      return ['Administrator', 'Управляющий'].includes(this.currentRoleName);
+    },
+
+    canEditItemCosts() {
+      return this.hasManagerWorkflowAccess;
     },
 
     canManageProcurementStatus() {
-      return ['Administrator', 'Управляющий'].includes(this.currentRoleName);
+      return this.hasManagerOverrideAccess;
     },
 
     canManageGiftCertificates() {
-      return ['Administrator', 'Управляющий'].includes(this.currentRoleName);
+      return this.hasManagerOverrideAccess;
     },
 
     canManageOrderPayments() {
-      return ['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName);
+      return this.hasManagerWorkflowAccess;
     },
 
     visibleGiftCertificates() {
@@ -1665,7 +1730,7 @@ export const CostingModule = {
     },
 
     canCreateOrders() {
-      if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) return true;
+      if (this.hasManagerOverrideAccess) return true;
       return ['Менеджер', 'Производство', 'Шелкография', 'Дизайнер'].includes(this.currentRoleName)
         && !!this.currentEmployeeId;
     },
@@ -1676,7 +1741,7 @@ export const CostingModule = {
 
     canCreateDirectoryEntity() {
       if (!['clients', 'companies'].includes(this.activeTab)) return false;
-      if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) return true;
+      if (this.hasManagerOverrideAccess) return true;
       return this.currentRoleName === 'Менеджер' && !!this.currentEmployeeId;
     },
 
@@ -1704,7 +1769,7 @@ export const CostingModule = {
     },
 
     canSeeTeamTasks() {
-      return ['Administrator', 'Управляющий'].includes(this.currentRoleName);
+      return this.hasManagerOverrideAccess;
     },
 
     visibleTaskRows() {
@@ -2367,11 +2432,13 @@ export const CostingModule = {
 
     contractorOverviewContractorOptions() {
       const options = new Map();
-      (this.contractorWorkRows || []).forEach((row) => {
-        const id = this.contractorId(row.contractor);
-        const name = this.relatedName(row.contractor);
-        if (id && name) options.set(String(id), name);
-      });
+      (this.contractorWorkRows || [])
+        .filter((row) => this.isExternalExecutorWorkRow(row))
+        .forEach((row) => {
+          const id = this.contractorId(row.contractor);
+          const name = this.relatedName(row.contractor);
+          if (id && name) options.set(String(id), name);
+        });
       return [...options.entries()]
         .map(([id, name]) => ({ id, name }))
         .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
@@ -2394,6 +2461,7 @@ export const CostingModule = {
     visibleContractorOverviewRows() {
       const contractorId = String(this.contractorOverviewContractorFilter || '');
       const rows = this.filterRowsByArchiveMode(this.contractorWorkRows || [])
+        .filter((row) => this.isExternalExecutorWorkRow(row))
         .filter((row) => !contractorId || String(this.contractorId(row.contractor) || '') === contractorId);
       return this.sortRows(rows, 'contractor_work');
     },
@@ -3890,7 +3958,7 @@ export const CostingModule = {
       });
       if (fromLoadedRows) return this.detailOrderContext(fromLoadedRows);
 
-      if (!['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName)) return null;
+      if (!this.hasManagerWorkflowAccess) return null;
       try {
         const params = new URLSearchParams();
         params.set('fields', overviewFields.join(','));
@@ -5783,7 +5851,7 @@ export const CostingModule = {
         const ownOrderFields = this.canEditItemCosts
           ? managerFields
           : managerFields.filter((field) => !['contractor_1_cost', 'contractor_2_cost'].includes(field));
-        const fields = (['Менеджер', 'Administrator', 'Управляющий'].includes(this.currentRoleName) || ownsOrder)
+        const fields = (this.hasManagerWorkflowAccess || ownsOrder)
           ? ownOrderFields.join(',')
           : (this.currentRoleName === 'Дизайнер'
             ? 'id,order,product_name,quantity,deadline,technical_task_text,url,needs_designer_help,designer_comment,designer_source_url,layout_preview_url,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at'
@@ -6032,7 +6100,7 @@ export const CostingModule = {
         const ownOrderFields = this.canEditItemCosts
           ? managerFields
           : managerFields.filter((field) => !['contractor_1_cost', 'contractor_2_cost'].includes(field));
-        const requestedFields = ['Administrator', 'Управляющий'].includes(this.currentRoleName)
+        const requestedFields = this.hasManagerOverrideAccess
           ? privilegedFields
           : (this.currentRoleName === 'Менеджер' || ownsOrder ? ownOrderFields : workerFields);
         params.set('fields', requestedFields.join(','));
@@ -6343,7 +6411,7 @@ export const CostingModule = {
     },
 
     showsOrderCompletion(row) {
-      if (!row || !['Administrator', 'Менеджер'].includes(this.currentRoleName)) return false;
+      if (!row || !this.hasManagerWorkflowAccess) return false;
       const field = this.currentRoleName === 'Менеджер' ? 'work_completion_percent' : 'completion_percent';
       return row[field] !== undefined && row[field] !== null;
     },
@@ -6393,7 +6461,7 @@ export const CostingModule = {
     },
 
     canIssueOrder(row) {
-      if (!row || !['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName)) return false;
+      if (!row || !this.hasManagerWorkflowAccess) return false;
       return String(this.detailOrderStatus(row) || '').trim().toLowerCase() === 'готов';
     },
 
@@ -9730,7 +9798,7 @@ export const CostingModule = {
         return;
       }
 
-      const privileged = ['Administrator', 'Управляющий'].includes(this.currentRoleName);
+      const privileged = this.hasManagerOverrideAccess;
       const managerId = Number(privileged ? form.manager : this.currentEmployeeId || 0);
       if (!managerId) {
         this.error = privileged ? 'Выберите менеджера.' : 'К вашей учетной записи не привязан сотрудник.';
@@ -10010,7 +10078,7 @@ export const CostingModule = {
     },
 
     contractorSelectionsEditable(item) {
-      if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) return true;
+      if (this.hasManagerOverrideAccess) return true;
       return ['new', 'approval', 'layout_revision'].includes(this.normalizedWorkflowStatus(item?.item_status || 'new'));
     },
 
@@ -11457,17 +11525,17 @@ export const CostingModule = {
     },
 
     canChangeOrderManager(row) {
-      return this.detailIsOrder(row) && ['Administrator', 'Управляющий'].includes(this.currentRoleName);
+      return this.detailIsOrder(row) && this.hasManagerOverrideAccess;
     },
 
     canEditOrderShipping(row) {
       if (!this.detailIsOrder(row)) return false;
-      return ['Administrator', 'Управляющий'].includes(this.currentRoleName)
+      return this.hasManagerOverrideAccess
         || this.orderBelongsToCurrentEmployee(row);
     },
 
     canManageInternalRouting() {
-      return ['Administrator', 'Управляющий'].includes(this.currentRoleName);
+      return this.hasManagerOverrideAccess;
     },
 
     async saveOrderManager(row, value) {
@@ -11651,6 +11719,18 @@ export const CostingModule = {
         || item?.[this.executorField(item)];
       const kind = String(contractor?.supplier_kind || 'contractor');
       return !this.isInternalExecutionContractor(contractor) && ['contractor', 'both'].includes(kind);
+    },
+
+    isExternalExecutorWorkRow(row) {
+      const item = row?.order_item || {};
+      const firstContractorId = String(this.contractorId(item?.contractor_1) || '');
+      const secondContractorId = String(this.contractorId(item?.contractor_2) || '');
+      const executorId = secondContractorId || firstContractorId;
+      const rowContractorId = String(this.contractorId(row?.contractor) || '');
+      if (!executorId || !rowContractorId || executorId !== rowContractorId) return false;
+      if (this.isInternalExecutionContractor(row?.contractor)) return false;
+      const contractorKind = String(row?.contractor?.supplier_kind || 'contractor');
+      return ['contractor', 'both'].includes(contractorKind);
     },
 
     isPendingExternalWorkRow(row) {
@@ -13850,7 +13930,7 @@ export const CostingModule = {
 
     canEditEntityProfile() {
       if (!['customer', 'company'].includes(this.entityDetail?.type) || !this.entityDetail?.entity?.id) return false;
-      if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) return true;
+      if (this.hasManagerOverrideAccess) return true;
       return ['Менеджер', 'Производство', 'Шелкография', 'Дизайнер'].includes(this.currentRoleName)
         && !!this.currentEmployeeId;
     },
@@ -13969,7 +14049,7 @@ export const CostingModule = {
     },
 
     canEditEntityOpeningBalance() {
-      return ['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName)
+      return this.hasManagerWorkflowAccess
         && ['customer', 'company'].includes(this.entityDetail?.type);
     },
 
@@ -14009,7 +14089,7 @@ export const CostingModule = {
     },
 
     canEditCustomerNotifications() {
-      return ['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName)
+      return this.hasManagerWorkflowAccess
         && ['customer', 'company'].includes(this.entityDetail?.type);
     },
 
@@ -14259,7 +14339,7 @@ export const CostingModule = {
     },
 
     canRequestItemCancellation(item) {
-      if (!['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName)) return false;
+      if (!this.hasManagerWorkflowAccess) return false;
       return ['sent_to_work', 'in_work'].includes(this.normalizedWorkflowStatus(item?.item_status));
     },
 
@@ -14314,7 +14394,7 @@ export const CostingModule = {
       if (!this.canConfirmItemCancellation(row)) return;
       const name = String(row?.product_name || 'Позиция').trim();
       if (!window.confirm(`Подтвердить, что позиция «${name}» не отпечатана и может быть отменена?`)) return;
-      if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) {
+      if (this.hasManagerOverrideAccess) {
         await this.saveOrderItemField(row, 'production_status', this.cancelledProductionStatusId());
         return;
       }
@@ -14332,13 +14412,13 @@ export const CostingModule = {
 
     canReorganizeOrderItem(item) {
       if (!this.canCreateOrders || this.isLimitedProductionItem(item)) return false;
-      if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) return true;
+      if (this.hasManagerOverrideAccess) return true;
       return this.orderBelongsToCurrentEmployee(item);
     },
 
     canMergeOrder(order) {
       if (!this.canCreateOrders || !this.detailIsOrder(order)) return false;
-      if (['Administrator', 'Управляющий'].includes(this.currentRoleName)) return true;
+      if (this.hasManagerOverrideAccess) return true;
       return this.orderBelongsToCurrentEmployee(order);
     },
 
@@ -15934,6 +16014,29 @@ export const CostingModule = {
           align-items: center;
           gap: 8px;
           min-block-size: 34px;
+          flex-wrap: wrap;
+        }
+
+        .symbolika-costing-procurement-view-switch {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 3px;
+          border: 1px solid var(--symbolika-line);
+          border-radius: 999px;
+          background: color-mix(in srgb, var(--symbolika-panel-strong) 80%, transparent);
+        }
+
+        .symbolika-costing-procurement-view-switch .symbolika-costing-filter-chip {
+          min-block-size: 32px;
+          border: 0;
+        }
+
+        .symbolika-costing-procurement-toolbar-divider {
+          inline-size: 1px;
+          block-size: 28px;
+          margin-inline: 2px;
+          background: var(--symbolika-line);
         }
 
         .symbolika-costing-procurement-toolbar .symbolika-costing-filter-chip {
@@ -15952,6 +16055,106 @@ export const CostingModule = {
           padding-inline: 6px;
           font-size: 10px;
           font-variant-numeric: tabular-nums;
+        }
+
+        .symbolika-costing-procurement-supplier-panel {
+          display: grid;
+          grid-template-columns: minmax(260px, .8fr) minmax(460px, 1.4fr);
+          align-items: end;
+          gap: 14px;
+          padding: 13px 14px;
+          border: 1px solid color-mix(in srgb, var(--theme--primary) 34%, var(--symbolika-line));
+          border-radius: 14px;
+          background: linear-gradient(135deg, color-mix(in srgb, var(--theme--primary) 9%, var(--symbolika-panel)), var(--symbolika-panel));
+        }
+
+        .symbolika-costing-procurement-supplier-select {
+          display: grid;
+          gap: 5px;
+          min-inline-size: 0;
+          color: var(--symbolika-muted);
+          font-size: 11px;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: .04em;
+        }
+
+        .symbolika-costing-procurement-supplier-select .symbolika-costing-select {
+          min-inline-size: 0;
+          min-block-size: 42px;
+          color: var(--symbolika-text);
+          font-size: 13px;
+          font-weight: 700;
+          text-transform: none;
+          letter-spacing: normal;
+        }
+
+        .symbolika-costing-procurement-supplier-stats {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(95px, 1fr));
+          gap: 8px;
+        }
+
+        .symbolika-costing-procurement-supplier-stats > div {
+          display: grid;
+          gap: 4px;
+          min-inline-size: 0;
+          padding: 9px 11px;
+          border: 1px solid var(--symbolika-line);
+          border-radius: 10px;
+          background: color-mix(in srgb, var(--symbolika-panel-strong) 82%, transparent);
+        }
+
+        .symbolika-costing-procurement-supplier-stats span {
+          overflow: hidden;
+          color: var(--symbolika-muted);
+          font-size: 10px;
+          font-weight: 700;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .symbolika-costing-procurement-supplier-stats strong {
+          color: var(--symbolika-text);
+          font-size: 14px;
+          font-variant-numeric: tabular-nums;
+          white-space: nowrap;
+        }
+
+        .symbolika-costing-procurement-supplier-stats .is-total strong {
+          color: color-mix(in srgb, var(--theme--success) 78%, #86efac);
+        }
+
+        @media (max-width: 980px) {
+          .symbolika-costing-procurement-supplier-panel {
+            grid-template-columns: 1fr;
+            align-items: stretch;
+          }
+        }
+
+        @media (max-width: 620px) {
+          .symbolika-costing-procurement-view-switch {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            inline-size: 100%;
+          }
+
+          .symbolika-costing-procurement-view-switch .symbolika-costing-filter-chip {
+            justify-content: center;
+            min-inline-size: 0;
+          }
+
+          .symbolika-costing-procurement-toolbar-divider {
+            display: none;
+          }
+
+          .symbolika-costing-procurement-supplier-panel {
+            padding: 10px;
+          }
+
+          .symbolika-costing-procurement-supplier-stats {
+            grid-template-columns: 1fr 1fr;
+          }
         }
 
         .symbolika-costing-procurement-table {
@@ -30663,6 +30866,26 @@ export const CostingModule = {
           </div>
 
           <div v-if="activeTab === 'admin_procurement'" class="symbolika-costing-procurement-toolbar">
+            <div class="symbolika-costing-procurement-view-switch" aria-label="Представление закупок">
+              <button
+                type="button"
+                class="symbolika-costing-filter-chip"
+                :class="{ 'is-active': procurementViewMode === 'all' }"
+                @click="procurementViewMode = 'all'"
+              >
+                Все закупки
+              </button>
+              <button
+                type="button"
+                class="symbolika-costing-filter-chip"
+                :class="{ 'is-active': procurementViewMode === 'suppliers' }"
+                @click="procurementViewMode = 'suppliers'"
+              >
+                <v-icon name="local_shipping" small />
+                По поставщикам <span>{{ procurementSupplierOptions.length }}</span>
+              </button>
+            </div>
+            <span class="symbolika-costing-procurement-toolbar-divider" aria-hidden="true"></span>
             <button
               type="button"
               class="symbolika-costing-filter-chip"
@@ -30690,6 +30913,39 @@ export const CostingModule = {
               <v-icon name="person_add" small />
               Предложить контрагента
             </button>
+          </div>
+
+          <div
+            v-if="activeTab === 'admin_procurement' && procurementViewMode === 'suppliers'"
+            class="symbolika-costing-procurement-supplier-panel"
+          >
+            <label class="symbolika-costing-procurement-supplier-select">
+              <span>Поставщик</span>
+              <select v-model="procurementSupplierFilter" class="symbolika-costing-select">
+                <option value="">Все поставщики</option>
+                <option v-for="supplier in procurementSupplierOptions" :key="supplier.value" :value="supplier.value">
+                  {{ supplier.label }} · {{ supplier.requests }} заявок · {{ formatMoney(supplier.total) }} ₽
+                </option>
+              </select>
+            </label>
+            <div class="symbolika-costing-procurement-supplier-stats">
+              <div>
+                <span>Поставщиков / закупок</span>
+                <strong>{{ procurementSupplierFilter ? 1 : procurementSupplierOptions.length }} / {{ procurementSupplierSummary.groups }}</strong>
+              </div>
+              <div>
+                <span>Позиций</span>
+                <strong>{{ procurementSupplierSummary.positions }}</strong>
+              </div>
+              <div>
+                <span>Заявок</span>
+                <strong>{{ procurementSupplierSummary.requests }}</strong>
+              </div>
+              <div class="is-total">
+                <span>Сумма закупок</span>
+                <strong>{{ formatMoney(procurementSupplierSummary.total) }} ₽</strong>
+              </div>
+            </div>
           </div>
 
           <div v-if="adminEditing" class="symbolika-costing-admin-form">
@@ -30776,7 +31032,7 @@ export const CostingModule = {
 
           <div v-if="activeTab === 'admin_procurement'" class="symbolika-costing-procurement-groups">
             <section
-              v-for="group in procurementGroups"
+              v-for="group in visibleProcurementGroups"
               :key="group.key"
               class="symbolika-costing-procurement-group"
               :class="{
@@ -30898,8 +31154,10 @@ export const CostingModule = {
                 </article>
               </div>
             </section>
-            <div v-if="!procurementGroups.length" class="symbolika-costing-empty">
-              {{ procurementShowClosed ? 'Нет закупочных заявок' : 'Нет активных закупочных заявок' }}
+            <div v-if="!visibleProcurementGroups.length" class="symbolika-costing-empty">
+              {{ procurementViewMode === 'suppliers'
+                ? (procurementSupplierFilter ? 'У выбранного поставщика нет подходящих закупок' : 'Нет закупок с указанным поставщиком')
+                : (procurementShowClosed ? 'Нет закупочных заявок' : 'Нет активных закупочных заявок') }}
             </div>
           </div>
 

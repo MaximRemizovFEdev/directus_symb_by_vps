@@ -15226,5 +15226,20 @@ $$;
 
 SELECT refresh_orders_due_tables();
 
+-- Managing supervises the manager workflow. Besides unrestricted business
+-- collections defined above, keep the two auxiliary manager permissions in
+-- sync as well: company/customer links and the current user's notifications.
+DELETE FROM directus_permissions
+ WHERE policy = '00000000-0000-4000-8000-000000000205'
+   AND collection IN ('customer_company_links', 'directus_notifications');
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+VALUES
+  ('customer_company_links', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
+  ('directus_notifications', 'read', '{"recipient":{"_eq":"$CURRENT_USER"}}'::json, NULL, NULL,
+    'id,status,recipient,subject,message,collection,item,timestamp', '00000000-0000-4000-8000-000000000205'),
+  ('directus_notifications', 'update', '{"recipient":{"_eq":"$CURRENT_USER"}}'::json, NULL, NULL,
+    'status', '00000000-0000-4000-8000-000000000205');
+
 COMMIT;
 
