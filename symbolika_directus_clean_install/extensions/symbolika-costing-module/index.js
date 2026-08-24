@@ -10063,7 +10063,7 @@ export const CostingModule = {
       if (this.hasManagerOverrideAccess) return approved;
       const selectedField = capabilityType === 'blank_supplier'
         ? 'contractor_1'
-        : (this.itemNeedsBlank(item) ? 'contractor_2' : 'contractor_1');
+        : this.executorField(item);
       const selectedId = Number(this.entityId(item?.[selectedField]) || 0);
       return selectedId
         ? approved.filter((contractor) => Number(contractor.id) === selectedId)
@@ -10075,11 +10075,13 @@ export const CostingModule = {
     },
 
     executorField(item) {
-      return this.itemNeedsBlank(item) ? 'contractor_2' : 'contractor_1';
+      if (!this.itemNeedsBlank(item)) return 'contractor_1';
+      if (item?.blank_source === 'supplier') return 'contractor_2';
+      return this.entityId(item?.contractor_2) ? 'contractor_2' : 'contractor_1';
     },
 
     executorCostField(item) {
-      return this.itemNeedsBlank(item) ? 'contractor_2_cost' : 'contractor_1_cost';
+      return this.executorField(item) === 'contractor_2' ? 'contractor_2_cost' : 'contractor_1_cost';
     },
 
     selectedExecutorId(item) {
@@ -10103,8 +10105,13 @@ export const CostingModule = {
           item.contractor_1 = supplierIds.length === 1 ? supplierIds[0] : '';
         }
       } else if (this.itemNeedsBlank(item)) {
-        item.contractor_1 = '';
-        item.contractor_1_cost = '';
+        if (executorField === 'contractor_2') {
+          item.contractor_1 = '';
+          item.contractor_1_cost = '';
+        } else {
+          item.contractor_2 = '';
+          item.contractor_2_cost = '';
+        }
       }
     },
 
@@ -10708,10 +10715,10 @@ export const CostingModule = {
               application_method: item.application_method ? Number(item.application_method) : null,
               blank_source: this.itemNeedsBlank(item) ? (item.blank_source || 'supplier') : 'none',
               contractor_1: item.contractor_1 ? Number(item.contractor_1) : null,
-              contractor_1_cost: (!this.itemNeedsBlank(item) || item.blank_source === 'supplier') ? this.parseMoney(item.contractor_1_cost) : 0,
-              contractor_2: this.itemNeedsBlank(item) && item.contractor_2 ? Number(item.contractor_2) : null,
+              contractor_1_cost: (!this.itemNeedsBlank(item) || item.blank_source === 'supplier' || this.executorField(item) === 'contractor_1') ? this.parseMoney(item.contractor_1_cost) : 0,
+              contractor_2: this.itemNeedsBlank(item) && this.executorField(item) === 'contractor_2' && item.contractor_2 ? Number(item.contractor_2) : null,
               ...(this.canEditItemCosts ? {
-                contractor_2_cost: this.itemNeedsBlank(item) ? this.parseMoney(item.contractor_2_cost) : 0,
+                contractor_2_cost: this.itemNeedsBlank(item) && this.executorField(item) === 'contractor_2' ? this.parseMoney(item.contractor_2_cost) : 0,
               } : {}),
               deadline: item.deadline || form.deadline || null,
               item_status: 'new',
@@ -11273,10 +11280,10 @@ export const CostingModule = {
             application_method: form.application_method ? Number(form.application_method) : null,
             blank_source: this.itemNeedsBlank(form) ? (form.blank_source || 'supplier') : 'none',
             contractor_1: form.contractor_1 ? Number(form.contractor_1) : null,
-            contractor_1_cost: (!this.itemNeedsBlank(form) || form.blank_source === 'supplier') ? this.parseMoney(form.contractor_1_cost) : 0,
-            contractor_2: this.itemNeedsBlank(form) && form.contractor_2 ? Number(form.contractor_2) : null,
+            contractor_1_cost: (!this.itemNeedsBlank(form) || form.blank_source === 'supplier' || this.executorField(form) === 'contractor_1') ? this.parseMoney(form.contractor_1_cost) : 0,
+            contractor_2: this.itemNeedsBlank(form) && this.executorField(form) === 'contractor_2' && form.contractor_2 ? Number(form.contractor_2) : null,
             ...(this.canEditItemCosts ? {
-              contractor_2_cost: this.itemNeedsBlank(form) ? this.parseMoney(form.contractor_2_cost) : 0,
+              contractor_2_cost: this.itemNeedsBlank(form) && this.executorField(form) === 'contractor_2' ? this.parseMoney(form.contractor_2_cost) : 0,
             } : {}),
             deadline: form.deadline || order.deadline || null,
             item_status: 'new',
@@ -14715,9 +14722,50 @@ export const CostingModule = {
       return this.orderWorkReadinessMissing(row).length === 0;
     },
 
+    canExplainOrderWorkReadiness(row) {
+      if (!this.canCreateOrders || !this.detailIsOrder(row)) return false;
+      const status = this.normalizedWorkflowStatus(row?.order_status_name || this.detailOrderStatus(row));
+      if (!['новый', 'согласование', 'доработка макета'].includes(status)) return false;
+      return this.orderWorkReadinessMissing(row).length > 0;
+    },
+
+    orderWorkReadinessTitle(row) {
+      const missing = this.orderWorkReadinessMissing(row);
+      return missing.length
+        ? `Для запуска заполните: ${missing.join('; ')}`
+        : 'Заказ готов к запуску';
+    },
+
+    orderWorkReadinessShort(row) {
+      const missing = this.orderWorkReadinessMissing(row);
+      if (!missing.length) return 'Готов к запуску';
+      const first = String(missing[0] || '').trim();
+      return missing.length > 1 ? `${first} · ещё ${missing.length - 1}` : first;
+    },
+
+    async explainOrderWorkReadiness(row) {
+      const orderId = this.entityId(this.orderId(row));
+      if (!orderId) return;
+      try {
+        if (this.detailOrderItemsOrderId !== orderId) await this.loadDetailOrderItems(row);
+        const missing = this.orderWorkReadinessMissing(row);
+        if (missing.length) {
+          this.error = `Заказ нельзя запустить. Заполните: ${missing.join('; ')}.`;
+        } else {
+          this.feedbackSavedMessage = 'Все обязательные поля заполнены. Заказ можно запустить в работу.';
+        }
+      } catch (error) {
+        this.error = error.message || 'Не удалось проверить готовность заказа.';
+      }
+    },
+
     async sendOrderToWork(row) {
       const orderId = this.entityId(this.orderId(row));
-      if (!orderId || !this.canSendOrderToWork(row)) return;
+      if (!orderId) return;
+      if (!this.canSendOrderToWork(row)) {
+        await this.explainOrderWorkReadiness(row);
+        return;
+      }
 
       const key = `orders:${orderId}:send_to_work`;
       this.saving = { ...this.saving, [key]: true };
@@ -17319,6 +17367,39 @@ export const CostingModule = {
           border-color: #ff8a3d;
           background: #ff8a3d;
           color: #17100b;
+        }
+
+        .symbolika-costing-work-readiness-button {
+          display: inline-flex;
+          inline-size: 100%;
+          max-inline-size: 100%;
+          min-inline-size: 0;
+          justify-content: flex-start;
+          overflow: hidden;
+          text-align: start;
+          border-color: color-mix(in srgb, #f6b94f 58%, transparent);
+          background: color-mix(in srgb, #f6b94f 12%, transparent);
+          color: color-mix(in srgb, #f6b94f 86%, var(--theme--foreground));
+          cursor: pointer;
+        }
+
+        .symbolika-costing-work-readiness-button:hover {
+          border-color: #f6b94f;
+          background: color-mix(in srgb, #f6b94f 22%, transparent);
+          color: var(--theme--foreground);
+        }
+
+        .symbolika-costing-work-readiness-button span {
+          min-inline-size: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .symbolika-costing-detail-action.symbolika-costing-work-readiness-button {
+          inline-size: 100%;
+          justify-content: flex-start;
+          text-align: start;
         }
 
         .symbolika-costing-position-send-work {
@@ -26716,6 +26797,21 @@ export const CostingModule = {
         }
 
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page .symbolika-costing-work-readiness-button:not(:disabled) {
+          border-color: #b96b05 !important;
+          background: #fff2d7 !important;
+          color: #754000 !important;
+          box-shadow: 0 4px 12px rgb(185 107 5 / 14%) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-page .symbolika-costing-work-readiness-button:not(:disabled):hover {
+          border-color: #9c5700 !important;
+          background: #ffe2aa !important;
+          color: #5f3300 !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
           .symbolika-costing-side-nav {
           border-inline-end: 1px solid var(--symbolika-line-strong) !important;
           background: var(--theme--background-normal) !important;
@@ -28440,6 +28536,9 @@ export const CostingModule = {
                     <button v-if="canSendOrderToWork(row)" type="button" class="symbolika-costing-issue-button symbolika-costing-send-work-button" @click.stop="sendOrderToWork(row)">
                       <v-icon name="play_arrow" small />Отправить в работу
                     </button>
+                    <button v-else-if="canExplainOrderWorkReadiness(row)" type="button" class="symbolika-costing-issue-button symbolika-costing-work-readiness-button" :title="orderWorkReadinessTitle(row)" @click.stop="explainOrderWorkReadiness(row)">
+                      <v-icon name="error_outline" small /><span>{{ orderWorkReadinessShort(row) }}</span>
+                    </button>
                   </div>
                 </td>
                 <td class="symbolika-costing-shipping-cell">
@@ -28629,6 +28728,9 @@ export const CostingModule = {
                     </button>
                     <button v-if="canSendOrderToWork(row)" type="button" class="symbolika-costing-issue-button symbolika-costing-send-work-button" @click.stop="sendOrderToWork(row)">
                       <v-icon name="play_arrow" small />Отправить в работу
+                    </button>
+                    <button v-else-if="canExplainOrderWorkReadiness(row)" type="button" class="symbolika-costing-issue-button symbolika-costing-work-readiness-button" :title="orderWorkReadinessTitle(row)" @click.stop="explainOrderWorkReadiness(row)">
+                      <v-icon name="error_outline" small /><span>{{ orderWorkReadinessShort(row) }}</span>
                     </button>
                   </div>
                 </td>
@@ -34265,6 +34367,10 @@ export const CostingModule = {
                 <button v-if="canSendOrderToWork(detail.row)" type="button" class="symbolika-costing-button symbolika-costing-detail-action symbolika-costing-send-work-button" @click="sendOrderToWork(detail.row)">
                   <v-icon name="play_arrow" small />
                   Отправить в работу
+                </button>
+                <button v-else-if="canExplainOrderWorkReadiness(detail.row)" type="button" class="symbolika-costing-button symbolika-costing-detail-action symbolika-costing-work-readiness-button" :title="orderWorkReadinessTitle(detail.row)" @click="explainOrderWorkReadiness(detail.row)">
+                  <v-icon name="error_outline" small />
+                  <span>Для запуска: {{ orderWorkReadinessShort(detail.row) }}</span>
                 </button>
                 <button v-if="canIssueOrder(detail.row)" type="button" class="symbolika-costing-button symbolika-costing-detail-action symbolika-costing-issue-confirm" @click="openOrderIssueDialog(detail.row)">
                   <v-icon name="how_to_reg" small />

@@ -14848,7 +14848,11 @@ BEGIN
     FROM product_categories category
     WHERE category.id = NEW.product_category;
     needs_blank := COALESCE(needs_blank, false);
-    selected_executor := CASE WHEN needs_blank THEN NEW.contractor_2 ELSE NEW.contractor_1 END;
+    selected_executor := CASE
+      WHEN needs_blank AND NEW.blank_source = 'supplier' THEN NEW.contractor_2
+      WHEN needs_blank THEN COALESCE(NEW.contractor_2, NEW.contractor_1)
+      ELSE NEW.contractor_1
+    END;
 
     WITH matching AS (
       SELECT capability.contractor,
@@ -15185,7 +15189,11 @@ BEGIN
     FROM product_categories category
     WHERE category.id = item_row.product_category;
     needs_blank := COALESCE(needs_blank, false);
-    selected_executor := CASE WHEN needs_blank THEN item_row.contractor_2 ELSE item_row.contractor_1 END;
+    selected_executor := CASE
+      WHEN needs_blank AND item_row.blank_source = 'supplier' THEN item_row.contractor_2
+      WHEN needs_blank THEN COALESCE(item_row.contractor_2, item_row.contractor_1)
+      ELSE item_row.contractor_1
+    END;
 
     WITH matching AS (
       SELECT capability.contractor,
