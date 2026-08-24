@@ -1800,12 +1800,34 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     const order = await database('orders').where({ id: orderId }).first();
     if (!order) return;
 
-    await database('orders_items')
-      .where({ order: orderId })
-      .update({
-        shipping_method: order.shipping_method || null,
-        office_status: NOT_IN_OFFICE,
+    const items = await database('orders_items').where({ order: orderId });
+    for (const item of items) {
+      const officeApplicable = await isItemOfficeApplicable(item);
+      await database('orders_items').where({ id: item.id }).update({
+        shipping_method: officeApplicable ? (order.shipping_method || null) : null,
+        office_status: officeApplicable ? NOT_IN_OFFICE : null,
       });
+    }
+  }
+
+  async function isItemOfficeApplicable(item) {
+    const categoryId = item?.product_category;
+    if (!categoryId) return true;
+
+    const category = await database('product_categories')
+      .where({ id: categoryId })
+      .select('office_applicable')
+      .first();
+
+    return category?.office_applicable !== false;
+  }
+
+  function officeApplicableItemsQuery(orderId) {
+    return database('orders_items as oi')
+      .leftJoin('product_categories as pc', 'pc.id', 'oi.product_category')
+      .where('oi.order', orderId)
+      .whereRaw('COALESCE(pc.office_applicable, true) = true')
+      .select('oi.*');
   }
 
   async function syncItemDeadlinesFromOrder(orderId, prevDeadline, nextDeadline) {
@@ -1836,8 +1858,9 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       ? await getReadyProductionStatusId()
       : null;
 
+    const applicableItemIds = officeApplicableItemsQuery(orderId).clearSelect().select('oi.id');
     await database('orders_items')
-      .where({ order: orderId })
+      .whereIn('id', applicableItemIds)
       .update({
         office_status: officeStatus,
         shipping_method: officeStatus === NOT_IN_OFFICE ? null : OFFICE_PICKUP,
@@ -1845,12 +1868,21 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
         ...(officeStatus === ISSUED ? { item_status: 'delivered' } : {}),
         ...(officeStatus === IN_OFFICE ? { item_status: 'ready' } : {}),
       });
+
+    const excludedItemIds = database('orders_items as oi')
+      .join('product_categories as pc', 'pc.id', 'oi.product_category')
+      .where('oi.order', orderId)
+      .where('pc.office_applicable', false)
+      .select('oi.id');
+    await database('orders_items')
+      .whereIn('id', excludedItemIds)
+      .update({ office_status: null, shipping_method: null });
   }
 
   async function recalcOfficeStatus(orderId) {
     if (!orderId) return;
 
-    const items = await database('orders_items').where({ order: orderId });
+    const items = await officeApplicableItemsQuery(orderId);
     if (!items.length) return;
 
     const allIssued = items.every((item) => item.office_status === ISSUED);
@@ -1899,12 +1931,19 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     let shipping_method = item.shipping_method;
     let office_status = item.office_status;
 
-    if (!shipping_method && order?.shipping_method) {
+    const officeApplicable = await isItemOfficeApplicable(item);
+
+    if (officeApplicable && !shipping_method && order?.shipping_method) {
       shipping_method = order.shipping_method;
     }
 
-    if (!office_status) {
+    if (officeApplicable && !office_status) {
       office_status = NOT_IN_OFFICE;
+    }
+
+    if (!officeApplicable) {
+      shipping_method = null;
+      office_status = null;
     }
 
     const quantity = num(item.quantity);
@@ -2101,6 +2140,17 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
 
       if (!isEmpty(order?.deadline)) {
         next.deadline = toDateOnly(order.deadline);
+      }
+    }
+
+    if (next.product_category) {
+      const category = await database('product_categories')
+        .where({ id: next.product_category })
+        .select('office_applicable')
+        .first();
+      if (category?.office_applicable === false) {
+        next.office_status = null;
+        next.shipping_method = null;
       }
     }
 

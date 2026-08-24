@@ -5670,7 +5670,7 @@ export const CostingModule = {
           'order_sum', 'paid_amount', 'payment_due',
         ].join(',');
         const payload = await this.request(`/items/orders/${orderId}?fields=${encodeURIComponent(fields)}`);
-        if (payload?.data) hydrated = { ...row, ...payload.data };
+        if (payload?.data) hydrated = { ...row, ...payload.data, _entity_type: 'order' };
       } catch {
         // The summary row is still enough for read-only order cards.
       }
@@ -5709,13 +5709,31 @@ export const CostingModule = {
       return this.isProductionWorkerRole() && !this.orderBelongsToCurrentEmployee(row);
     },
 
+    async finalizeHydratedOrderItem(row, data) {
+      const hydrated = { ...row, ...data, _entity_type: 'item' };
+      if (!hydrated.deadline && row?.deadline) hydrated.deadline = row.deadline;
+      const orderId = this.entityId(this.orderId(hydrated));
+      const parentOrder = orderId
+        ? (this.detailParentOrder || await this.findLinkedOrder(orderId))
+        : null;
+      if (parentOrder) {
+        hydrated.order_context = parentOrder;
+        if (!hydrated.deadline && parentOrder.deadline) hydrated.deadline = parentOrder.deadline;
+        if (!hydrated.date && parentOrder.date) hydrated.date = parentOrder.date;
+      }
+      ['product_category', 'product_subcategory', 'application_method', 'production_status', 'contractor_1', 'contractor_2'].forEach((field) => {
+        if (hydrated[field] !== undefined && hydrated[field] !== null) hydrated[field] = this.entityId(hydrated[field]);
+      });
+      return hydrated;
+    },
+
     async hydrateOrderItemDetailRow(row) {
-      const itemId = this.entityId(row?.order_item) || row?.id;
+      const itemId = this.detailItemId(row);
       if (!itemId) return row;
       // The work row is the complete security boundary for somebody else's
       // order. A direct orders_items request would either leak manager fields
       // or fail because the role correctly has no access to that source row.
-      if (this.isLimitedProductionItem(row)) return row;
+      if (this.isLimitedProductionItem(row)) return { ...row, _entity_type: 'item' };
       try {
         const managerFields = [
           'id',
@@ -5772,23 +5790,33 @@ export const CostingModule = {
             : 'id,order,product_name,quantity,deadline,item_status,technical_task_text,url,production_status,production_comment');
         const payload = await this.request(`/items/orders_items/${itemId}?fields=${encodeURIComponent(fields)}`);
         if (!payload?.data) return row;
-        const hydrated = { ...row, ...payload.data };
-        // Work views expose an effective position deadline: the item's own
-        // deadline, or the parent order deadline when the item has no override.
-        // The raw orders_items response contains null in the latter case and
-        // must not erase the useful deadline already shown in the list.
-        if (!hydrated.deadline && row?.deadline) hydrated.deadline = row.deadline;
-        ['product_category', 'product_subcategory', 'application_method', 'production_status', 'contractor_1', 'contractor_2'].forEach((field) => {
-          if (hydrated[field] !== undefined && hydrated[field] !== null) hydrated[field] = this.entityId(hydrated[field]);
-        });
-        return hydrated;
-      } catch (error) {
-        this.error = error?.message || 'Не удалось загрузить карточку позиции.';
-        return row;
+        return await this.finalizeHydratedOrderItem(row, payload.data);
+      } catch (primaryError) {
+        // Different roles intentionally have different field masks. If a
+        // nested relation is unavailable, open the same canonical item card
+        // with the common business fields instead of falling back to a view.
+        try {
+          const safeFields = [
+            'id', 'order', 'order_link', 'product_name', 'quantity', 'price_per_unit', 'order_sum', 'deadline',
+            'item_status', 'office_status', 'shipping_method', 'blank_source', 'product_category',
+            'product_subcategory', 'application_method', 'contractor_1', 'contractor_1_cost',
+            'contractor_2', 'contractor_2_cost', 'technical_task_text', 'url', 'needs_designer_help',
+            'designer_comment', 'designer_source_url', 'production_status', 'production_comment',
+          ].join(',');
+          const payload = await this.request(`/items/orders_items/${itemId}?fields=${encodeURIComponent(safeFields)}`);
+          if (payload?.data) return await this.finalizeHydratedOrderItem(row, payload.data);
+        } catch (fallbackError) {
+          this.error = fallbackError?.message || primaryError?.message || 'Не удалось загрузить карточку позиции.';
+        }
+        return { ...row, _entity_type: 'item' };
       }
     },
 
     async openDetail(type, row, options = {}) {
+      const sourceType = type;
+      const entityType = this.detailEntityType(type, row);
+      type = entityType === 'order' ? 'order' : 'orders_items';
+      row = { ...row, _entity_type: entityType };
       if (this.isProductionWorkerRole() && this.detailIsOrder(row) && !this.orderBelongsToCurrentEmployee(row)) {
         this.error = 'Чужой заказ целиком недоступен. Откройте назначенную вашему участку позицию.';
         return;
@@ -5821,7 +5849,11 @@ export const CostingModule = {
       if (this.detailItemForm) this.detailItemForm._draft_upload_token = this.draftLayoutToken();
       if (abandonedDraftToken) this.cleanupDraftLayout(abandonedDraftToken);
       this.detailItemForm = null;
-      this.detailParentOrder = options.parentOrder || null;
+      this.detailParentOrder = options.parentOrder || row?.order_context || null;
+      if (entityType === 'item' && !this.detailParentOrder) {
+        const linkedOrderId = this.entityId(this.orderId(row));
+        if (linkedOrderId) this.detailParentOrder = await this.findLinkedOrder(linkedOrderId);
+      }
       this.detailReturnsToParentOrder = !!options.returnToParentOrder;
       if (type === 'orders_items' && this.detailParentOrder?.date && !row.date) row.date = this.detailParentOrder.date;
       const detailRow = this.detailIsOrder(row)
@@ -5834,7 +5866,7 @@ export const CostingModule = {
           || null;
         if (inheritedDeadline) detailRow.deadline = inheritedDeadline;
       }
-      this.detail = { type, row: detailRow };
+      this.detail = { type, sourceType, row: detailRow };
       if (this.detailIsOrder(detailRow)) {
         this.updateOrderLinkUrl(detailRow);
         await Promise.all([
@@ -6184,6 +6216,13 @@ export const CostingModule = {
     openOrderFromPosition(row, event) {
       event?.stopPropagation?.();
       this.openDetail('order', this.detailOrderContext(row));
+    },
+
+    openPositionFromView(row, event) {
+      event?.stopPropagation?.();
+      const context = this.detailOrderContext(row);
+      const parentOrder = this.detailIsOrder(context) ? context : null;
+      this.openDetail('orders_items', row, { parentOrder });
     },
 
     openPositionRowDetail(row, event) {
@@ -9882,9 +9921,13 @@ export const CostingModule = {
       return this.entityId(item?.product_category) || this.entityId(item?.category);
     },
 
+    isItemOfficeApplicable(item) {
+      return this.categoryName(this.itemCategoryId(item)) !== 'разработка дизайна';
+    },
+
     itemNeedsBlank(item) {
       const name = this.categoryName(this.itemCategoryId(item));
-      return name.includes('текстиль') || name.includes('сувенир');
+      return name.includes('текстиль') || name.includes('сувенир') || name.includes('упаков');
     },
 
     isTextileBlankItem(item) {
@@ -10567,8 +10610,8 @@ export const CostingModule = {
               } : {}),
               deadline: item.deadline || form.deadline || null,
               item_status: 'new',
-              office_status: 'not_in_office',
-              shipping_method: form.shipping_method || null,
+              office_status: this.isItemOfficeApplicable(item) ? 'not_in_office' : null,
+              shipping_method: this.isItemOfficeApplicable(item) ? (form.shipping_method || null) : null,
               technical_task_text: item.technical_task_text || null,
               url: this.layoutExternalUrl(item.url) || null,
               needs_designer_help: !!item.needs_designer_help,
@@ -11134,8 +11177,8 @@ export const CostingModule = {
             item_status: 'new',
             // A new item never inherits the finished order's office state.
             // Otherwise the status trigger promotes it to Ready immediately.
-            office_status: 'not_in_office',
-            shipping_method: order.shipping_method || null,
+            office_status: this.isItemOfficeApplicable(form) ? 'not_in_office' : null,
+            shipping_method: this.isItemOfficeApplicable(form) ? (order.shipping_method || null) : null,
             technical_task_text: form.technical_task_text || null,
             url: this.layoutExternalUrl(form.url) || null,
             needs_designer_help: !!form.needs_designer_help,
@@ -11253,6 +11296,15 @@ export const CostingModule = {
     },
 
     async saveField(row, field, value) {
+      // Contractor costing is a synchronized read model. Saving editable
+      // contractor fields through it caused numeric costs to be overwritten by
+      // the following orders_items -> contractor_costing synchronization. The
+      // order item is the source of truth, so write those fields there directly.
+      if (['contractor_1', 'contractor_2', 'contractor_1_cost', 'contractor_2_cost'].includes(field)) {
+        await this.saveOrderItemField(row, field, value);
+        return;
+      }
+
       const key = `${row.id}:${field}`;
       this.saving = { ...this.saving, [key]: true };
       this.error = '';
@@ -11453,6 +11505,8 @@ export const CostingModule = {
     async saveOrderItemField(row, field, value) {
       const itemId = this.entityId(row?.order_item) || row?.id;
       if (!itemId) return;
+
+      if (field === 'office_status' && !this.isItemOfficeApplicable(row)) return;
 
       if (this.isLimitedProductionItem(row) && !['production_status', 'production_comment'].includes(field)) {
         this.error = 'В чужом заказе участок может менять только статус и комментарий производства.';
@@ -14582,11 +14636,45 @@ export const CostingModule = {
       return row?.order ? `#${row.order}` : '-';
     },
 
+    detailEntityType(sourceType, row) {
+      if (row?._entity_type === 'order' || row?._entity_type === 'item') return row._entity_type;
+
+      const itemSources = new Set([
+        'orders_items',
+        'costing',
+        'contractor_costing',
+        'items_archive',
+        'production_work',
+        'screen_printing_work',
+        'contractor_work',
+      ]);
+      const orderSources = new Set([
+        'order',
+        'orders',
+        'all_orders',
+        'my_orders',
+        'orders_archive',
+        'office',
+        'office_issue',
+      ]);
+      if (orderSources.has(sourceType)) return 'order';
+      if (itemSources.has(sourceType)) return 'item';
+      if (row?.order_item !== undefined && row?.order_item !== null) return 'item';
+      if (row?.product_name !== undefined && row?.product_name !== null) return 'item';
+      return 'order';
+    },
+
+    detailItemId(row) {
+      return this.entityId(row?.order_item)
+        || (this.detailEntityType('', row) === 'item' ? this.entityId(row?.id) : '');
+    },
+
     detailIsOrder(row) {
-      return !row?.product_name && !row?.quantity;
+      return this.detailEntityType('', row) === 'order';
     },
 
     detailOrderContext(row) {
+      if (row?.order_context) return row.order_context;
       const orderId = this.entityId(this.orderId(row));
       const orderNumber = this.orderNumber(row);
       const sources = [
@@ -17622,6 +17710,66 @@ export const CostingModule = {
           padding: 10px;
         }
 
+        .symbolika-costing-order-modal .symbolika-costing-new-order-item:not(.symbolika-costing-estimate-item) {
+          grid-template-columns: repeat(16, minmax(0, 1fr));
+          gap: 10px 8px;
+          padding: 14px;
+          border-radius: 14px;
+        }
+
+        .symbolika-costing-order-modal .symbolika-costing-new-order-name {
+          grid-column: span 4;
+        }
+
+        .symbolika-costing-order-modal .symbolika-costing-new-order-quantity,
+        .symbolika-costing-order-modal .symbolika-costing-new-order-price {
+          grid-column: span 2;
+        }
+
+        .symbolika-costing-order-modal .symbolika-costing-new-order-deadline,
+        .symbolika-costing-order-modal .symbolika-costing-new-order-category {
+          grid-column: span 3;
+        }
+
+        .symbolika-costing-order-modal .symbolika-costing-new-order-variant {
+          grid-column: span 2;
+        }
+
+        .symbolika-costing-order-modal .symbolika-costing-new-order-route {
+          grid-column: span 4;
+        }
+
+        .symbolika-costing-order-modal .symbolika-costing-new-order-cost {
+          grid-column: span 2;
+        }
+
+        .symbolika-costing-order-modal .symbolika-costing-new-order-brief {
+          display: grid;
+          grid-column: 1 / -1;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+
+        .symbolika-costing-order-modal .symbolika-costing-new-order-designer {
+          grid-column: 1 / span 5;
+          align-self: end;
+          min-block-size: 42px;
+          padding-inline: 12px;
+          border: 1px solid color-mix(in srgb, var(--theme--border-color) 74%, transparent);
+          border-radius: 10px;
+          background: color-mix(in srgb, var(--theme--background-page) 42%, transparent);
+        }
+
+        .symbolika-costing-order-modal .symbolika-costing-new-order-remove {
+          grid-column: 13 / -1;
+          min-block-size: 42px;
+        }
+
+        .symbolika-costing-order-modal .symbolika-costing-new-order-task textarea,
+        .symbolika-costing-order-modal .symbolika-costing-new-order-url .symbolika-layout-draft-button {
+          min-block-size: 58px;
+        }
+
         .symbolika-costing-new-order-item > * {
           min-inline-size: 0;
         }
@@ -17865,6 +18013,27 @@ export const CostingModule = {
 
         .symbolika-costing-order-button:hover {
           color: color-mix(in srgb, var(--theme--primary) 72%, white);
+        }
+
+        .symbolika-costing-product-button {
+          display: block;
+          inline-size: 100%;
+          max-inline-size: 100%;
+          border: 0;
+          background: transparent;
+          color: var(--theme--foreground);
+          padding: 0;
+          font: inherit;
+          font-weight: 800;
+          line-height: 1.25;
+          text-align: left;
+          cursor: pointer;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .symbolika-costing-product-button:hover {
+          color: var(--theme--primary);
         }
 
         .symbolika-costing-product {
@@ -18687,6 +18856,26 @@ export const CostingModule = {
 
           .symbolika-costing-new-order-item {
             grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .symbolika-costing-order-modal .symbolika-costing-new-order-item:not(.symbolika-costing-estimate-item) {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .symbolika-costing-order-modal .symbolika-costing-new-order-quantity,
+          .symbolika-costing-order-modal .symbolika-costing-new-order-price,
+          .symbolika-costing-order-modal .symbolika-costing-new-order-deadline,
+          .symbolika-costing-order-modal .symbolika-costing-new-order-category,
+          .symbolika-costing-order-modal .symbolika-costing-new-order-variant,
+          .symbolika-costing-order-modal .symbolika-costing-new-order-route,
+          .symbolika-costing-order-modal .symbolika-costing-new-order-cost {
+            grid-column: auto;
+          }
+
+          .symbolika-costing-order-modal .symbolika-costing-new-order-name,
+          .symbolika-costing-order-modal .symbolika-costing-new-order-designer,
+          .symbolika-costing-order-modal .symbolika-costing-new-order-remove {
+            grid-column: 1 / -1;
           }
 
           .symbolika-costing-new-order-item.symbolika-costing-estimate-item {
@@ -27894,7 +28083,7 @@ export const CostingModule = {
                         <option v-for="status in itemProductionStatusOptions()" :key="'position-mode-production-' + status.id" :value="status.id">{{ status.name }}</option>
                       </select>
                     </label>
-                    <label class="symbolika-costing-position-status-field" @click.stop>
+                    <label v-if="isItemOfficeApplicable(row)" class="symbolika-costing-position-status-field" @click.stop>
                       <span class="symbolika-costing-position-status-label">Офис</span>
                       <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'office_status'), officeSelectClass(row.office_status)]" :value="row.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(row, 'office_status', $event.target.value)">
                         <option v-for="status in officeStatusChoices" :key="'position-mode-office-' + status.value" :value="status.value">{{ status.text }}</option>
@@ -28073,6 +28262,7 @@ export const CostingModule = {
                           <option v-for="status in itemProductionStatusOptions()" :key="'my-production-status-' + status.id" :value="status.id">{{ status.name }}</option>
                         </select>
                         <select
+                          v-if="isItemOfficeApplicable(item)"
                           class="symbolika-costing-table-select symbolika-costing-position-status-select"
                           :class="[savingWorkClass('orders_items', item, 'office_status'), officeSelectClass(item.office_status)]"
                           :value="item.office_status || 'not_in_office'"
@@ -28246,7 +28436,7 @@ export const CostingModule = {
                           <option value="">Без статуса производства</option>
                           <option v-for="status in itemProductionStatusOptions()" :key="'all-production-status-' + status.id" :value="status.id">{{ status.name }}</option>
                         </select>
-                        <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'office_status'), officeSelectClass(item.office_status)]" :value="item.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(item, 'office_status', $event.target.value)">
+                        <select v-if="isItemOfficeApplicable(item)" class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'office_status'), officeSelectClass(item.office_status)]" :value="item.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(item, 'office_status', $event.target.value)">
                           <option v-for="status in officeStatusChoices" :key="'all-office-status-' + status.value" :value="status.value">{{ status.text }}</option>
                         </select>
                         <button v-if="showsSendItemToWorkButton(item)" type="button" class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work" :class="savingWorkClass('orders_items', item, 'item_status')" :disabled="itemSendToWorkBusy(item)" :title="itemSendToWorkTitle(item)" @click.stop="sendItemToWorkFromList(item)"><v-icon name="play_arrow" small />Запустить в работу</button>
@@ -28389,7 +28579,7 @@ export const CostingModule = {
                           <option value="">Без статуса производства</option>
                           <option v-for="status in itemProductionStatusOptions()" :key="'archive-production-status-' + status.id" :value="status.id">{{ status.name }}</option>
                         </select>
-                        <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'office_status'), officeSelectClass(item.office_status)]" :value="item.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(item, 'office_status', $event.target.value)">
+                        <select v-if="isItemOfficeApplicable(item)" class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'office_status'), officeSelectClass(item.office_status)]" :value="item.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(item, 'office_status', $event.target.value)">
                           <option v-for="status in officeStatusChoices" :key="'archive-office-status-' + status.value" :value="status.value">{{ status.text }}</option>
                         </select>
                       </div>
@@ -28864,14 +29054,19 @@ export const CostingModule = {
             </thead>
 
             <tbody v-if="!loading && visibleRows.length">
-              <tr v-for="row in visibleRows" :key="row.id" class="symbolika-costing-row-clickable" @click="openRowDetail('costing', row, $event)">
+              <tr v-for="row in visibleRows" :key="row.id">
                 <td>
-                  <span class="symbolika-costing-order">{{ row.order_number }}</span>
+                  <button
+                    type="button"
+                    class="symbolika-costing-order-button"
+                    title="Открыть заказ"
+                    @click="openOrderFromPosition(row, $event)"
+                  >{{ row.order_number }}</button>
                   <div class="symbolika-costing-subtle">{{ formatDate(row.date) }}</div>
                   <div class="symbolika-costing-subtle">{{ relatedName(row.customer) || '-' }}</div>
                 </td>
                 <td>
-                  <div class="symbolika-costing-product">{{ row.product_name }}</div>
+                  <button type="button" class="symbolika-costing-product-button" title="Открыть позицию" @click="openPositionFromView(row, $event)">{{ row.product_name }}</button>
                   <div class="symbolika-costing-subtle">
                     {{ formatQuantity(row.quantity) }} шт. · {{ formatMoney(row.order_sum) }}
                   </div>
@@ -31085,12 +31280,12 @@ export const CostingModule = {
                     <span class="symbolika-costing-pill is-warning">Ожидает отправки</span>
                   </td>
                   <td>
-                    <span class="symbolika-costing-order">{{ orderNumber(row) }}</span>
+                    <button type="button" class="symbolika-costing-order-button" title="Открыть заказ" @click.stop="openOrderFromPosition(row, $event)">{{ orderNumber(row) }}</button>
                     <div>{{ relatedName(row.customer_company) || relatedName(row.customer) || '-' }}</div>
                     <div class="symbolika-costing-subtle">{{ relatedName(row.manager_employee, 'full_name') || 'Менеджер не указан' }}</div>
                   </td>
                   <td>
-                    <div class="symbolika-costing-product">{{ row.product_name || 'Без названия' }}</div>
+                    <button type="button" class="symbolika-costing-product-button" title="Открыть позицию" @click.stop="openPositionFromView(row, $event)">{{ row.product_name || 'Без названия' }}</button>
                     <div class="symbolika-costing-subtle">{{ formatQuantity(row.quantity) }} шт.</div>
                   </td>
                   <td>
@@ -31182,10 +31377,10 @@ export const CostingModule = {
                     <strong class="symbolika-contractor-overview-name">{{ relatedName(row.contractor) || 'Не указан' }}</strong>
                   </td>
                   <td>
-                    <span class="symbolika-costing-order">{{ orderNumber(row) }}</span>
+                    <button type="button" class="symbolika-costing-order-button" title="Открыть заказ" @click.stop="openOrderFromPosition(row, $event)">{{ orderNumber(row) }}</button>
                   </td>
                   <td>
-                    <div class="symbolika-costing-product">{{ row.product_name || 'Без названия' }}</div>
+                    <button type="button" class="symbolika-costing-product-button" title="Открыть позицию" @click.stop="openPositionFromView(row, $event)">{{ row.product_name || 'Без названия' }}</button>
                     <div class="symbolika-costing-subtle">{{ formatQuantity(row.quantity) }} шт.</div>
                   </td>
                   <td>
@@ -31231,7 +31426,7 @@ export const CostingModule = {
             <tbody>
               <tr v-for="row in visibleContractorWorkRows" :key="row.id" :class="[rowStateClass(row), 'symbolika-costing-row-clickable']" @click="openRowDetail('contractor_work', row, $event)">
                 <td>
-                  <span class="symbolika-costing-order">{{ orderNumber(row) }}</span>
+                  <button type="button" class="symbolika-costing-order-button" title="Открыть заказ" @click.stop="openOrderFromPosition(row, $event)">{{ orderNumber(row) }}</button>
                   <span class="symbolika-costing-date" :class="deadlineClass(row.deadline)">
                     <v-icon :name="deadlineIcon(row.deadline)" small />
                     {{ formatDate(row.deadline) }}
@@ -31240,7 +31435,7 @@ export const CostingModule = {
                 <td>
                   <div>{{ relatedName(row.customer) || '-' }}</div>
                   <div class="symbolika-costing-subtle">{{ relatedName(row.customer_company) }}</div>
-                  <div class="symbolika-costing-product">{{ row.product_name }}</div>
+                  <button type="button" class="symbolika-costing-product-button" title="Открыть позицию" @click.stop="openPositionFromView(row, $event)">{{ row.product_name || 'Без названия' }}</button>
                   <div class="symbolika-costing-subtle">{{ formatQuantity(row.quantity) }} шт.</div>
                 </td>
                 <td>
@@ -32311,22 +32506,22 @@ export const CostingModule = {
                   <input v-model="item.product_name" class="symbolika-costing-input" list="symbolika-product-name-suggestions" autocomplete="off" />
                 </label>
 
-                <label class="symbolika-costing-label">
+                <label class="symbolika-costing-label symbolika-costing-new-order-quantity">
                   Кол-во *
                   <input v-model="item.quantity" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'quantity')" />
                 </label>
 
-                <label class="symbolika-costing-label symbolika-mobile-item-extra">
+                <label class="symbolika-costing-label symbolika-costing-new-order-price symbolika-mobile-item-extra">
                   Цена
                   <input v-model="item.price_per_unit" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'price_per_unit')" />
                 </label>
 
-                <label class="symbolika-costing-label">
+                <label class="symbolika-costing-label symbolika-costing-new-order-deadline">
                   Срок позиции
                   <input v-model="item.deadline" class="symbolika-costing-input" type="date" />
                 </label>
 
-                <label class="symbolika-costing-label symbolika-mobile-item-extra">
+                <label class="symbolika-costing-label symbolika-costing-new-order-category symbolika-mobile-item-extra">
                   Категория
                   <select v-model="item.product_category" class="symbolika-costing-select" @change="clearNewOrderItemDetails(item)">
                     <option value="">Не выбрана</option>
@@ -32336,7 +32531,7 @@ export const CostingModule = {
                   </select>
                 </label>
 
-                <label v-if="showSubcategoryField(item)" class="symbolika-costing-label symbolika-mobile-item-extra">
+                <label v-if="showSubcategoryField(item)" class="symbolika-costing-label symbolika-costing-new-order-variant symbolika-mobile-item-extra">
                   Подкатегория
                   <select v-model="item.product_subcategory" class="symbolika-costing-select" @change="syncContractorSelections(item); updateTzConstructor(item)">
                     <option value="">Не выбрана</option>
@@ -32346,7 +32541,7 @@ export const CostingModule = {
                   </select>
                 </label>
 
-                <label v-if="showApplicationMethodField(item)" class="symbolika-costing-label symbolika-mobile-item-extra">
+                <label v-if="showApplicationMethodField(item)" class="symbolika-costing-label symbolika-costing-new-order-route symbolika-mobile-item-extra">
                   Вид нанесения
                   <select v-model="item.application_method" class="symbolika-costing-select" @change="syncContractorSelections(item); updateTzConstructor(item)">
                     <option value="">Не выбран</option>
@@ -32356,7 +32551,7 @@ export const CostingModule = {
                   </select>
                 </label>
 
-                <label v-if="itemNeedsBlank(item)" class="symbolika-costing-label symbolika-mobile-item-extra">
+                <label v-if="itemNeedsBlank(item)" class="symbolika-costing-label symbolika-costing-new-order-route symbolika-mobile-item-extra">
                   Заготовка
                   <select v-model="item.blank_source" class="symbolika-costing-select" @change="handleBlankSourceChange(item)">
                     <option value="supplier">Закупить у поставщика</option>
@@ -32365,7 +32560,7 @@ export const CostingModule = {
                   </select>
                 </label>
 
-                <label v-if="itemNeedsBlank(item) && item.blank_source === 'supplier'" class="symbolika-costing-label symbolika-mobile-item-extra">
+                <label v-if="itemNeedsBlank(item) && item.blank_source === 'supplier'" class="symbolika-costing-label symbolika-costing-new-order-route symbolika-mobile-item-extra">
                   Поставщик заготовки
                   <select v-model="item.contractor_1" class="symbolika-costing-select" @change="item.contractor_1_cost = ''">
                     <option value="">Не выбран</option>
@@ -32376,12 +32571,12 @@ export const CostingModule = {
                   </select>
                 </label>
 
-                <label v-if="itemNeedsBlank(item) && item.blank_source === 'supplier' && canEditItemCosts" class="symbolika-costing-label symbolika-mobile-item-extra">
+                <label v-if="itemNeedsBlank(item) && item.blank_source === 'supplier' && canEditItemCosts" class="symbolika-costing-label symbolika-costing-new-order-cost symbolika-mobile-item-extra">
                   Себестоимость заготовки за ед.
                   <input v-model="item.contractor_1_cost" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'contractor_1_cost')" />
                 </label>
 
-                <label v-if="itemCategoryId(item)" class="symbolika-costing-label symbolika-mobile-item-extra">
+                <label v-if="itemCategoryId(item)" class="symbolika-costing-label symbolika-costing-new-order-route symbolika-mobile-item-extra">
                   {{ executorOptions(item).length === 1 ? 'Исполнитель (автоматически)' : 'Исполнитель работ' }}
                   <select v-model="item[executorField(item)]" class="symbolika-costing-select" :disabled="executorOptions(item).length <= 1" @change="item[executorCostField(item)] = ''">
                     <option value="">{{ executorOptions(item).length ? 'Выберите исполнителя' : 'Маршрут не настроен' }}</option>
@@ -32391,32 +32586,34 @@ export const CostingModule = {
                   </select>
                 </label>
 
-                <label v-if="itemCategoryId(item) && canEditItemCosts" class="symbolika-costing-label symbolika-mobile-item-extra">
+                <label v-if="itemCategoryId(item) && canEditItemCosts" class="symbolika-costing-label symbolika-costing-new-order-cost symbolika-mobile-item-extra">
                   Себестоимость работ за ед.
                   <input v-model="item[executorCostField(item)]" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, executorCostField(item))" />
                 </label>
 
-                <label class="symbolika-costing-label symbolika-costing-new-order-task">
-                  <span class="symbolika-costing-tz-field-head">
-                    <span>ТЗ</span>
-                    <button v-if="tzConstructorSpecFor(item)" type="button" class="symbolika-costing-tz-toggle" @click="openTzConstructorDialog(item)">
-                      {{ tzConstructorButtonText(item) }}
-                    </button>
-                  </span>
-                  <textarea v-model="item.technical_task_text" class="symbolika-costing-comment"></textarea>
-                </label>
+                <div class="symbolika-costing-new-order-brief">
+                  <label class="symbolika-costing-label symbolika-costing-new-order-task">
+                    <span class="symbolika-costing-tz-field-head">
+                      <span>ТЗ</span>
+                      <button v-if="tzConstructorSpecFor(item)" type="button" class="symbolika-costing-tz-toggle" @click="openTzConstructorDialog(item)">
+                        {{ tzConstructorButtonText(item) }}
+                      </button>
+                    </span>
+                    <textarea v-model="item.technical_task_text" class="symbolika-costing-comment"></textarea>
+                  </label>
 
-                <div class="symbolika-costing-label symbolika-costing-new-order-url symbolika-draft-layout-field">
-                  <span>Макет</span>
-                  <button type="button" class="symbolika-layout-draft-button" :class="{ 'has-file': item._layout_file || item._draft_upload_result || item.url, 'is-uploading': item._upload_status === 'uploading', 'is-error': item._upload_status === 'error' }" @click="openDraftLayoutUploadDialog(item)">
-                    <v-icon :name="draftLayoutIcon(item)" small />
-                    <span>{{ draftLayoutName(item) }}</span>
-                    <small v-if="draftLayoutMeta(item)">{{ draftLayoutMeta(item) }}</small>
-                  </button>
-                  <div v-if="item._upload_status === 'uploading'" class="symbolika-draft-inline-progress"><span :style="{ inlineSize: Number(item._upload_progress || 0) + '%' }"></span></div>
+                  <div class="symbolika-costing-label symbolika-costing-new-order-url symbolika-draft-layout-field">
+                    <span>Макет</span>
+                    <button type="button" class="symbolika-layout-draft-button" :class="{ 'has-file': item._layout_file || item._draft_upload_result || item.url, 'is-uploading': item._upload_status === 'uploading', 'is-error': item._upload_status === 'error' }" @click="openDraftLayoutUploadDialog(item)">
+                      <v-icon :name="draftLayoutIcon(item)" small />
+                      <span>{{ draftLayoutName(item) }}</span>
+                      <small v-if="draftLayoutMeta(item)">{{ draftLayoutMeta(item) }}</small>
+                    </button>
+                    <div v-if="item._upload_status === 'uploading'" class="symbolika-draft-inline-progress"><span :style="{ inlineSize: Number(item._upload_progress || 0) + '%' }"></span></div>
+                  </div>
                 </div>
 
-                <label class="symbolika-costing-checkbox symbolika-mobile-item-extra">
+                <label class="symbolika-costing-checkbox symbolika-costing-new-order-designer symbolika-mobile-item-extra">
                   <input v-model="item.needs_designer_help" type="checkbox" />
                   Нужна помощь дизайнера
                 </label>
@@ -34256,7 +34453,7 @@ export const CostingModule = {
                 </select>
               </div>
             </div>
-            <div class="symbolika-costing-detail-field is-primary symbolika-mobile-secondary">
+            <div v-if="isItemOfficeApplicable(detail.row)" class="symbolika-costing-detail-field is-primary symbolika-mobile-secondary">
               <div class="symbolika-costing-detail-label">Статус офиса</div>
               <div class="symbolika-costing-detail-value">
                 <select

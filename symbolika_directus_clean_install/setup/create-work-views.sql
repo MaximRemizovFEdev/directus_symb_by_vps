@@ -444,6 +444,39 @@ CREATE TRIGGER symbolika_transfer_company_manager
 AFTER UPDATE OF manager ON customer_companies
 FOR EACH ROW EXECUTE FUNCTION symbolika_transfer_company_manager();
 ALTER TABLE product_categories ADD COLUMN IF NOT EXISTS detail_mode character varying(255) DEFAULT 'subcategory';
+ALTER TABLE product_categories ADD COLUMN IF NOT EXISTS office_applicable boolean NOT NULL DEFAULT true;
+
+CREATE OR REPLACE FUNCTION symbolika_enforce_item_office_applicability()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  category_office_applicable boolean;
+BEGIN
+  IF NEW.product_category IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT COALESCE(pc.office_applicable, true)
+    INTO category_office_applicable
+  FROM product_categories pc
+  WHERE pc.id = NEW.product_category;
+
+  IF category_office_applicable = false THEN
+    NEW.office_status := NULL;
+    NEW.shipping_method := NULL;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS symbolika_enforce_item_office_applicability ON orders_items;
+CREATE TRIGGER symbolika_enforce_item_office_applicability
+BEFORE INSERT OR UPDATE OF product_category, office_status, shipping_method ON orders_items
+FOR EACH ROW
+EXECUTE FUNCTION symbolika_enforce_item_office_applicability();
+
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS default_product_category integer REFERENCES product_categories(id) ON DELETE SET NULL;
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS default_product_subcategory integer REFERENCES product_subcategories(id) ON DELETE SET NULL;
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS supplies_textile_blanks boolean DEFAULT false;
@@ -2028,6 +2061,13 @@ BEGIN
   LEFT JOIN order_statuses os ON os.id = o.order_status
   WHERE o.id = order_id
     AND o.shipping_method = 'office_pickup'
+    AND EXISTS (
+      SELECT 1
+      FROM orders_items oi
+      LEFT JOIN product_categories pc ON pc.id = oi.product_category
+      WHERE oi."order" = o.id
+        AND COALESCE(pc.office_applicable, true)
+    )
     AND COALESCE(o.office_status, 'not_in_office') <> 'issued';
 
   INSERT INTO office_issue_archive (
@@ -2067,6 +2107,13 @@ BEGIN
   LEFT JOIN order_statuses os ON os.id = o.order_status
   WHERE o.id = order_id
     AND o.shipping_method = 'office_pickup'
+    AND EXISTS (
+      SELECT 1
+      FROM orders_items oi
+      LEFT JOIN product_categories pc ON pc.id = oi.product_category
+      WHERE oi."order" = o.id
+        AND COALESCE(pc.office_applicable, true)
+    )
     AND o.office_status = 'issued';
 
   UPDATE office_issue
@@ -2098,8 +2145,10 @@ BEGIN
     oi.office_status
   FROM orders_items oi
   JOIN orders o ON o.id = oi."order"
+  LEFT JOIN product_categories pc ON pc.id = oi.product_category
   WHERE oi."order" = order_id
     AND o.shipping_method = 'office_pickup'
+    AND COALESCE(pc.office_applicable, true)
     AND COALESCE(o.office_status, 'not_in_office') <> 'issued';
 
   INSERT INTO office_issue_archive_items (
@@ -2113,8 +2162,10 @@ BEGIN
     oi.office_status
   FROM orders_items oi
   JOIN orders o ON o.id = oi."order"
+  LEFT JOIN product_categories pc ON pc.id = oi.product_category
   WHERE oi."order" = order_id
     AND o.shipping_method = 'office_pickup'
+    AND COALESCE(pc.office_applicable, true)
     AND o.office_status = 'issued';
 END;
 $$;
@@ -2145,10 +2196,12 @@ BEGIN
     oi.office_status
   FROM orders_items oi
   JOIN orders o ON o.id = oi."order"
+  LEFT JOIN product_categories pc ON pc.id = oi.product_category
   LEFT JOIN customers c ON c.id = o.customer
   LEFT JOIN customer_companies cc ON cc.id = o.customer_company
   WHERE oi.id = item_id
     AND o.shipping_method = 'office_pickup'
+    AND COALESCE(pc.office_applicable, true)
     AND COALESCE(o.office_status, 'not_in_office') <> 'issued';
 END;
 $$;
@@ -2165,8 +2218,10 @@ DECLARE
   next_status character varying(255);
 BEGIN
   SELECT COUNT(*) INTO items_count
-  FROM orders_items
-  WHERE "order" = order_id;
+  FROM orders_items oi
+  LEFT JOIN product_categories pc ON pc.id = oi.product_category
+  WHERE oi."order" = order_id
+    AND COALESCE(pc.office_applicable, true);
 
   IF items_count = 0 THEN
     RETURN;
@@ -2177,8 +2232,10 @@ BEGIN
     bool_and(office_status IN ('in_office', 'issued')),
     bool_or(COALESCE(office_status, 'not_in_office') = 'not_in_office')
   INTO all_issued, all_in_office, has_not_in_office
-  FROM orders_items
-  WHERE "order" = order_id;
+  FROM orders_items oi
+  LEFT JOIN product_categories pc ON pc.id = oi.product_category
+  WHERE oi."order" = order_id
+    AND COALESCE(pc.office_applicable, true);
 
   IF all_issued THEN
     next_status := 'issued';
@@ -3606,6 +3663,13 @@ LEFT JOIN customer_companies cc ON cc.id = o.customer_company
 LEFT JOIN employees e ON e.id = o.manager_employee
 LEFT JOIN order_statuses os ON os.id = o.order_status
 WHERE o.shipping_method = 'office_pickup'
+  AND EXISTS (
+    SELECT 1
+    FROM orders_items oi
+    LEFT JOIN product_categories pc ON pc.id = oi.product_category
+    WHERE oi."order" = o.id
+      AND COALESCE(pc.office_applicable, true)
+  )
   AND COALESCE(o.office_status, 'not_in_office') <> 'issued';
 
 INSERT INTO office_issue_archive (
@@ -3644,6 +3708,13 @@ LEFT JOIN customer_companies cc ON cc.id = o.customer_company
 LEFT JOIN employees e ON e.id = o.manager_employee
 LEFT JOIN order_statuses os ON os.id = o.order_status
 WHERE o.shipping_method = 'office_pickup'
+  AND EXISTS (
+    SELECT 1
+    FROM orders_items oi
+    LEFT JOIN product_categories pc ON pc.id = oi.product_category
+    WHERE oi."order" = o.id
+      AND COALESCE(pc.office_applicable, true)
+  )
   AND o.office_status = 'issued';
 
 UPDATE office_issue
@@ -3665,7 +3736,9 @@ SELECT
   oi.office_status
 FROM orders_items oi
 JOIN orders o ON o.id = oi."order"
+LEFT JOIN product_categories pc ON pc.id = oi.product_category
 WHERE o.shipping_method = 'office_pickup'
+  AND COALESCE(pc.office_applicable, true)
   AND COALESCE(o.office_status, 'not_in_office') <> 'issued';
 
 INSERT INTO office_issue_archive_items (
@@ -3679,7 +3752,9 @@ SELECT
   oi.office_status
 FROM orders_items oi
 JOIN orders o ON o.id = oi."order"
+LEFT JOIN product_categories pc ON pc.id = oi.product_category
 WHERE o.shipping_method = 'office_pickup'
+  AND COALESCE(pc.office_applicable, true)
   AND o.office_status = 'issued';
 
 DELETE FROM office_items_in_office;
@@ -3702,9 +3777,11 @@ SELECT
   oi.office_status
 FROM orders_items oi
 JOIN orders o ON o.id = oi."order"
+LEFT JOIN product_categories pc ON pc.id = oi.product_category
 LEFT JOIN customers c ON c.id = o.customer
 LEFT JOIN customer_companies cc ON cc.id = o.customer_company
 WHERE o.shipping_method = 'office_pickup'
+  AND COALESCE(pc.office_applicable, true)
   AND COALESCE(o.office_status, 'not_in_office') <> 'issued';
 
 DELETE FROM production_work;
@@ -5528,7 +5605,8 @@ WITH categories(name, detail_mode, sort) AS (VALUES
   (U&'\0422\0435\043a\0441\0442\0438\043b\044c', 'application_method', 70),
   (U&'\0422\043a\0430\043d\0438', 'subcategory', 80),
   (U&'\041a\043e\043d\0441\0442\0440\0443\043a\0446\0438\0438', 'subcategory', 90),
-  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', 'application_method', 100)
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', 'application_method', 100),
+  (U&'\0420\0430\0437\0440\0430\0431\043e\0442\043a\0430 \0434\0438\0437\0430\0439\043d\0430', 'none', 110)
 )
 INSERT INTO product_categories (name, detail_mode, sort, is_active)
 SELECT name, detail_mode, sort, true
@@ -5545,7 +5623,8 @@ WITH categories(name, detail_mode, sort) AS (VALUES
   (U&'\0422\0435\043a\0441\0442\0438\043b\044c', 'application_method', 70),
   (U&'\0422\043a\0430\043d\0438', 'subcategory', 80),
   (U&'\041a\043e\043d\0441\0442\0440\0443\043a\0446\0438\0438', 'subcategory', 90),
-  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', 'application_method', 100)
+  (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', 'application_method', 100),
+  (U&'\0420\0430\0437\0440\0430\0431\043e\0442\043a\0430 \0434\0438\0437\0430\0439\043d\0430', 'none', 110)
 )
 UPDATE product_categories pc
 SET detail_mode = c.detail_mode,
@@ -5553,6 +5632,19 @@ SET detail_mode = c.detail_mode,
     is_active = true
 FROM categories c
 WHERE pc.name = c.name;
+
+UPDATE product_categories
+SET office_applicable = false,
+    detail_mode = 'none',
+    is_active = true
+WHERE name = U&'\0420\0430\0437\0440\0430\0431\043e\0442\043a\0430 \0434\0438\0437\0430\0439\043d\0430';
+
+UPDATE orders_items oi
+SET office_status = NULL
+FROM product_categories pc
+WHERE pc.id = oi.product_category
+  AND pc.office_applicable = false
+  AND oi.office_status IS NOT NULL;
 
 WITH subcategories(category_name, name, sort) AS (VALUES
   (U&'\041f\043e\043b\0438\0433\0440\0430\0444\0438\044f', U&'\0413\0440\0430\043c\043e\0442\044b', 10),
@@ -14542,7 +14634,25 @@ WHERE COALESCE(contractor.approval_status, 'approved') = 'approved'
     (COALESCE(contractor.supplies_textile_blanks, false) AND category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%')
     OR
     (COALESCE(contractor.supplies_merch_blanks, false) AND category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%')
+    OR
+    (COALESCE(contractor.supplies_merch_blanks, false) AND category.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%')
   )
+ON CONFLICT DO NOTHING;
+
+-- Internal screen-printing is an executor for every category-specific
+-- screen-printing method, including packaging.
+INSERT INTO contractor_capabilities (
+  contractor, capability_type, product_category, application_method,
+  priority, is_active
+)
+SELECT DISTINCT
+  contractor.id, 'executor', method.category, method.id, 10, true
+FROM contractors contractor
+JOIN product_application_methods method ON method.category IS NOT NULL
+WHERE COALESCE(contractor.approval_status, 'approved') = 'approved'
+  AND contractor.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%'
+  AND method.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%'
+  AND COALESCE(method.is_active, true)
 ON CONFLICT DO NOTHING;
 
 CREATE OR REPLACE FUNCTION apply_category_contractors_trigger()
@@ -14562,7 +14672,8 @@ BEGIN
 
     SELECT COALESCE(
       pc.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
-      OR pc.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%', false
+      OR pc.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%'
+      OR pc.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%', false
     ) INTO needs_blank
     FROM product_categories pc
     WHERE pc.id = NEW.product_category;
@@ -14660,6 +14771,18 @@ BEGIN
 END;
 $$;
 
+-- Existing packaging items created before packaging became a two-stage route
+-- already contain supplier in contractor_1 and executor in contractor_2.
+-- Preserve those choices and only normalize their blank source.
+UPDATE orders_items item
+SET blank_source = 'supplier'
+FROM product_categories category
+WHERE item.product_category = category.id
+  AND category.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%'
+  AND COALESCE(item.blank_source, 'none') = 'none'
+  AND item.contractor_1 IS NOT NULL
+  AND item.contractor_2 IS NOT NULL;
+
 CREATE OR REPLACE FUNCTION symbolika_validate_item_route_for_work()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -14674,7 +14797,8 @@ BEGIN
     END IF;
     SELECT COALESCE(
       category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
-      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%', false
+      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%'
+      OR category.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%', false
     ) INTO needs_blank
     FROM product_categories category WHERE category.id = NEW.product_category;
 
@@ -14716,7 +14840,8 @@ BEGIN
 
     SELECT COALESCE(
       category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
-      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%', false
+      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%'
+      OR category.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%', false
     ) INTO needs_blank
     FROM product_categories category
     WHERE category.id = NEW.product_category;
@@ -14832,7 +14957,8 @@ BEGIN
 
     SELECT COALESCE(
       category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
-      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%', false
+      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%'
+      OR category.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%', false
     ) INTO needs_blank
     FROM product_categories category WHERE category.id = item_row.product_category;
     needs_blank := COALESCE(needs_blank, false);
@@ -15028,7 +15154,8 @@ BEGIN
 
     SELECT COALESCE(
       category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
-      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%', false
+      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%'
+      OR category.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%', false
     ) INTO needs_blank
     FROM product_categories category
     WHERE category.id = item_row.product_category;
