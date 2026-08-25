@@ -58,6 +58,11 @@ import {
   orderItemSafeFields,
   orderItemsListFields,
 } from './lib/order-detail-fields.js';
+import {
+  detailEntityType as resolveDetailEntityType,
+  detailIsOrder as isDetailOrder,
+  detailItemId as resolveDetailItemId,
+} from './lib/entity-context.js';
 
 const fields = [
   'id',
@@ -14530,40 +14535,15 @@ export const CostingModule = {
     },
 
     detailEntityType(sourceType, row) {
-      if (row?._entity_type === 'order' || row?._entity_type === 'item') return row._entity_type;
-
-      const itemSources = new Set([
-        'orders_items',
-        'costing',
-        'contractor_costing',
-        'items_archive',
-        'production_work',
-        'screen_printing_work',
-        'contractor_work',
-      ]);
-      const orderSources = new Set([
-        'order',
-        'orders',
-        'all_orders',
-        'my_orders',
-        'orders_archive',
-        'office',
-        'office_issue',
-      ]);
-      if (orderSources.has(sourceType)) return 'order';
-      if (itemSources.has(sourceType)) return 'item';
-      if (row?.order_item !== undefined && row?.order_item !== null) return 'item';
-      if (row?.product_name !== undefined && row?.product_name !== null) return 'item';
-      return 'order';
+      return resolveDetailEntityType(sourceType, row);
     },
 
     detailItemId(row) {
-      return this.entityId(row?.order_item)
-        || (this.detailEntityType('', row) === 'item' ? this.entityId(row?.id) : '');
+      return resolveDetailItemId(row);
     },
 
     detailIsOrder(row) {
-      return this.detailEntityType('', row) === 'order';
+      return isDetailOrder(row);
     },
 
     detailOrderContext(row) {
