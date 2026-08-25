@@ -52,6 +52,12 @@ import {
   isProductionWorkerRole as roleIsProductionWorker,
 } from './lib/role-access.js';
 import { parseDirectusResponse } from './lib/api-response.js';
+import {
+  orderDetailFields,
+  orderItemCardFields,
+  orderItemSafeFields,
+  orderItemsListFields,
+} from './lib/order-detail-fields.js';
 
 const fields = [
   'id',
@@ -5656,15 +5662,7 @@ export const CostingModule = {
 
       let hydrated = row;
       try {
-        const fields = [
-          'id', 'order_number', 'date', 'deadline',
-          'customer.id', 'customer.name',
-          'customer_company.id', 'customer_company.name',
-          'manager_employee.id', 'manager_employee.full_name',
-          'order_status', 'office_status', 'shipping_method', 'shipping_comment',
-          'payment_type.id', 'payment_type.name', 'payment_on_receipt', 'comment',
-          'order_sum', 'paid_amount', 'payment_due',
-        ].join(',');
+        const fields = orderDetailFields.join(',');
         const payload = await this.request(`/items/orders/${orderId}?fields=${encodeURIComponent(fields)}`);
         if (payload?.data) hydrated = { ...row, ...payload.data, _entity_type: 'order' };
       } catch {
@@ -5731,59 +5729,13 @@ export const CostingModule = {
       // or fail because the role correctly has no access to that source row.
       if (this.isLimitedProductionItem(row)) return { ...row, _entity_type: 'item' };
       try {
-        const managerFields = [
-          'id',
-          'order',
-          'order.order_number',
-          'product_name',
-          'quantity',
-          'price_per_unit',
-          'order_sum',
-          'deadline',
-          'item_status',
-          'office_status',
-          'shipping_method',
-          'blank_source',
-          'product_category',
-          'product_subcategory',
-          'application_method',
-          'contractor_1.id',
-          'contractor_1.name',
-          'contractor_1.supplies_textile_blanks',
-          'contractor_1.supplies_merch_blanks',
-          'contractor_1_cost',
-          'contractor_2.id',
-          'contractor_2.name',
-          'contractor_2_cost',
-          'technical_task_text',
-          'url',
-          'layout_revision_url_snapshot',
-          'layout_disk_path',
-          'layout_disk_name',
-          'layout_disk_size',
-          'layout_disk_mime_type',
-          'layout_disk_uploaded_at',
-          'layout_preview_url',
-          'layout_preview_disk_path',
-          'layout_preview_disk_name',
-          'layout_preview_disk_size',
-          'layout_preview_disk_mime_type',
-          'layout_preview_uploaded_at',
-          'needs_designer_help',
-          'designer_comment',
-          'designer_source_url',
-          'production_status',
-          'production_comment',
-        ];
         const ownsOrder = this.orderBelongsToCurrentEmployee(row);
-        const ownOrderFields = this.canEditItemCosts
-          ? managerFields
-          : managerFields.filter((field) => !['contractor_1_cost', 'contractor_2_cost'].includes(field));
-        const fields = (this.hasManagerWorkflowAccess || ownsOrder)
-          ? ownOrderFields.join(',')
-          : (this.currentRoleName === 'Дизайнер'
-            ? 'id,order,product_name,quantity,deadline,technical_task_text,url,needs_designer_help,designer_comment,designer_source_url,layout_preview_url,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at'
-            : 'id,order,product_name,quantity,deadline,item_status,technical_task_text,url,production_status,production_comment');
+        const fields = orderItemCardFields({
+          roleName: this.currentRoleName,
+          hasManagerWorkflowAccess: this.hasManagerWorkflowAccess,
+          ownsOrder,
+          canEditItemCosts: this.canEditItemCosts,
+        }).join(',');
         const payload = await this.request(`/items/orders_items/${itemId}?fields=${encodeURIComponent(fields)}`);
         if (!payload?.data) return row;
         return await this.finalizeHydratedOrderItem(row, payload.data);
@@ -5792,13 +5744,7 @@ export const CostingModule = {
         // nested relation is unavailable, open the same canonical item card
         // with the common business fields instead of falling back to a view.
         try {
-          const safeFields = [
-            'id', 'order', 'order_link', 'product_name', 'quantity', 'price_per_unit', 'order_sum', 'deadline',
-            'item_status', 'office_status', 'shipping_method', 'blank_source', 'product_category',
-            'product_subcategory', 'application_method', 'contractor_1', 'contractor_1_cost',
-            'contractor_2', 'contractor_2_cost', 'technical_task_text', 'url', 'needs_designer_help',
-            'designer_comment', 'designer_source_url', 'production_status', 'production_comment',
-          ].join(',');
+          const safeFields = orderItemSafeFields.join(',');
           const payload = await this.request(`/items/orders_items/${itemId}?fields=${encodeURIComponent(safeFields)}`);
           if (payload?.data) return await this.finalizeHydratedOrderItem(row, payload.data);
         } catch (fallbackError) {
@@ -5960,77 +5906,13 @@ export const CostingModule = {
       this.detailItemsLoading = true;
       try {
         const params = new URLSearchParams();
-        const managerFields = [
-          'id',
-          'order',
-          'order.order_number',
-          'product_name',
-          'quantity',
-          'price_per_unit',
-          'order_sum',
-          'deadline',
-          'item_status',
-          'office_status',
-          'shipping_method',
-          'blank_source',
-          'product_category',
-          'product_subcategory',
-          'application_method',
-          'contractor_1.id',
-          'contractor_1.name',
-          'contractor_1.supplies_textile_blanks',
-          'contractor_1.supplies_merch_blanks',
-          'contractor_1_cost',
-          'contractor_2.id',
-          'contractor_2.name',
-          'contractor_2_cost',
-          'technical_task_text',
-          'url',
-          'layout_revision_url_snapshot',
-          'layout_disk_path',
-          'layout_disk_name',
-          'layout_disk_size',
-          'layout_disk_mime_type',
-          'layout_disk_uploaded_at',
-          'layout_preview_url',
-          'layout_preview_disk_path',
-          'layout_preview_disk_name',
-          'layout_preview_disk_size',
-          'layout_preview_disk_mime_type',
-          'layout_preview_uploaded_at',
-          'needs_designer_help',
-          'designer_comment',
-          'designer_source_url',
-          'production_status',
-          'production_comment',
-        ];
-        const privilegedFields = [
-          ...managerFields,
-          'internal_route_production',
-          'internal_route_screen',
-        ];
-        const workerFields = [
-          'id',
-          'order',
-          'order.order_number',
-          'product_name',
-          'quantity',
-          'deadline',
-          'item_status',
-          'production_status',
-          'production_comment',
-          'technical_task_text',
-          'shipping_method',
-          'office_status',
-          'url',
-        ];
         const ownsOrder = this.orderBelongsToCurrentEmployee(row);
-        const ownOrderFields = this.canEditItemCosts
-          ? managerFields
-          : managerFields.filter((field) => !['contractor_1_cost', 'contractor_2_cost'].includes(field));
-        const requestedFields = this.hasManagerOverrideAccess
-          ? privilegedFields
-          : (this.currentRoleName === 'Менеджер' || ownsOrder ? ownOrderFields : workerFields);
+        const requestedFields = orderItemsListFields({
+          roleName: this.currentRoleName,
+          hasManagerOverrideAccess: this.hasManagerOverrideAccess,
+          ownsOrder,
+          canEditItemCosts: this.canEditItemCosts,
+        });
         params.set('fields', requestedFields.join(','));
         params.set('filter[order][_eq]', String(orderId));
         params.set('sort', 'id');
