@@ -140,6 +140,15 @@ async function run() {
   const otherRead = await request(`/items/orders/${order.id}?fields=id`, { token: users.managerB.token, expected: [403] });
   record('Изоляция заказов между менеджерами', otherRead.status === 403, `HTTP ${otherRead.status}`);
 
+  const categories = await list('product_categories', 'fields=id,name&limit=-1');
+  const category = categories.find((row) => row.name === 'Полиграфия') || categories[0];
+  const executorCapabilities = await list(
+    'contractor_capabilities',
+    `fields=contractor,priority&filter[capability_type][_eq]=executor&filter[product_category][_eq]=${category.id}&filter[is_active][_eq]=true&sort=priority,id&limit=1`,
+  );
+  const minimalExecutor = executorCapabilities[0]?.contractor;
+  record('Для проверки запуска без цены найден допустимый маршрут', !!category?.id && !!minimalExecutor);
+
   const minimalOrder = await request('/items/orders', {
     token: users.managerA.token, method: 'POST',
     body: JSON.stringify({ date: today, customer: customer.id, customer_company: company.id, manager_employee: users.managerA.employee, order_status: 1, office_status: 'not_in_office', shipping_method: 'office_pickup' }),
@@ -147,16 +156,26 @@ async function run() {
   created.orders.push(minimalOrder.id);
   const minimalItem = await request('/items/orders_items', {
     token: users.managerA.token, method: 'POST',
-    body: JSON.stringify({ order: minimalOrder.id, product_name: `QA Минимальный ${suffix}`, quantity: 2, price_per_unit: 0, technical_task_text: 'QA ТЗ', url: 'https://example.test/minimal.pdf', item_status: 'new', office_status: 'not_in_office', blank_source: 'none' }),
+    body: JSON.stringify({
+      order: minimalOrder.id,
+      product_name: `QA Минимальный ${suffix}`,
+      quantity: 2,
+      price_per_unit: 0,
+      product_category: category.id,
+      contractor_1: minimalExecutor,
+      technical_task_text: 'QA ТЗ',
+      url: 'https://example.test/minimal.pdf',
+      item_status: 'new',
+      office_status: 'not_in_office',
+      blank_source: 'none',
+    }),
   });
   created.items.push(minimalItem.id);
   const minimalLaunch = await request(`/items/orders/${minimalOrder.id}`, {
     token: users.managerA.token, method: 'PATCH', body: JSON.stringify({ order_status: 3 }), expected: [200, 500],
   });
-  record('Запуск допускает только название, количество, ТЗ и макет; цена может быть позже', minimalLaunch.status === 200, `HTTP ${minimalLaunch.status}`);
+  record('При заполненной маршрутизации цена может быть указана после запуска', minimalLaunch.status === 200, `HTTP ${minimalLaunch.status}`);
 
-  const categories = await list('product_categories', 'fields=id,name&limit=-1');
-  const category = categories.find((row) => row.name === 'Полиграфия') || categories[0];
   const subcategories = await list('product_subcategories', `fields=id,name,category&filter[category][_eq]=${category.id}&limit=-1`);
   const subcategory = subcategories.find((row) => row.name === 'Блокноты') || subcategories[0];
   const item = await request('/items/orders_items', {
