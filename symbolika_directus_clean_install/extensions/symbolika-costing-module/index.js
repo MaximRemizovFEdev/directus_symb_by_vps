@@ -5173,7 +5173,7 @@ export const CostingModule = {
       if (canReadScreenArea && (allowed.has('screen') || allowed.has('production_archive') || allowed.has('labels'))) tasks.push(this.loadWorkRows('screen_printing_work'));
       if (allowed.has('contractor_work') || allowed.has('work_launch') || allowed.has('contractor_overview')) tasks.push(this.loadContractorWorkRows());
       if (allowed.has('office')) tasks.push(this.loadOfficeRows(), this.loadOfficeIssueRows(), this.loadOfficeArchiveRows(), this.loadOfficeArchiveItems(), this.loadPaymentTypes(), this.loadGiftCertificates());
-      if (allowed.has('my_orders') || allowed.has('all_orders')) tasks.push(this.loadGiftCertificates());
+      if (allowed.has('my_orders') || allowed.has('all_orders')) tasks.push(this.loadGiftCertificates(), this.loadPaymentTypes());
       if (this.canCreateOrders) tasks.push(this.loadCreateOrderDictionaries());
       if (this.canCreateOrders || allowed.has('estimates')) tasks.push(this.loadProductNameSuggestions());
       if (allowed.size && !allowed.has('admin_finance_dashboard') && !allowed.has('expenses') && !allowed.has('payroll') && !allowed.has('monthly_results')) tasks.push(this.loadEmployees());
@@ -11332,7 +11332,7 @@ export const CostingModule = {
       this.error = '';
 
       try {
-        const normalized = field === 'order_status'
+        const normalized = ['order_status', 'payment_type'].includes(field)
           ? (value ? Number(value) : null)
           : (value || null);
         await this.request(`/items/orders/${orderId}`, {
@@ -11340,7 +11340,10 @@ export const CostingModule = {
           body: JSON.stringify({ [field]: normalized }),
         });
 
-        this.updateOrderCaches(orderId, { [field]: normalized });
+        const cacheValue = field === 'payment_type' && normalized
+          ? (this.paymentTypes.find((type) => Number(type.id) === Number(normalized)) || normalized)
+          : normalized;
+        this.updateOrderCaches(orderId, { [field]: cacheValue });
         this.scheduleBackgroundAreaRefresh();
       } catch (error) {
         this.error = error.message;
@@ -11357,6 +11360,12 @@ export const CostingModule = {
     },
 
     canEditOrderShipping(row) {
+      if (!this.detailIsOrder(row)) return false;
+      return this.hasManagerOverrideAccess
+        || this.orderBelongsToCurrentEmployee(row);
+    },
+
+    canEditOrderPaymentType(row) {
       if (!this.detailIsOrder(row)) return false;
       return this.hasManagerOverrideAccess
         || this.orderBelongsToCurrentEmployee(row);
@@ -34042,6 +34051,24 @@ export const CostingModule = {
             </div>
 
             <div class="symbolika-costing-detail-section-title">Финансы</div>
+            <div class="symbolika-costing-detail-field is-primary">
+              <div class="symbolika-costing-detail-label">Тип оплаты</div>
+              <div class="symbolika-costing-detail-value">
+                <select
+                  v-if="canEditOrderPaymentType(detail.row)"
+                  class="symbolika-costing-table-select"
+                  :class="savingWorkClass('orders', detail.row, 'payment_type')"
+                  :value="entityId(detail.row.payment_type)"
+                  @change="saveOrderField(detail.row, 'payment_type', $event.target.value)"
+                >
+                  <option value="">Не выбран</option>
+                  <option v-for="type in paymentTypes" :key="'detail-payment-type-' + type.id" :value="type.id">
+                    {{ type.name }}
+                  </option>
+                </select>
+                <span v-else>{{ relatedName(detail.row.payment_type) || 'Не выбран' }}</span>
+              </div>
+            </div>
             <div class="symbolika-costing-detail-field symbolika-costing-detail-money-field">
               <div class="symbolika-costing-detail-pair">
                 <span>Сумма</span>
