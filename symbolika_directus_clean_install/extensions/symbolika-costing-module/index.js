@@ -51,6 +51,7 @@ import {
   isEmployeeOrderCreatorRole,
   isProductionWorkerRole as roleIsProductionWorker,
 } from './lib/role-access.js';
+import { parseDirectusResponse } from './lib/api-response.js';
 
 const fields = [
   'id',
@@ -6906,14 +6907,7 @@ export const CostingModule = {
         ...options,
       });
 
-      const payload = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        const message = payload?.errors?.[0]?.message || payload?.message || 'Ошибка запроса';
-        throw new Error(message);
-      }
-
-      return payload;
+      return parseDirectusResponse(response, 'Ошибка запроса');
     },
 
     createdRecordId(payload) {
@@ -7498,8 +7492,9 @@ export const CostingModule = {
       const formData = new FormData();
       formData.append('file', file, file.name);
       const response = await fetch('/files', { method: 'POST', credentials: 'same-origin', body: formData });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload?.errors?.[0]?.message || 'Не удалось загрузить файл.');
+      const payload = await parseDirectusResponse(response, 'Не удалось загрузить файл.', {
+        includePayloadMessage: false,
+      });
       return payload.data;
     },
 
