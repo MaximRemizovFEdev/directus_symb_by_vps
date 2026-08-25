@@ -1763,6 +1763,9 @@ BEFORE INSERT OR UPDATE OF "order" ON orders_items
 FOR EACH ROW
 EXECUTE FUNCTION set_symbolika_order_link();
 
+-- Bootstrap routing used while the base order schema is assembled. A final
+-- capability-aware definition replaces it after contractor_capabilities is
+-- created near the end of this installation script.
 CREATE OR REPLACE FUNCTION apply_category_contractors_trigger()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -2299,6 +2302,9 @@ AS $$
   END
 $$;
 
+-- Bootstrap readiness for the legacy route fields. The capability-aware
+-- definition later in this script deliberately replaces it after the route
+-- catalogue exists.
 CREATE OR REPLACE FUNCTION symbolika_order_work_readiness(order_id integer)
 RETURNS TABLE (
   ready_for_work boolean,
@@ -6606,6 +6612,8 @@ BEGIN
 END;
 $$;
 
+-- Bootstrap completion used by the order views created below. It is replaced
+-- by the route-aware definition after contractor_capabilities is available.
 CREATE OR REPLACE FUNCTION symbolika_order_work_completion(order_id integer)
 RETURNS TABLE (
   work_completion_percent integer,
@@ -6791,6 +6799,8 @@ BEGIN
 END;
 $$;
 
+-- Bootstrap reconciliation for orders. The final definition below extends it
+-- with customer_operations after that table has been created.
 CREATE OR REPLACE FUNCTION refresh_customer_reconciliation()
 RETURNS void
 LANGUAGE plpgsql
