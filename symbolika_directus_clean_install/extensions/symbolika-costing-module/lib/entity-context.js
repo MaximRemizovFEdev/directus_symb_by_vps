@@ -37,3 +37,40 @@ export function detailItemId(row) {
 export function detailIsOrder(row) {
   return detailEntityType('', row) === 'order';
 }
+
+export function orderId(row) {
+  if (row?.order_link) return row.order_link;
+  if (row?.order_number && !row?.product_name && row?.id) return row.id;
+  if (!row?.order) return '';
+  return typeof row.order === 'object' ? (row.order.id || '') : row.order;
+}
+
+export function orderNumber(row) {
+  if (row?.order_number) return row.order_number;
+  if (typeof row?.order === 'object') return row.order.order_number || `#${row.order.id}`;
+  return row?.order ? `#${row.order}` : '-';
+}
+
+export function orderRowKey(row) {
+  const linkedOrderId = entityId(orderId(row));
+  if (linkedOrderId) return linkedOrderId;
+
+  // A position id is not an order id. Never use it as a fallback because an
+  // unrelated order may have the same numeric id.
+  if (!row?.product_name && row?.id) return entityId(row.id);
+  if (!row?.product_name && row?.order_number) return String(row.order_number);
+  return '';
+}
+
+export function findOrderContext(row, sources = []) {
+  if (row?.order_context) return row.order_context;
+
+  const linkedOrderId = entityId(orderId(row));
+  const linkedOrderNumber = orderNumber(row);
+  return sources.find((candidate) => {
+    const candidateOrderId = entityId(orderId(candidate));
+    const matchesOrderId = linkedOrderId && candidateOrderId && candidateOrderId === linkedOrderId;
+    const matchesNumber = linkedOrderNumber !== '-' && candidate?.order_number === linkedOrderNumber;
+    return matchesOrderId || matchesNumber;
+  }) || row;
+}

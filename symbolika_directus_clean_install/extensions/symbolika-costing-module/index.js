@@ -62,6 +62,10 @@ import {
   detailEntityType as resolveDetailEntityType,
   detailIsOrder as isDetailOrder,
   detailItemId as resolveDetailItemId,
+  findOrderContext as selectOrderContext,
+  orderId as resolveOrderId,
+  orderNumber as resolveOrderNumber,
+  orderRowKey as resolveOrderRowKey,
 } from './lib/entity-context.js';
 
 const fields = [
@@ -6018,15 +6022,7 @@ export const CostingModule = {
     },
 
     orderRowKey(row) {
-      const linkedOrderId = this.entityId(this.orderId(row));
-      if (linkedOrderId) return String(linkedOrderId);
-
-      // A position id is not an order id. Falling back to row.id for item
-      // rows can attach a position from somebody else's order when the two
-      // unrelated numeric ids happen to be equal.
-      if (!row?.product_name && row?.id) return String(row.id);
-      if (!row?.product_name && row?.order_number) return String(row.order_number);
-      return '';
+      return resolveOrderRowKey(row);
     },
 
     orderItemsPreviewRows(row) {
@@ -13949,11 +13945,7 @@ export const CostingModule = {
     },
 
     orderId(row) {
-      if (row?.order_link) return row.order_link;
-      if (row?.order_number && !row?.product_name && row?.id) return row.id;
-      if (!row?.order) return '';
-      if (typeof row.order === 'object') return row.order.id || '';
-      return row.order;
+      return resolveOrderId(row);
     },
 
     dateInput(value) {
@@ -14529,9 +14521,7 @@ export const CostingModule = {
     },
 
     orderNumber(row) {
-      if (row?.order_number) return row.order_number;
-      if (typeof row?.order === 'object') return row.order.order_number || `#${row.order.id}`;
-      return row?.order ? `#${row.order}` : '-';
+      return resolveOrderNumber(row);
     },
 
     detailEntityType(sourceType, row) {
@@ -14547,9 +14537,6 @@ export const CostingModule = {
     },
 
     detailOrderContext(row) {
-      if (row?.order_context) return row.order_context;
-      const orderId = this.entityId(this.orderId(row));
-      const orderNumber = this.orderNumber(row);
       const sources = [
         ...this.myOrderRows,
         ...this.allOrderRows,
@@ -14557,13 +14544,7 @@ export const CostingModule = {
         ...this.officeIssueRows,
         ...this.financeRows,
       ];
-
-      return sources.find((item) => {
-        const itemOrderId = this.entityId(this.orderId(item));
-        const matchesOrderId = orderId && itemOrderId && itemOrderId === orderId;
-        const matchesNumber = orderNumber !== '-' && item.order_number === orderNumber;
-        return matchesOrderId || matchesNumber;
-      }) || row;
+      return selectOrderContext(row, sources);
     },
 
     detailCustomerName(row) {

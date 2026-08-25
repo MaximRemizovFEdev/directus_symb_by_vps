@@ -5,6 +5,10 @@ import {
   detailEntityType,
   detailIsOrder,
   detailItemId,
+  findOrderContext,
+  orderId,
+  orderNumber,
+  orderRowKey,
 } from '../lib/entity-context.js';
 
 test('uses an explicit entity marker before source and row heuristics', () => {
@@ -31,4 +35,31 @@ test('extracts only identifiers that belong to item rows', () => {
   assert.equal(detailItemId({ order_item: { id: 18 }, id: 99 }), '18');
   assert.equal(detailItemId({ _entity_type: 'item', id: 21 }), '21');
   assert.equal(detailItemId({ _entity_type: 'order', id: 21 }), '');
+});
+
+test('normalizes order identifiers and display numbers across row shapes', () => {
+  assert.deepEqual(orderId({ order_link: { id: 7 } }), { id: 7 });
+  assert.equal(orderId({ id: 8, order_number: 'SO-00008' }), 8);
+  assert.equal(orderId({ order: { id: 9 } }), 9);
+  assert.equal(orderId({ order: 10 }), 10);
+  assert.equal(orderNumber({ order_number: 'SO-00008' }), 'SO-00008');
+  assert.equal(orderNumber({ order: { id: 9, order_number: 'SO-00009' } }), 'SO-00009');
+  assert.equal(orderNumber({ order: 10 }), '#10');
+});
+
+test('builds order keys without confusing item ids with order ids', () => {
+  assert.equal(orderRowKey({ order: 5, id: 99, product_name: 'Item' }), '5');
+  assert.equal(orderRowKey({ id: 6, order_number: 'SO-00006' }), '6');
+  assert.equal(orderRowKey({ id: 6, product_name: 'Item' }), '');
+});
+
+test('finds the loaded order context by id or direct order number', () => {
+  const byId = { id: 12, order_number: 'SO-00012' };
+  const byNumber = { id: 13, order_number: 'SO-00013' };
+  const sources = [byId, byNumber];
+
+  assert.equal(findOrderContext({ order: 12, product_name: 'Item' }, sources), byId);
+  assert.equal(findOrderContext({ order_number: 'SO-00013', product_name: 'Item' }, sources), byNumber);
+  const embedded = { id: 14 };
+  assert.equal(findOrderContext({ order_context: embedded }, sources), embedded);
 });
