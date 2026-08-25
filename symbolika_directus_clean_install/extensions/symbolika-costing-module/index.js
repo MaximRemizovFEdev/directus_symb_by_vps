@@ -27,6 +27,23 @@ import {
   todayInput as formatTodayInput,
   toInputDate as formatInputDate,
 } from './lib/presentation-utils.js';
+import {
+  eventActionChoices,
+  eventActionText as formatEventActionText,
+  eventEntityChoices,
+  eventEntityName as formatEventEntityName,
+  eventFieldLabels,
+  eventIcon as selectEventIcon,
+  eventToneClass as selectEventToneClass,
+  notificationKindIcon as selectNotificationKindIcon,
+  notificationKindLabel as selectNotificationKindLabel,
+  taskPriorityChoices,
+  taskPriorityClass as selectTaskPriorityClass,
+  taskPriorityName as selectTaskPriorityName,
+  taskStatusChoices,
+  taskStatusClass as selectTaskStatusClass,
+  taskStatusName as selectTaskStatusName,
+} from './lib/workflow-presentation.js';
 
 const fields = [
   'id',
@@ -1094,74 +1111,6 @@ const customerNotificationChannelChoices = [
   { text: 'ВКонтакте', value: 'vk' },
   { text: 'Telegram', value: 'telegram' },
   { text: 'SMS', value: 'sms' },
-];
-
-const taskStatusChoices = [
-  { text: 'Новая', value: 'new' },
-  { text: 'В работе', value: 'in_work' },
-  { text: 'Нужны правки', value: 'needs_revision' },
-  { text: 'Ожидает', value: 'waiting' },
-  { text: 'Готово', value: 'done' },
-  { text: 'Отменена', value: 'cancelled' },
-];
-
-const taskPriorityChoices = [
-  { text: 'Низкий', value: 'low' },
-  { text: 'Обычный', value: 'normal' },
-  { text: 'Важный', value: 'high' },
-  { text: 'Срочно', value: 'urgent' },
-];
-
-const eventFieldLabels = {
-  title: 'Название',
-  description: 'Описание',
-  status: 'Статус задачи',
-  priority: 'Приоритет',
-  due_date: 'Срок задачи',
-  completed_at: 'Завершена',
-  assigned_to: 'Исполнитель',
-  related_order: 'Заказ',
-  related_order_item: 'Позиция',
-  result_url: 'Результат',
-  source_url: 'Исходный файл',
-  order_number: 'Номер заказа',
-  date: 'Дата заказа',
-  deadline: 'Срок',
-  manager_employee: 'Менеджер',
-  order_status: 'Статус заказа',
-  office_status: 'Статус офиса',
-  shipping_method: 'Получение',
-  payment_on_receipt: 'Оплата при получении',
-  product_name: 'Позиция',
-  quantity: 'Количество',
-  price_per_unit: 'Цена',
-  item_status: 'Статус позиции',
-  production_status: 'Статус производства',
-  production_comment: 'Комментарий производства',
-  technical_task_text: 'ТЗ',
-  url: 'Макет',
-  needs_designer_help: 'Помощь дизайнера',
-  blank_source: 'Источник заготовки',
-  blank_ordered: 'Заготовка заказана',
-  internal_route_production: 'Передача в производство',
-  internal_route_screen: 'Передача в шелкографию',
-  contractor_1: 'Поставщик / подрядчик',
-  contractor_1_cost: 'Стоимость заготовки',
-  contractor_2: 'Исполнитель работ',
-};
-
-const eventEntityChoices = [
-  { value: 'all', text: 'Все объекты' },
-  { value: 'order', text: 'Заказы' },
-  { value: 'item', text: 'Позиции' },
-  { value: 'task', text: 'Задачи' },
-];
-
-const eventActionChoices = [
-  { value: 'all', text: 'Все действия' },
-  { value: 'create', text: 'Создание' },
-  { value: 'update', text: 'Изменения' },
-  { value: 'delete', text: 'Удаление' },
 ];
 
 export const CostingModule = {
@@ -4846,11 +4795,11 @@ export const CostingModule = {
     },
 
     notificationKindLabel(kind) {
-      return ({ order: 'Заказ', item: 'Позиция', task: 'Задача', procurement: 'Закупка', mail: 'Почта', birthday: 'День рождения', news: 'Новости', system: 'Система' })[kind] || 'Система';
+      return selectNotificationKindLabel(kind);
     },
 
     notificationKindIcon(kind) {
-      return ({ order: 'assignment', item: 'inventory_2', task: 'task_alt', procurement: 'local_shipping', mail: 'mail', birthday: 'cake', news: 'newspaper', system: 'notifications' })[kind] || 'notifications';
+      return selectNotificationKindIcon(kind);
     },
 
     notificationDate(value) {
@@ -7175,26 +7124,19 @@ export const CostingModule = {
     },
 
     eventEntityName(type) {
-      return { order: 'заказ', item: 'позицию', task: 'задачу' }[type] || 'объект';
+      return formatEventEntityName(type);
     },
 
     eventActionText(event) {
-      const entity = this.eventEntityName(event?.entity_type);
-      if (event?.action === 'create') return `создал ${entity}`;
-      if (event?.action === 'delete') return `удалил ${entity}`;
-      return `изменил ${entity}`;
+      return formatEventActionText(event);
     },
 
     eventIcon(event) {
-      if (event?.action === 'create') return 'add_circle';
-      if (event?.action === 'delete') return 'delete';
-      if (event?.entity_type === 'task') return 'task_alt';
-      if (event?.entity_type === 'item') return 'inventory_2';
-      return 'edit';
+      return selectEventIcon(event);
     },
 
     eventToneClass(event) {
-      return `is-${event?.action || 'update'}`;
+      return selectEventToneClass(event);
     },
 
     eventFieldValue(field, value) {
@@ -7772,31 +7714,19 @@ export const CostingModule = {
     },
 
     taskStatusName(value) {
-      return taskStatusChoices.find((choice) => choice.value === value)?.text || 'Не выбрано';
+      return selectTaskStatusName(value);
     },
 
     taskPriorityName(value) {
-      return taskPriorityChoices.find((choice) => choice.value === value)?.text || 'Обычный';
+      return selectTaskPriorityName(value);
     },
 
     taskStatusClass(value) {
-      return {
-        new: 'symbolika-costing-pill-blue',
-        in_work: 'symbolika-costing-pill-orange',
-        waiting: 'symbolika-costing-pill-warning',
-        needs_revision: 'symbolika-costing-pill-warning',
-        done: 'symbolika-costing-pill-success',
-        cancelled: 'symbolika-costing-pill-muted',
-      }[value] || 'symbolika-costing-pill-muted';
+      return selectTaskStatusClass(value);
     },
 
     taskPriorityClass(value) {
-      return {
-        urgent: 'symbolika-costing-pill-danger',
-        high: 'symbolika-costing-pill-orange',
-        normal: 'symbolika-costing-pill-blue',
-        low: 'symbolika-costing-pill-muted',
-      }[value] || 'symbolika-costing-pill-muted';
+      return selectTaskPriorityClass(value);
     },
 
     taskRelationLabel(row) {
