@@ -62,6 +62,27 @@ export function orderRowKey(row) {
   return '';
 }
 
+export function orderItemId(row) {
+  return entityId(row?.order_item) || entityId(row?.id);
+}
+
+function quantityIdentity(value) {
+  const number = Number(String(value ?? '').replace(',', '.'));
+  if (!Number.isFinite(number)) return '0';
+  return Number.isInteger(number)
+    ? String(number)
+    : new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(number);
+}
+
+export function orderItemIdentityKey(row, { includeOrder = false } = {}) {
+  const itemId = orderItemId(row);
+  if (itemId) return `id:${itemId}`;
+
+  const product = String(row?.product_name || '').trim().toLowerCase();
+  const quantity = quantityIdentity(row?.quantity);
+  return includeOrder ? `${orderNumber(row)}:${product}:${quantity}` : `${product}:${quantity}`;
+}
+
 export function findOrderContext(row, sources = []) {
   if (row?.order_context) return row.order_context;
 

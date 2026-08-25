@@ -64,6 +64,7 @@ import {
   detailItemId as resolveDetailItemId,
   findOrderContext as selectOrderContext,
   orderId as resolveOrderId,
+  orderItemIdentityKey as resolveOrderItemIdentityKey,
   orderNumber as resolveOrderNumber,
   orderRowKey as resolveOrderRowKey,
 } from './lib/entity-context.js';
@@ -14601,8 +14602,7 @@ export const CostingModule = {
         if (!orderMatch) return;
 
         const order = this.detailOrderContext(item);
-        const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
-        const key = itemId ? `id:${itemId}` : `${this.orderNumber(item)}:${String(item.product_name || '').trim().toLowerCase()}:${this.formatQuantity(item.quantity)}`;
+        const key = resolveOrderItemIdentityKey(item, { includeOrder: true });
         const current = positions.get(key) || {};
 
         positions.set(key, {
@@ -14650,8 +14650,7 @@ export const CostingModule = {
         const matchesNumber = orderNumber !== '-' && item.order_number === orderNumber;
         if (!matchesOrderId && !matchesNumber) return;
 
-        const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
-        const key = itemId ? `id:${itemId}` : `${String(item.product_name || '').trim().toLowerCase()}:${this.formatQuantity(item.quantity)}`;
+        const key = resolveOrderItemIdentityKey(item);
         const current = positions.get(key);
         positions.set(key, {
           ...item,

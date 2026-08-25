@@ -7,6 +7,8 @@ import {
   detailItemId,
   findOrderContext,
   orderId,
+  orderItemId,
+  orderItemIdentityKey,
   orderNumber,
   orderRowKey,
 } from '../lib/entity-context.js';
@@ -62,4 +64,17 @@ test('finds the loaded order context by id or direct order number', () => {
   assert.equal(findOrderContext({ order_number: 'SO-00013', product_name: 'Item' }, sources), byNumber);
   const embedded = { id: 14 };
   assert.equal(findOrderContext({ order_context: embedded }, sources), embedded);
+});
+
+test('builds one stable identity for an order item across Directus row shapes', () => {
+  assert.equal(orderItemId({ order_item: { id: 18 }, id: 99 }), '18');
+  assert.equal(orderItemIdentityKey({ order_item: 18, product_name: 'Ignored' }), 'id:18');
+  assert.equal(orderItemIdentityKey({ id: 21, product_name: 'Ignored' }), 'id:21');
+});
+
+test('uses normalized product and quantity only when an item id is unavailable', () => {
+  const item = { order_number: 'SO-00007', product_name: '  Блокноты A5  ', quantity: '12,50' };
+  assert.equal(orderItemIdentityKey(item), 'блокноты a5:12,5');
+  assert.equal(orderItemIdentityKey(item, { includeOrder: true }), 'SO-00007:блокноты a5:12,5');
+  assert.equal(orderItemIdentityKey({ product_name: 'Папка', quantity: 'bad' }), 'папка:0');
 });
