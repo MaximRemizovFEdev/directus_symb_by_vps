@@ -44,6 +44,13 @@ import {
   taskStatusClass as selectTaskStatusClass,
   taskStatusName as selectTaskStatusName,
 } from './lib/workflow-presentation.js';
+import {
+  canManageProductionArchive as roleCanManageProductionArchive,
+  hasManagerOverrideAccess as roleHasManagerOverrideAccess,
+  hasManagerWorkflowAccess as roleHasManagerWorkflowAccess,
+  isEmployeeOrderCreatorRole,
+  isProductionWorkerRole as roleIsProductionWorker,
+} from './lib/role-access.js';
 
 const fields = [
   'id',
@@ -1677,11 +1684,11 @@ export const CostingModule = {
       // the manager workflow. Keep this as the single source of truth so a
       // newly added manager field/action is not accidentally hidden from the
       // roles that supervise and correct managers' work.
-      return ['Administrator', 'Управляющий', 'Менеджер'].includes(this.currentRoleName);
+      return roleHasManagerWorkflowAccess(this.currentRoleName);
     },
 
     hasManagerOverrideAccess() {
-      return ['Administrator', 'Управляющий'].includes(this.currentRoleName);
+      return roleHasManagerOverrideAccess(this.currentRoleName);
     },
 
     canEditItemCosts() {
@@ -1711,8 +1718,7 @@ export const CostingModule = {
 
     canCreateOrders() {
       if (this.hasManagerOverrideAccess) return true;
-      return ['Менеджер', 'Производство', 'Шелкография', 'Дизайнер'].includes(this.currentRoleName)
-        && !!this.currentEmployeeId;
+      return isEmployeeOrderCreatorRole(this.currentRoleName) && !!this.currentEmployeeId;
     },
 
     canCreateOrderHere() {
@@ -5691,7 +5697,7 @@ export const CostingModule = {
     },
 
     isProductionWorkerRole() {
-      return ['Производство', 'Шелкография'].includes(this.currentRoleName);
+      return roleIsProductionWorker(this.currentRoleName);
     },
 
     isLimitedProductionItem(row) {
@@ -13570,7 +13576,7 @@ export const CostingModule = {
     },
 
     canTransferClientManager() {
-      return ['Administrator', '\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u044e\u0449\u0438\u0439'].includes(this.currentRoleName);
+      return roleHasManagerOverrideAccess(this.currentRoleName);
     },
 
     entityManagerId(entity = null) {
@@ -14254,7 +14260,7 @@ export const CostingModule = {
     },
 
     canRestoreProductionArchiveRow(row) {
-      if (!['Administrator', 'Управляющий', 'Производство', 'Шелкография'].includes(this.currentRoleName)) return false;
+      if (!roleCanManageProductionArchive(this.currentRoleName)) return false;
       if (['in_office', 'issued'].includes(String(row?.office_status || '').trim())) return false;
       return this.normalizeStatus(this.statusName(row?.production_status) || row?.production_status_name).includes('готов')
         && !!this.inWorkProductionStatusId();
@@ -14274,7 +14280,7 @@ export const CostingModule = {
     },
 
     canConfirmItemCancellation(row) {
-      return ['Administrator', 'Управляющий', 'Производство', 'Шелкография'].includes(this.currentRoleName)
+      return roleCanManageProductionArchive(this.currentRoleName)
         && this.isItemCancellationRequested(row)
         && !!this.cancelledProductionStatusId();
     },
