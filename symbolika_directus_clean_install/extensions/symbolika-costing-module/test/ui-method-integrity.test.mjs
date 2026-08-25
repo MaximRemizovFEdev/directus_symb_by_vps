@@ -24,10 +24,13 @@ function componentMethods(source, label) {
 test('вызовы this.method() ссылаются на существующие методы Vue-компонентов', () => {
   for (const [label, url] of components) {
     const methods = componentMethods(readFileSync(url, 'utf8'), label);
-    const definitions = new Set(
-      [...methods.matchAll(/^    (?:async\s+)?([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/gm)]
-        .map((match) => match[1]),
-    );
+    const definitionList = [
+      ...methods.matchAll(/^    (?:async\s+)?([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/gm),
+    ].map((match) => match[1]);
+    const definitions = new Set(definitionList);
+    const duplicates = [...definitions]
+      .filter((method) => definitionList.indexOf(method) !== definitionList.lastIndexOf(method))
+      .sort();
     const calls = new Set(
       [...methods.matchAll(/\bthis\.([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g)]
         .map((match) => match[1]),
@@ -37,6 +40,7 @@ test('вызовы this.method() ссылаются на существующи�
       .sort();
 
     assert.ok(definitions.size > 0, `${label}: не найдено ни одного метода`);
+    assert.deepEqual(duplicates, [], `${label}: методы объявлены повторно`);
     assert.deepEqual(missing, [], `${label}: вызваны необъявленные методы`);
   }
 });
