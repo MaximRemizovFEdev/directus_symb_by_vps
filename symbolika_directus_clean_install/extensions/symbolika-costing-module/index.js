@@ -9832,14 +9832,19 @@ export const CostingModule = {
       const configured = contractorIds
         .map((id) => this.contractors.find((contractor) => Number(contractor.id) === id))
         .filter((contractor) => contractor && (contractor.approval_status || 'approved') === 'approved');
-      if (configured.length) return configured;
-
       const approved = (this.contractors || [])
         .filter((contractor) => contractor && (contractor.approval_status || 'approved') === 'approved');
-      // No capability means an unresolved route, not an invalid category.
-      // Admin and Managing can resolve it manually; other roles only see an
-      // already selected contractor and otherwise get the explicit fallback.
+
+      // Routing capabilities narrow the manager's choice, but Administrator
+      // and Managing must be able to correct any route from the costing view.
+      // Returning the same complete list here also keeps a manual correction
+      // visible in the order and item cards instead of showing an empty select.
       if (this.hasManagerOverrideAccess) return approved;
+      if (configured.length) return configured;
+
+      // No capability means an unresolved route, not an invalid category.
+      // Other roles only see an already selected contractor and otherwise get
+      // the explicit fallback "Контрагент не определён".
       const selectedField = capabilityType === 'blank_supplier'
         ? 'contractor_1'
         : this.executorField(item);
@@ -29077,8 +29082,8 @@ export const CostingModule = {
               <tr>
                 <th>Заказ</th>
                 <th>Позиция</th>
-                <th>Подрядчик 1</th>
-                <th>Подрядчик 2</th>
+                <th>Поставщик заготовки</th>
+                <th>Исполнитель работ</th>
                 <th v-if="canSeeCostingTotals">Итог</th>
               </tr>
             </thead>
@@ -29116,47 +29121,54 @@ export const CostingModule = {
                       @click.stop="confirmItemCancellation(row, activeTab === 'production' ? 'production_work' : 'screen_printing_work')"
                     ><v-icon name="block" small />Подтвердить отмену</button>
                   </div>
-                  <select
-                    class="symbolika-costing-select"
-                    :class="savingClass(row, 'contractor_1')"
-                    :value="contractorId(row.contractor_1)"
-                    @change="saveField(row, 'contractor_1', $event.target.value)"
-                  >
-                    <option value="">Не выбран</option>
-                    <option v-for="contractor in contractors" :key="contractor.id" :value="contractor.id">
-                      {{ contractor.name }}
-                    </option>
-                  </select>
-                  <input
-                    class="symbolika-costing-input symbolika-costing-num symbolika-costing-stacked-input"
-                    :class="savingClass(row, 'contractor_1_cost')"
-                    inputmode="decimal"
-                    :value="row.contractor_1_cost"
-                    :disabled="contractorIsInternal(row.contractor_1)"
-                    :title="contractorIsInternal(row.contractor_1) ? 'Для собственного производства себестоимость равна нулю' : ''"
-                    @change="saveField(row, 'contractor_1_cost', $event.target.value)"
-                  />
+                  <template v-if="itemNeedsBlank(row) && row.blank_source === 'supplier'">
+                    <select
+                      class="symbolika-costing-select"
+                      :class="savingClass(row, 'contractor_1')"
+                      :value="contractorId(row.contractor_1)"
+                      @change="saveOrderItemContractor(row, 'contractor_1', $event.target.value)"
+                    >
+                      <option value="">Поставщик не определён</option>
+                      <option v-for="contractor in blankSupplierOptions(row)" :key="contractor.id" :value="contractor.id">
+                        {{ contractor.name }}
+                      </option>
+                    </select>
+                    <input
+                      class="symbolika-costing-input symbolika-costing-num symbolika-costing-stacked-input"
+                      :class="savingClass(row, 'contractor_1_cost')"
+                      inputmode="decimal"
+                      :value="row.contractor_1_cost"
+                      :disabled="contractorIsInternal(row.contractor_1)"
+                      :title="contractorIsInternal(row.contractor_1) ? 'Для собственного производства себестоимость равна нулю' : 'Себестоимость заготовки за единицу'"
+                      placeholder="Себестоимость за единицу"
+                      @change="saveField(row, 'contractor_1_cost', $event.target.value)"
+                    />
+                  </template>
+                  <div v-else class="symbolika-costing-subtle">
+                    {{ itemNeedsBlank(row) ? blankSourceName(row.blank_source) : 'Заготовка не требуется' }}
+                  </div>
                 </td>
                 <td>
                   <select
                     class="symbolika-costing-select"
-                    :class="savingClass(row, 'contractor_2')"
-                    :value="contractorId(row.contractor_2)"
-                    @change="saveField(row, 'contractor_2', $event.target.value)"
+                    :class="savingClass(row, executorField(row))"
+                    :value="contractorId(row[executorField(row)])"
+                    @change="saveOrderItemContractor(row, executorField(row), $event.target.value)"
                   >
-                    <option value="">Не выбран</option>
-                    <option v-for="contractor in contractors" :key="contractor.id" :value="contractor.id">
+                    <option value="">Контрагент не определён</option>
+                    <option v-for="contractor in executorOptions(row)" :key="contractor.id" :value="contractor.id">
                       {{ contractor.name }}
                     </option>
                   </select>
                   <input
                     class="symbolika-costing-input symbolika-costing-num symbolika-costing-stacked-input"
-                    :class="savingClass(row, 'contractor_2_cost')"
+                    :class="savingClass(row, executorCostField(row))"
                     inputmode="decimal"
-                    :value="row.contractor_2_cost"
-                    :disabled="contractorIsInternal(row.contractor_2)"
-                    :title="contractorIsInternal(row.contractor_2) ? 'Для собственного производства себестоимость равна нулю' : ''"
-                    @change="saveField(row, 'contractor_2_cost', $event.target.value)"
+                    :value="row[executorCostField(row)]"
+                    :disabled="contractorIsInternal(row[executorField(row)])"
+                    :title="contractorIsInternal(row[executorField(row)]) ? 'Для собственного производства себестоимость равна нулю' : 'Себестоимость работ за единицу'"
+                    placeholder="Себестоимость за единицу"
+                    @change="saveField(row, executorCostField(row), $event.target.value)"
                   />
                 </td>
                 <td v-if="canSeeCostingTotals">
