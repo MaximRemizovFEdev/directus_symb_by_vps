@@ -629,17 +629,17 @@ const moduleSections = {
   },
   orders: {
     title: 'Заказы',
-    tabs: ['dashboard', 'events', 'news', 'problems', 'search', 'all_orders', 'my_orders', 'estimates', 'clients', 'companies', 'finance', 'client_operations', 'gift_certificates', 'office'],
+    tabs: ['dashboard', 'events', 'problems', 'search', 'all_orders', 'my_orders', 'estimates', 'clients', 'companies', 'finance', 'client_operations', 'gift_certificates', 'office'],
     roles: ['Administrator', 'Управляющий', 'Менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
   },
   tasks: {
     title: 'Задачи',
-    tabs: ['tasks', 'tasks_archive', 'events', 'news'],
+    tabs: ['tasks', 'tasks_archive', 'events'],
     roles: ['Administrator', 'Управляющий', 'Менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
   },
   production: {
     title: 'Производство',
-    tabs: ['events', 'news', 'production', 'screen', 'labels', 'admin_inventory'],
+    tabs: ['events', 'production', 'screen', 'labels', 'admin_inventory'],
     roles: ['Administrator', 'Управляющий', 'Производство', 'Шелкография'],
   },
   contractor: {
@@ -649,27 +649,27 @@ const moduleSections = {
   },
   management: {
     title: 'Управление',
-    tabs: ['news', 'work_launch', 'contractor_overview', 'order_economics', 'costing', 'automation_control', 'admin_customer_notifications'],
+    tabs: ['work_launch', 'contractor_overview', 'order_economics', 'costing', 'automation_control', 'admin_customer_notifications'],
     roles: ['Administrator', 'Управляющий'],
   },
   procurement: {
     title: 'Закупки',
-    tabs: ['news', 'admin_procurement'],
+    tabs: ['admin_procurement'],
     roles: ['Administrator', 'Управляющий', 'Менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
   },
   finance: {
     title: 'Финансы',
-    tabs: ['news', 'finance', 'client_operations', 'gift_certificates'],
+    tabs: ['finance', 'client_operations', 'gift_certificates'],
     roles: ['Administrator', 'Управляющий', 'Менеджер'],
   },
   clients: {
     title: 'Клиенты',
-    tabs: ['news', 'clients', 'companies'],
+    tabs: ['clients', 'companies'],
     roles: ['Administrator', 'Управляющий', 'Менеджер'],
   },
   admin: {
     title: 'Админка',
-    tabs: ['news', ...adminWorkspaceTabs],
+    tabs: [...adminWorkspaceTabs],
     roles: ['Administrator'],
   },
 };
@@ -1474,7 +1474,7 @@ export const CostingModule = {
     },
 
     availableTabs() {
-      const workTabs = ['profile', 'dashboard', 'queue', 'tasks', 'tasks_archive', 'events', 'news', 'problems', 'search'];
+      const workTabs = ['profile', 'dashboard', 'queue', 'tasks', 'tasks_archive', 'events', 'problems', 'search'];
       const withWorkTabs = (ids) => tabs.filter((tab) => workTabs.includes(tab.id) || ids.includes(tab.id));
       let roleTabs = [];
       if (this.currentRoleName === 'Administrator') roleTabs = tabs;
@@ -1483,7 +1483,7 @@ export const CostingModule = {
       else if (this.currentRoleName === 'Шелкография') roleTabs = withWorkTabs(['my_orders', 'screen', 'labels', 'admin_inventory', 'admin_procurement']);
       else if (this.currentRoleName === 'Контрагент') roleTabs = tabs.filter((tab) => tab.id === 'contractor_work');
       else if (this.currentRoleName === 'Менеджер') roleTabs = withWorkTabs(['my_orders', 'estimates', 'office', 'finance', 'client_operations', 'gift_certificates', 'clients', 'companies', 'admin_procurement']);
-      else if (this.currentRoleName === 'Дизайнер') roleTabs = tabs.filter((tab) => ['my_orders', 'tasks', 'tasks_archive', 'events', 'news', 'admin_procurement'].includes(tab.id));
+      else if (this.currentRoleName === 'Дизайнер') roleTabs = tabs.filter((tab) => ['my_orders', 'tasks', 'tasks_archive', 'events', 'admin_procurement'].includes(tab.id));
       else roleTabs = [];
 
       const section = moduleSections[this.moduleSection];
@@ -1970,7 +1970,7 @@ export const CostingModule = {
     navigationGroups() {
       const groups = [
         { title: 'Личный кабинет', tabs: ['profile'] },
-        { title: 'Работа', tabs: ['dashboard', 'queue', 'tasks', 'tasks_archive', 'events', 'news', 'problems', 'search'] },
+        { title: 'Работа', tabs: ['dashboard', 'queue', 'tasks', 'tasks_archive', 'events', 'problems', 'search'] },
         { title: 'Заказы', tabs: ['all_orders', 'my_orders', 'estimates'] },
         { title: 'Клиенты и расчёты', tabs: ['clients', 'companies', 'finance', 'client_operations', 'gift_certificates'] },
         { title: 'Работа контрагента', tabs: ['contractor_work'] },

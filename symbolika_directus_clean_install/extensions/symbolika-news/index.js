@@ -1,4 +1,4 @@
-const CONTROL_ROLES = new Set(['Administrator', 'Управляющий']);
+const CONTROL_ROLES = new Set(['Administrator']);
 
 const cleanText = (value, limit = 500) => String(value || '').trim().slice(0, limit);
 const sanitizeHtml = (value) => String(value || '')
@@ -59,7 +59,7 @@ export default {
     router.post('/', async (req, res) => {
       try {
         const current = await requireEmployee(req, res); if (!current) return;
-        if (!canManage(current)) return res.status(403).json({ message: 'Публиковать новости могут админ и управляющий.' });
+        if (!canManage(current)) return res.status(403).json({ message: 'Публиковать новости может только администратор.' });
         const title = cleanText(req.body?.title, 240);
         const contentHtml = sanitizeHtml(req.body?.content_html);
         if (!title || !plainText(contentHtml)) return res.status(400).json({ message: 'Заполните заголовок и текст новости.' });
@@ -75,7 +75,7 @@ export default {
     router.patch('/:id', async (req, res) => {
       try {
         const current = await requireEmployee(req, res); if (!current) return;
-        if (!canManage(current)) return res.status(403).json({ message: 'Редактировать новости могут админ и управляющий.' });
+        if (!canManage(current)) return res.status(403).json({ message: 'Редактировать новости может только администратор.' });
         const patch = { updated_by: current.user_id, updated_at: database.fn.now() };
         if (req.body?.title !== undefined) patch.title = cleanText(req.body.title, 240);
         if (req.body?.summary !== undefined) patch.summary = cleanText(req.body.summary, 500);
@@ -90,7 +90,7 @@ export default {
     router.post('/:id/publish', async (req, res) => {
       try {
         const current = await requireEmployee(req, res); if (!current) return;
-        if (!canManage(current)) return res.status(403).json({ message: 'Публиковать новости могут админ и управляющий.' });
+        if (!canManage(current)) return res.status(403).json({ message: 'Публиковать новости может только администратор.' });
         const id = Number(req.params.id);
         const news = await database('symbolika_news').where({ id }).first();
         if (!news) return res.status(404).json({ message: 'Новость не найдена.' });
