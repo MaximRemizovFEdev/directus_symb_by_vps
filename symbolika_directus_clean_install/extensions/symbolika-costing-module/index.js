@@ -11,6 +11,22 @@
   normalizeExternalHttpUrl,
   sortDateValue as parseSortDateValue,
 } from './lib/core-utils.js';
+import {
+  formatMoney as formatPresentationMoney,
+  formatMoneyCompact as formatPresentationMoneyCompact,
+  formatShortDate,
+  moneyInput as formatMoneyInput,
+  monthKey as formatMonthKey,
+  monthLabel as formatMonthLabel,
+  normalizeStatusText,
+  officeBadgeClass as presentationOfficeBadgeClass,
+  officeSelectClass as presentationOfficeSelectClass,
+  pluralRu as selectRussianPlural,
+  statusBadgeClass as presentationStatusBadgeClass,
+  statusToneClass as presentationStatusToneClass,
+  todayInput as formatTodayInput,
+  toInputDate as formatInputDate,
+} from './lib/presentation-utils.js';
 
 const fields = [
   'id',
@@ -13530,45 +13546,23 @@ export const CostingModule = {
     },
 
     formatDate(value) {
-      const date = this.dateFromValue(value);
-      if (!date) return '-';
-      return new Intl.DateTimeFormat('ru-RU', {
-        day: '2-digit',
-        month: '2-digit',
-        year: '2-digit',
-      }).format(date);
+      return formatShortDate(value);
     },
 
     monthKey(value) {
-      const date = this.dateFromValue(value);
-      if (!date) return '';
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      return `${year}-${month}`;
+      return formatMonthKey(value);
     },
 
     monthLabel(key) {
-      if (!key) return '-';
-      const [year, month] = String(key).split('-').map(Number);
-      if (!year || !month) return '-';
-      const date = new Date(year, month - 1, 1);
-      return new Intl.DateTimeFormat('ru-RU', {
-        month: 'long',
-        year: 'numeric',
-      }).format(date);
+      return formatMonthLabel(key);
     },
 
     todayInput() {
-      const date = new Date();
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
+      return formatTodayInput();
     },
 
     toInputDate(value) {
-      if (!value) return '';
-      return String(value).slice(0, 10);
+      return formatInputDate(value);
     },
 
     statusName(value) {
@@ -13580,37 +13574,23 @@ export const CostingModule = {
     },
 
     normalizeStatus(value) {
-      return String(value || '').trim().toLowerCase();
+      return normalizeStatusText(value);
     },
 
     statusBadgeClass(value) {
-      const status = this.normalizeStatus(this.statusName(value) || value);
-      if (status.includes('доработ')) return 'symbolika-costing-pill-danger';
-      if (status.includes('отмен')) return 'symbolika-costing-pill-muted';
-      if (status.includes('достав') || status.includes('выдан')) return 'symbolika-costing-pill-green';
-      if (status.includes('готов')) return 'symbolika-costing-pill-blue';
-      if (status.includes('не в работе') || status.includes('ждем') || status.includes('ждём')) return 'symbolika-costing-pill-muted';
-      if (status.includes('работ')) return 'symbolika-costing-pill-orange';
-      if (status.includes('соглас')) return 'symbolika-costing-pill-purple';
-      if (status.includes('нов')) return 'symbolika-costing-pill-blue';
-      return 'symbolika-costing-pill-muted';
+      return presentationStatusBadgeClass(this.statusName(value) || value);
     },
 
     statusToneClass(value) {
-      const badge = this.statusBadgeClass(this.statusName(value) || value);
-      return badge.replace('symbolika-costing-pill-', 'symbolika-costing-select-');
+      return presentationStatusToneClass(this.statusName(value) || value);
     },
 
     officeBadgeClass(value) {
-      if (value === 'issued') return 'symbolika-costing-pill-green';
-      if (value === 'in_office') return 'symbolika-costing-pill-orange';
-      return 'symbolika-costing-pill-muted';
+      return presentationOfficeBadgeClass(value);
     },
 
     officeSelectClass(value) {
-      if (value === 'issued') return 'symbolika-costing-select-green';
-      if (value === 'in_office') return 'symbolika-costing-select-orange';
-      return 'symbolika-costing-select-muted';
+      return presentationOfficeSelectClass(value);
     },
 
     deadlineClass(value) {
@@ -13821,37 +13801,19 @@ export const CostingModule = {
     },
 
     formatMoney(value) {
-      const number = Number(String(value ?? '').replace(',', '.'));
-      if (!Number.isFinite(number)) return '0,00';
-      return new Intl.NumberFormat('ru-RU', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }).format(number);
+      return formatPresentationMoney(value);
     },
 
     formatMoneyCompact(value) {
-      const number = Number(String(value ?? '').replace(',', '.'));
-      if (!Number.isFinite(number)) return '0';
-      const hasCents = Math.round(number * 100) % 100 !== 0;
-      return new Intl.NumberFormat('ru-RU', {
-        minimumFractionDigits: hasCents ? 2 : 0,
-        maximumFractionDigits: hasCents ? 2 : 0,
-      }).format(number);
+      return formatPresentationMoneyCompact(value);
     },
 
     pluralRu(count, one, few, many) {
-      const value = Math.abs(Number(count)) % 100;
-      const last = value % 10;
-      if (value > 10 && value < 20) return many;
-      if (last > 1 && last < 5) return few;
-      if (last === 1) return one;
-      return many;
+      return selectRussianPlural(count, one, few, many);
     },
 
     moneyInput(value) {
-      const number = Number(String(value ?? '').replace(',', '.'));
-      if (!Number.isFinite(number)) return '';
-      return String(Math.round(number * 100) / 100);
+      return formatMoneyInput(value);
     },
 
     parseMoney(value) {
