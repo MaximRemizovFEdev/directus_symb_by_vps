@@ -57,8 +57,10 @@ async function list(collection, params = '', token = adminToken) {
 
 async function createUser(roleName, positionId = null, key = 'user') {
   const roles = await request(`/roles?filter[name][_eq]=${encodeURIComponent(roleName)}&fields=id,name&limit=10`);
-  const role = roles.find((row) => row.id !== '8d096ec4-c189-44a5-ae91-28e7a3c12857') || roles[0];
-  if (!role) throw new Error(`Role not found: ${roleName}`);
+  if (roles.length !== 1) {
+    throw new Error(`Expected one role named ${roleName}, found ${roles.length}`);
+  }
+  const role = roles[0];
   const email = `qa-${suffix}-${key}@example.com`;
   const user = await request('/users', {
     method: 'POST',
