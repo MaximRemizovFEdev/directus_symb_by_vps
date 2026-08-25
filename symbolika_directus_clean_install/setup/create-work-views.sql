@@ -6669,6 +6669,10 @@ AS $$
 DECLARE
   due_table text;
 BEGIN
+  -- The due buckets are rebuilt as a whole. Serialize concurrent rebuilds so
+  -- two order/item transactions cannot both delete and reinsert the same ids.
+  PERFORM pg_advisory_xact_lock(hashtext('symbolika_orders_due_refresh'));
+
   DELETE FROM orders_due_today;
   DELETE FROM orders_due_this_week;
   DELETE FROM orders_due_next_week;
@@ -9658,13 +9662,22 @@ $$;
 
 DROP TRIGGER IF EXISTS contractor_costing_sync_item ON orders_items;
 CREATE TRIGGER contractor_costing_sync_item
-AFTER INSERT OR UPDATE OR DELETE ON orders_items
+AFTER INSERT OR DELETE OR UPDATE OF
+  "order", order_link, product_name, quantity, price_per_unit, order_sum,
+  product_category, product_subcategory, application_method,
+  blank_source, blank_ordered, contractor_1, contractor_2,
+  contractor_1_cost, contractor_2_cost, unit_cost, total_cost,
+  manager_commission_sum, tax_sum, profit_sum, margin_percent,
+  item_status, production_status, deadline
+ON orders_items
 FOR EACH ROW
 EXECUTE FUNCTION sync_contractor_costing_item_trigger();
 
 DROP TRIGGER IF EXISTS contractor_costing_sync_order ON orders;
 CREATE TRIGGER contractor_costing_sync_order
-AFTER UPDATE OR DELETE ON orders
+AFTER DELETE OR UPDATE OF
+  order_number, date, deadline, customer, customer_company, manager_employee
+ON orders
 FOR EACH ROW
 EXECUTE FUNCTION sync_contractor_costing_order_trigger();
 
@@ -12571,6 +12584,13 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+  -- Consistency control is derived data and must never delay the user's write.
+  -- If another transaction is already rebuilding it, that transaction will
+  -- include all committed changes and a later/manual refresh remains available.
+  IF NOT pg_try_advisory_xact_lock(hashtext('symbolika_automation_issues_refresh')) THEN
+    RETURN NULL;
+  END IF;
+
   PERFORM refresh_symbolika_automation_issues();
   RETURN NULL;
 END;

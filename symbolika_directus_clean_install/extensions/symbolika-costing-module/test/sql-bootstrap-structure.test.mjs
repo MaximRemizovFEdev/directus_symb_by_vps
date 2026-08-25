@@ -70,3 +70,41 @@ test('keeps staged definitions in their documented dependency order', () => {
     }
   }
 });
+
+test('serializes full due-bucket rebuilds', () => {
+  const definition = sql.match(
+    /CREATE OR REPLACE FUNCTION refresh_orders_due_tables\(\)[\s\S]*?\n\$\$;/i,
+  )?.[0] || '';
+
+  assert.match(definition, /pg_advisory_xact_lock\(hashtext\('symbolika_orders_due_refresh'\)\)/i);
+  assert.ok(
+    definition.indexOf('pg_advisory_xact_lock') < definition.indexOf('DELETE FROM orders_due_today'),
+    'the lock must be acquired before any due table is rebuilt',
+  );
+});
+
+test('skips duplicate automatic consistency refreshes without blocking writes', () => {
+  const definition = sql.match(
+    /CREATE OR REPLACE FUNCTION symbolika_refresh_automation_issues_trigger\(\)[\s\S]*?\n\$\$;/i,
+  )?.[0] || '';
+
+  assert.match(definition, /pg_try_advisory_xact_lock\(hashtext\('symbolika_automation_issues_refresh'\)\)/i);
+  assert.ok(
+    definition.indexOf('pg_try_advisory_xact_lock') < definition.indexOf('refresh_symbolika_automation_issues()'),
+    'the trigger must try the lock before starting the expensive refresh',
+  );
+});
+
+test('refreshes contractor costing only for source fields used by the projection', () => {
+  const itemTrigger = sql.match(
+    /CREATE TRIGGER contractor_costing_sync_item[\s\S]*?EXECUTE FUNCTION sync_contractor_costing_item_trigger\(\);/i,
+  )?.[0] || '';
+  const orderTrigger = sql.match(
+    /CREATE TRIGGER contractor_costing_sync_order[\s\S]*?EXECUTE FUNCTION sync_contractor_costing_order_trigger\(\);/i,
+  )?.[0] || '';
+
+  assert.match(itemTrigger, /UPDATE OF[\s\S]*product_name[\s\S]*contractor_1_cost[\s\S]*production_status/i);
+  assert.doesNotMatch(itemTrigger, /\burl\b|office_status/i);
+  assert.match(orderTrigger, /UPDATE OF[\s\S]*order_number[\s\S]*manager_employee/i);
+  assert.doesNotMatch(orderTrigger, /order_sum|office_status|paid_amount/i);
+});
