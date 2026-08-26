@@ -5531,6 +5531,7 @@ export const CostingModule = {
       if (value === 'supplier') return 'Закупить у поставщика';
       if (value === 'customer') return 'Заготовка заказчика';
       if (value === 'warehouse') return 'Со склада';
+      if (value === 'contractor') return 'Подрядчик под ключ';
       return 'Не требуется';
     },
 
@@ -7035,7 +7036,7 @@ export const CostingModule = {
       if (['assigned_to', 'manager_employee'].includes(field)) return this.employees.find((item) => Number(item.id) === Number(value))?.full_name || String(value);
       if (['deadline', 'due_date', 'date', 'completed_at'].includes(field)) return this.formatDate(value);
       if (field === 'shipping_method') return shippingMethodChoices.find((item) => item.value === value)?.text || String(value);
-      if (field === 'blank_source') return value === 'customer' ? 'заготовка заказчика' : value === 'supplier' ? 'закупить у поставщика' : value === 'warehouse' ? 'со склада' : String(value);
+      if (field === 'blank_source') return value === 'customer' ? 'заготовка заказчика' : value === 'supplier' ? 'закупить у поставщика' : value === 'warehouse' ? 'со склада' : value === 'contractor' ? 'подрядчик под ключ' : String(value);
       const text = String(value).replace(/\s+/g, ' ').trim();
       return text.length > 90 ? `${text.slice(0, 87)}…` : text;
     },
@@ -9754,7 +9755,7 @@ export const CostingModule = {
         item.contractor_1 = '';
         item.contractor_1_cost = '';
         item.contractor_2 = '';
-      } else if (!['supplier', 'customer', 'warehouse'].includes(item.blank_source)) {
+      } else if (!['supplier', 'customer', 'warehouse', 'contractor'].includes(item.blank_source)) {
         item.blank_source = 'supplier';
       }
       this.syncContractorSelections(item);
@@ -9860,12 +9861,21 @@ export const CostingModule = {
 
     executorField(item) {
       if (!this.itemNeedsBlank(item)) return 'contractor_1';
-      if (item?.blank_source === 'supplier') return 'contractor_2';
-      return this.entityId(item?.contractor_2) ? 'contractor_2' : 'contractor_1';
+      // For every product with a blank, contractor_1 is reserved for a blank
+      // supplier and contractor_2 is always the executor. Keeping the slots
+      // stable prevents the work cost from being cleared when the blank source
+      // changes to customer/warehouse/full-service contractor.
+      return 'contractor_2';
     },
 
     executorCostField(item) {
       return this.executorField(item) === 'contractor_2' ? 'contractor_2_cost' : 'contractor_1_cost';
+    },
+
+    executorCostLabel(item) {
+      return item?.blank_source === 'contractor'
+        ? 'Себестоимость готового изделия за ед.'
+        : 'Себестоимость работ за ед.';
     },
 
     selectedExecutorId(item) {
@@ -9914,7 +9924,7 @@ export const CostingModule = {
 
     handleBlankSourceChange(item) {
       if (!item) return;
-      if (['customer', 'warehouse'].includes(item.blank_source)) {
+      if (['customer', 'warehouse', 'contractor'].includes(item.blank_source)) {
         item.contractor_1 = '';
         item.contractor_1_cost = '';
       } else if (!item.blank_source || item.blank_source === 'none') {
@@ -11438,7 +11448,7 @@ export const CostingModule = {
                 : (value || null);
         const patch = { [field]: normalized };
 
-        if (field === 'blank_source' && ['customer', 'warehouse', 'none'].includes(normalized)) {
+        if (field === 'blank_source' && ['customer', 'warehouse', 'contractor', 'none'].includes(normalized)) {
           patch.contractor_1 = null;
           patch.contractor_1_cost = 0;
           patch.blank_ordered = false;
@@ -32663,6 +32673,7 @@ export const CostingModule = {
                     <option value="supplier">Закупить у поставщика</option>
                     <option value="customer">Заготовка заказчика</option>
                     <option value="warehouse">Со склада</option>
+                    <option value="contractor">Подрядчик под ключ</option>
                   </select>
                 </label>
 
@@ -32692,7 +32703,7 @@ export const CostingModule = {
                 </label>
 
                 <label v-if="itemCategoryId(item) && canEditItemCosts" class="symbolika-costing-label symbolika-costing-new-order-cost symbolika-mobile-item-extra">
-                  Себестоимость работ за ед.
+                  {{ executorCostLabel(item) }}
                   <input v-model="item[executorCostField(item)]" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, executorCostField(item))" />
                 </label>
 
@@ -34248,6 +34259,7 @@ export const CostingModule = {
                       <option value="supplier">Закупить у поставщика</option>
                       <option value="customer">Заготовка заказчика</option>
                       <option value="warehouse">Со склада</option>
+                      <option value="contractor">Подрядчик под ключ</option>
                     </select>
                   </label>
 
@@ -34277,7 +34289,7 @@ export const CostingModule = {
                   </label>
 
                   <label v-if="itemCategoryId(detailItemForm) && canEditItemCosts" class="symbolika-costing-label">
-                    Себестоимость работ за ед.
+                    {{ executorCostLabel(detailItemForm) }}
                     <input v-model="detailItemForm[executorCostField(detailItemForm)]" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(detailItemForm, executorCostField(detailItemForm))" />
                   </label>
 
@@ -34663,6 +34675,7 @@ export const CostingModule = {
                   <option value="supplier">Закупить у поставщика</option>
                   <option value="customer">Заготовка заказчика</option>
                   <option value="warehouse">Со склада</option>
+                  <option value="contractor">Подрядчик под ключ</option>
                 </select>
               </div>
             </div>
@@ -34714,7 +34727,7 @@ export const CostingModule = {
               </div>
             </div>
             <div v-if="itemCategoryId(detail.row) && canEditItemCosts" class="symbolika-costing-detail-field is-primary">
-              <div class="symbolika-costing-detail-label">Себестоимость работ за ед.</div>
+              <div class="symbolika-costing-detail-label">{{ executorCostLabel(detail.row) }}</div>
               <div class="symbolika-costing-detail-value">
                 <input
                   class="symbolika-costing-input symbolika-costing-num"

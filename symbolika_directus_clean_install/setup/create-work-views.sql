@@ -1834,11 +1834,11 @@ BEGIN
     routed_contractor := COALESCE(matched_contractors[2], matched_contractors[1]);
 
     IF needs_blank THEN
-      IF NEW.blank_source IS NULL OR NEW.blank_source NOT IN ('supplier', 'customer', 'warehouse') THEN
+      IF NEW.blank_source IS NULL OR NEW.blank_source NOT IN ('supplier', 'customer', 'warehouse', 'contractor') THEN
         NEW.blank_source := 'supplier';
       END IF;
 
-      IF NEW.blank_source IN ('customer', 'warehouse') THEN
+      IF NEW.blank_source IN ('customer', 'warehouse', 'contractor') THEN
         NEW.contractor_1 := NULL;
         NEW.contractor_1_cost := 0;
         NEW.blank_ordered := false;
@@ -4608,7 +4608,7 @@ INSERT INTO directus_fields (
 ) VALUES
   ('orders_items', 'order_link', NULL, 'symbolika-order-link', NULL, NULL, NULL, true, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0435\0440\0435\0439\0442\0438 \0432 \0437\0430\043a\0430\0437'))::json, false, true),
   ('orders_items', 'application_method', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 16, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0412\0438\0434 \043d\0430\043d\0435\0441\0435\043d\0438\044f'))::json, false, true),
-  ('orders_items', 'blank_source', NULL, 'select-dropdown', '{"choices":[{"text":"Не требуется","value":"none"},{"text":"Закупить у поставщика","value":"supplier"},{"text":"Заготовка заказчика","value":"customer"},{"text":"Со склада","value":"warehouse"}]}'::json, 'labels', '{"choices":[{"text":"Не требуется","value":"none","foreground":"#C9D1D9","background":"#30363D"},{"text":"Закупить у поставщика","value":"supplier","foreground":"#FFD7A8","background":"#4A3423"},{"text":"Заготовка заказчика","value":"customer","foreground":"#B7F7D2","background":"#173C2B"},{"text":"Со склада","value":"warehouse","foreground":"#BFDBFE","background":"#1E3A5F"}]}'::json, false, false, 17, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0417\0430\0433\043e\0442\043e\0432\043a\0430'))::json, false, true),
+  ('orders_items', 'blank_source', NULL, 'select-dropdown', '{"choices":[{"text":"Не требуется","value":"none"},{"text":"Закупить у поставщика","value":"supplier"},{"text":"Заготовка заказчика","value":"customer"},{"text":"Со склада","value":"warehouse"},{"text":"Подрядчик под ключ","value":"contractor"}]}'::json, 'labels', '{"choices":[{"text":"Не требуется","value":"none","foreground":"#C9D1D9","background":"#30363D"},{"text":"Закупить у поставщика","value":"supplier","foreground":"#FFD7A8","background":"#4A3423"},{"text":"Заготовка заказчика","value":"customer","foreground":"#B7F7D2","background":"#173C2B"},{"text":"Со склада","value":"warehouse","foreground":"#BFDBFE","background":"#1E3A5F"},{"text":"Подрядчик под ключ","value":"contractor","foreground":"#FFE0B2","background":"#5A3218"}]}'::json, false, false, 17, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0417\0430\0433\043e\0442\043e\0432\043a\0430'))::json, false, true),
   ('orders_items', 'blank_ordered', 'cast-boolean', 'boolean', NULL, 'boolean', NULL, false, false, 18, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0417\0430\0433\043e\0442\043e\0432\043a\0430 \0437\0430\043a\0430\0437\0430\043d\0430'))::json, false, true),
   ('payment_allocations', 'order_link', NULL, 'symbolika-order-link', NULL, NULL, NULL, true, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\0435\0440\0435\0439\0442\0438 \0432 \0437\0430\043a\0430\0437'))::json, false, true);
 
@@ -8948,9 +8948,9 @@ WITH work_field_meta(field_name, special_value, interface_value, options_value, 
   ('price_per_unit', NULL::varchar, 'input', NULL::json, NULL::varchar, NULL::json, true, true, 20, 'half', U&'\0426\0435\043d\0430'),
   ('order_sum', NULL::varchar, 'input', NULL::json, NULL::varchar, NULL::json, true, true, 21, 'half', U&'\0421\0443\043c\043c\0430 \043f\043e\0437\0438\0446\0438\0438'),
   ('blank_source', NULL::varchar, 'select-dropdown',
-    '{"choices":[{"text":"Не требуется","value":"none"},{"text":"Закупить у поставщика","value":"supplier"},{"text":"Заготовка заказчика","value":"customer"},{"text":"Со склада","value":"warehouse"}]}'::json,
+    '{"choices":[{"text":"Не требуется","value":"none"},{"text":"Закупить у поставщика","value":"supplier"},{"text":"Заготовка заказчика","value":"customer"},{"text":"Со склада","value":"warehouse"},{"text":"Подрядчик под ключ","value":"contractor"}]}'::json,
     'labels',
-    '{"choices":[{"text":"Не требуется","value":"none","foreground":"#C9D1D9","background":"#30363D"},{"text":"Закупить у поставщика","value":"supplier","foreground":"#FFD7A8","background":"#4A3423"},{"text":"Заготовка заказчика","value":"customer","foreground":"#B7F7D2","background":"#173C2B"},{"text":"Со склада","value":"warehouse","foreground":"#BFDBFE","background":"#1E3A5F"}]}'::json,
+    '{"choices":[{"text":"Не требуется","value":"none","foreground":"#C9D1D9","background":"#30363D"},{"text":"Закупить у поставщика","value":"supplier","foreground":"#FFD7A8","background":"#4A3423"},{"text":"Заготовка заказчика","value":"customer","foreground":"#B7F7D2","background":"#173C2B"},{"text":"Со склада","value":"warehouse","foreground":"#BFDBFE","background":"#1E3A5F"},{"text":"Подрядчик под ключ","value":"contractor","foreground":"#FFE0B2","background":"#5A3218"}]}'::json,
     true, true, 22, 'half', U&'\0417\0430\0433\043e\0442\043e\0432\043a\0430'),
   ('blank_ordered', 'cast-boolean', 'boolean', NULL::json, 'boolean', NULL::json, true, true, 23, 'half', U&'\0417\0430\0433\043e\0442\043e\0432\043a\0430 \0437\0430\043a\0430\0437\0430\043d\0430'),
   ('product_category', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, true, true, 24, 'half', U&'\041a\0430\0442\0435\0433\043e\0440\0438\044f'),
@@ -11049,7 +11049,7 @@ INSERT INTO directus_fields (
   ('contractor_costing', 'product_category', 'm2o', 'select-dropdown-m2o', NULL, NULL, NULL, true, true, 14, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\0430\0442\0435\0433\043e\0440\0438\044f'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
   ('contractor_costing', 'product_subcategory', 'm2o', 'select-dropdown-m2o', NULL, NULL, NULL, true, true, 15, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\0434\043a\0430\0442\0435\0433\043e\0440\0438\044f'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
   ('contractor_costing', 'application_method', 'm2o', 'select-dropdown-m2o', NULL, NULL, NULL, true, true, 16, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0412\0438\0434 \043d\0430\043d\0435\0441\0435\043d\0438\044f'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
-  ('contractor_costing', 'blank_source', NULL, 'select-dropdown', '{"choices":[{"text":"Не требуется","value":"none"},{"text":"Закупить у поставщика","value":"supplier"},{"text":"Заготовка заказчика","value":"customer"},{"text":"Со склада","value":"warehouse"}]}'::json, 'labels', '{"choices":[{"text":"Не требуется","value":"none","foreground":"#C9D1D9","background":"#30363D"},{"text":"Закупить у поставщика","value":"supplier","foreground":"#FFD7A8","background":"#4A3423"},{"text":"Заготовка заказчика","value":"customer","foreground":"#B7F7D2","background":"#173C2B"},{"text":"Со склада","value":"warehouse","foreground":"#BFDBFE","background":"#1E3A5F"}]}'::json, false, false, 17, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0417\0430\0433\043e\0442\043e\0432\043a\0430'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
+  ('contractor_costing', 'blank_source', NULL, 'select-dropdown', '{"choices":[{"text":"Не требуется","value":"none"},{"text":"Закупить у поставщика","value":"supplier"},{"text":"Заготовка заказчика","value":"customer"},{"text":"Со склада","value":"warehouse"},{"text":"Подрядчик под ключ","value":"contractor"}]}'::json, 'labels', '{"choices":[{"text":"Не требуется","value":"none","foreground":"#C9D1D9","background":"#30363D"},{"text":"Закупить у поставщика","value":"supplier","foreground":"#FFD7A8","background":"#4A3423"},{"text":"Заготовка заказчика","value":"customer","foreground":"#B7F7D2","background":"#173C2B"},{"text":"Со склада","value":"warehouse","foreground":"#BFDBFE","background":"#1E3A5F"},{"text":"Подрядчик под ключ","value":"contractor","foreground":"#FFE0B2","background":"#5A3218"}]}'::json, false, false, 17, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0417\0430\0433\043e\0442\043e\0432\043a\0430'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
   ('contractor_costing', 'blank_ordered', 'cast-boolean', 'boolean', NULL, 'boolean', NULL, false, false, 18, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0417\0430\0433\043e\0442\043e\0432\043a\0430 \0437\0430\043a\0430\0437\0430\043d\0430'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
   ('contractor_costing', 'contractor_1', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 19, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041f\043e\0434\0440\044f\0434\0447\0438\043a 1'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
   ('contractor_costing', 'contractor_1_cost', NULL, 'input', NULL, NULL, NULL, false, false, 20, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0435\0431\0435\0441\0442\043e\0438\043c\043e\0441\0442\044c 1'))::json, NULL, NULL, false, NULL, NULL, NULL, true),
@@ -14826,13 +14826,17 @@ BEGIN
     WHERE matching.specificity = best.specificity;
 
     IF needs_blank THEN
-      IF NEW.blank_source IS NULL OR NEW.blank_source NOT IN ('supplier', 'customer', 'warehouse') THEN
+      IF NEW.blank_source IS NULL OR NEW.blank_source NOT IN ('supplier', 'customer', 'warehouse', 'contractor') THEN
         NEW.blank_source := 'supplier';
       END IF;
 
-      IF cardinality(executor_candidates) = 1 THEN
+      IF NEW.contractor_2 IS NULL AND cardinality(executor_candidates) = 1 THEN
         NEW.contractor_2 := executor_candidates[1];
-      ELSIF NOT (NEW.contractor_2 = ANY(executor_candidates)) THEN
+      ELSIF NEW.contractor_2 IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM contractors contractor
+        WHERE contractor.id = NEW.contractor_2
+          AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+      ) THEN
         NEW.contractor_2 := NULL;
       END IF;
 
@@ -14855,9 +14859,13 @@ BEGIN
         FROM matching, best
         WHERE matching.specificity = best.specificity;
 
-        IF cardinality(supplier_candidates) = 1 THEN
+        IF NEW.contractor_1 IS NULL AND cardinality(supplier_candidates) = 1 THEN
           NEW.contractor_1 := supplier_candidates[1];
-        ELSIF NOT (NEW.contractor_1 = ANY(supplier_candidates)) THEN
+        ELSIF NEW.contractor_1 IS NOT NULL AND NOT EXISTS (
+          SELECT 1 FROM contractors contractor
+          WHERE contractor.id = NEW.contractor_1
+            AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+        ) THEN
           NEW.contractor_1 := NULL;
           NEW.contractor_1_cost := 0;
         END IF;
@@ -14870,9 +14878,13 @@ BEGIN
       NEW.blank_source := 'none';
       NEW.blank_ordered := false;
       NEW.contractor_2 := NULL;
-      IF cardinality(executor_candidates) = 1 THEN
+      IF NEW.contractor_1 IS NULL AND cardinality(executor_candidates) = 1 THEN
         NEW.contractor_1 := executor_candidates[1];
-      ELSIF NOT (NEW.contractor_1 = ANY(executor_candidates)) THEN
+      ELSIF NEW.contractor_1 IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM contractors contractor
+        WHERE contractor.id = NEW.contractor_1
+          AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+      ) THEN
         NEW.contractor_1 := NULL;
       END IF;
     END IF;
@@ -14959,8 +14971,7 @@ BEGIN
     WHERE category.id = NEW.product_category;
     needs_blank := COALESCE(needs_blank, false);
     selected_executor := CASE
-      WHEN needs_blank AND NEW.blank_source = 'supplier' THEN NEW.contractor_2
-      WHEN needs_blank THEN COALESCE(NEW.contractor_2, NEW.contractor_1)
+      WHEN needs_blank THEN NEW.contractor_2
       ELSE NEW.contractor_1
     END;
 
@@ -14985,10 +14996,11 @@ BEGIN
         AND matching.contractor = selected_executor
     ) INTO executor_candidates_exist, executor_allowed;
 
-    -- A configured capability list is restrictive. If there is no matching
-    -- route at all, an administrator or managing user may resolve the route
-    -- manually in costing by selecting any approved contractor.
-    IF NOT executor_candidates_exist AND selected_executor IS NOT NULL THEN
+    -- Capabilities drive and restrict the ordinary manager UI. Administrator
+    -- and managing may correct a route manually in costing, so the database
+    -- guard must accept an explicitly selected approved contractor even when
+    -- another capability exists for this category.
+    IF selected_executor IS NOT NULL AND NOT executor_allowed THEN
       SELECT EXISTS (
         SELECT 1
         FROM contractors contractor
@@ -15023,7 +15035,7 @@ BEGIN
           AND matching.contractor = NEW.contractor_1
       ) INTO supplier_candidates_exist, supplier_allowed;
 
-      IF NOT supplier_candidates_exist AND NEW.contractor_1 IS NOT NULL THEN
+      IF NEW.contractor_1 IS NOT NULL AND NOT supplier_allowed THEN
         SELECT EXISTS (
           SELECT 1
           FROM contractors contractor
@@ -15300,8 +15312,7 @@ BEGIN
     WHERE category.id = item_row.product_category;
     needs_blank := COALESCE(needs_blank, false);
     selected_executor := CASE
-      WHEN needs_blank AND item_row.blank_source = 'supplier' THEN item_row.contractor_2
-      WHEN needs_blank THEN COALESCE(item_row.contractor_2, item_row.contractor_1)
+      WHEN needs_blank THEN item_row.contractor_2
       ELSE item_row.contractor_1
     END;
 
@@ -15323,7 +15334,7 @@ BEGIN
       WHERE matching.specificity = best.specificity
         AND matching.contractor = selected_executor
     ) INTO executor_candidates_exist, executor_allowed;
-    IF NOT COALESCE(executor_candidates_exist, false) AND selected_executor IS NOT NULL THEN
+    IF selected_executor IS NOT NULL AND NOT COALESCE(executor_allowed, false) THEN
       SELECT EXISTS (
         SELECT 1
         FROM contractors contractor
@@ -15354,7 +15365,7 @@ BEGIN
         WHERE matching.specificity = best.specificity
           AND matching.contractor = item_row.contractor_1
       ) INTO supplier_candidates_exist, supplier_allowed;
-      IF NOT COALESCE(supplier_candidates_exist, false) AND item_row.contractor_1 IS NOT NULL THEN
+      IF item_row.contractor_1 IS NOT NULL AND NOT COALESCE(supplier_allowed, false) THEN
         SELECT EXISTS (
           SELECT 1
           FROM contractors contractor
