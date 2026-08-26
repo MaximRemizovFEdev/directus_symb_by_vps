@@ -9354,18 +9354,26 @@ export const CostingModule = {
       if (!stored?.data) return;
       const date = this.todayInput();
       const restored = stored.data;
+      const restoredDeadline = this.dateOnly(restored.deadline) || '';
       this.newOrderDialog = {
         ...restored,
         saving: false,
         date: restored.date || date,
+        deadline: restoredDeadline,
         manager_employee: restored.manager_employee || this.currentEmployeeId || '',
         customer_query: restored.customer_query || '',
         company_query: restored.company_query || '',
-        items: (restored.items?.length ? restored.items : [this.newOrderItem(restored.deadline || '')])
+        items: (restored.items?.length ? restored.items : [this.newOrderItem(restoredDeadline)])
           .map((item) => {
+            const itemDeadline = this.dateOnly(item.deadline);
+            const deadlineInherited = typeof item._deadline_inherited === 'boolean'
+              ? item._deadline_inherited
+              : !itemDeadline || itemDeadline === restoredDeadline;
             const restoredItem = {
-              ...this.newOrderItem(restored.deadline || ''),
+              ...this.newOrderItem(restoredDeadline),
               ...item,
+              deadline: itemDeadline || restoredDeadline,
+              _deadline_inherited: deadlineInherited || !itemDeadline,
               _mobile_extra_open: false,
               _draft_upload_promise: null,
             };
@@ -9454,6 +9462,7 @@ export const CostingModule = {
     },
 
     newOrderItem(deadline = '') {
+      const inheritedDeadline = this.dateOnly(deadline) || '';
       return {
         _mobile_extra_open: false,
         _layout_file: null,
@@ -9466,7 +9475,8 @@ export const CostingModule = {
         product_name: '',
         quantity: '',
         price_per_unit: '',
-        deadline,
+        deadline: inheritedDeadline,
+        _deadline_inherited: true,
         product_category: '',
         product_subcategory: '',
         application_method: '',
@@ -9737,12 +9747,28 @@ export const CostingModule = {
       model[field] = '';
     },
 
-    syncNewOrderDeadline() {
-      if (!this.newOrderDialog?.deadline) return;
+    syncNewOrderDeadline(value = this.newOrderDialog?.deadline) {
+      if (!this.newOrderDialog) return;
+      const previousDeadline = this.dateOnly(this.newOrderDialog.deadline) || '';
+      const deadline = this.dateOnly(value?.target?.value ?? value) || '';
+      this.newOrderDialog.deadline = deadline;
       this.newOrderDialog.items = this.newOrderDialog.items.map((item) => ({
         ...item,
-        deadline: item.deadline || this.newOrderDialog.deadline,
+        deadline: item._deadline_inherited !== false
+          || !this.dateOnly(item.deadline)
+          || this.dateOnly(item.deadline) === previousDeadline
+          ? deadline
+          : this.dateOnly(item.deadline),
+        _deadline_inherited: item._deadline_inherited !== false
+          || !this.dateOnly(item.deadline)
+          || this.dateOnly(item.deadline) === previousDeadline,
       }));
+    },
+
+    setNewOrderItemDeadline(item, value) {
+      if (!item) return;
+      item.deadline = this.dateOnly(value?.target?.value ?? value) || '';
+      item._deadline_inherited = false;
     },
 
     clearNewOrderItemDetails(item) {
@@ -32590,7 +32616,12 @@ export const CostingModule = {
 
               <label class="symbolika-costing-label">
                 Срок
-                <input v-model="newOrderDialog.deadline" class="symbolika-costing-input" type="date" @change="syncNewOrderDeadline" />
+                <input
+                  :value="newOrderDialog.deadline"
+                  class="symbolika-costing-input"
+                  type="date"
+                  @input="syncNewOrderDeadline($event.target.value)"
+                />
               </label>
 
               <label class="symbolika-costing-label symbolika-mobile-order-extra">
@@ -32655,7 +32686,12 @@ export const CostingModule = {
 
                 <label class="symbolika-costing-label symbolika-costing-new-order-deadline">
                   Срок позиции
-                  <input v-model="item.deadline" class="symbolika-costing-input" type="date" />
+                  <input
+                    :value="item.deadline"
+                    class="symbolika-costing-input"
+                    type="date"
+                    @input="setNewOrderItemDeadline(item, $event.target.value)"
+                  />
                 </label>
 
                 <label class="symbolika-costing-label symbolika-costing-new-order-category symbolika-mobile-item-extra">
