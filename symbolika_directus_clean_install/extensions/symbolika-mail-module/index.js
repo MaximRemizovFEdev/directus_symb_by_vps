@@ -95,7 +95,9 @@ const MailWorkspace = {
         subject: '',
         body: '',
         include_signature: true,
+        attachments: [],
       },
+      composerDragging: false,
       options: { customers: [], companies: [], orders: [], employees: [], folders: [] },
       optionsLoading: false,
       showLinkDialog: false,
@@ -244,10 +246,12 @@ const MailWorkspace = {
       window.setTimeout(resize, 900);
     },
     async request(path, options = {}) {
+      const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+      const { headers: optionHeaders = {}, ...fetchOptions } = options;
       const response = await fetch(path, {
         credentials: 'include',
-        headers: { 'content-type': 'application/json', ...(options.headers || {}) },
-        ...options,
+        headers: { ...(isFormData ? {} : { 'content-type': 'application/json' }), ...optionHeaders },
+        ...fetchOptions,
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload?.errors?.[0]?.message || payload?.message || `HTTP ${response.status}`);
@@ -438,6 +442,7 @@ const MailWorkspace = {
         customer_id: thread?.customer_id || null,
         company_id: thread?.company_id || null,
         order_id: thread?.order_id || null,
+        attachments: [],
       };
       this.showComposer = true;
     },
@@ -620,9 +625,57 @@ const MailWorkspace = {
         subject: thread ? (/^re:/i.test(thread.subject) ? thread.subject : `Re: ${thread.subject}`) : '',
         body: '',
         include_signature: true,
+        attachments: [],
       };
       this.showComposer = true;
       this.notice = '';
+    },
+
+    chooseComposerAttachments() {
+      this.$refs.composerAttachmentInput?.click();
+    },
+
+    addComposerAttachments(files) {
+      const incoming = Array.from(files || []);
+      if (!incoming.length) return;
+      const maxFiles = 10;
+      const maxFileBytes = 15 * 1024 * 1024;
+      const maxTotalBytes = 20 * 1024 * 1024;
+      const current = Array.isArray(this.composer.attachments) ? this.composer.attachments : [];
+      const accepted = [...current];
+      for (const file of incoming) {
+        if (accepted.length >= maxFiles) {
+          this.error = `К одному письму можно прикрепить не более ${maxFiles} файлов.`;
+          break;
+        }
+        if (file.size > maxFileBytes) {
+          this.error = `Файл «${file.name}» больше 15 МБ.`;
+          continue;
+        }
+        const duplicate = accepted.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified);
+        if (duplicate) continue;
+        const nextTotal = accepted.reduce((sum, item) => sum + Number(item.size || 0), 0) + file.size;
+        if (nextTotal > maxTotalBytes) {
+          this.error = 'Общий размер вложений не должен превышать 20 МБ.';
+          break;
+        }
+        accepted.push(file);
+      }
+      this.composer.attachments = accepted;
+      if (this.$refs.composerAttachmentInput) this.$refs.composerAttachmentInput.value = '';
+    },
+
+    onComposerAttachmentInput(event) {
+      this.addComposerAttachments(event?.target?.files);
+    },
+
+    onComposerAttachmentDrop(event) {
+      this.composerDragging = false;
+      this.addComposerAttachments(event?.dataTransfer?.files);
+    },
+
+    removeComposerAttachment(index) {
+      this.composer.attachments.splice(index, 1);
     },
 
     async sendMessage() {
@@ -630,9 +683,15 @@ const MailWorkspace = {
       this.sending = true;
       this.error = '';
       try {
+        const form = new FormData();
+        Object.entries(this.composer).forEach(([key, value]) => {
+          if (key === 'attachments' || value === null || value === undefined) return;
+          form.append(key, typeof value === 'boolean' ? String(value) : value);
+        });
+        this.composer.attachments.forEach((file) => form.append('attachments', file, file.name));
         const result = await this.request('/symbolika-mail/send', {
           method: 'POST',
-          body: JSON.stringify(this.composer),
+          body: form,
         });
         this.showComposer = false;
         this.notice = result.delivered
@@ -1019,6 +1078,22 @@ const MailWorkspace = {
         .symbolika-mail-field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .symbolika-mail-address-grid { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(280px, 1.2fr); gap: 12px; }
         .symbolika-mail-compose-hint { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-block-start: -3px; color: var(--theme--foreground-subdued); font-size: 9px; }
+        .symbolika-mail-file-input { position: fixed; inline-size: 1px; block-size: 1px; opacity: 0; pointer-events: none; }
+        .symbolika-mail-compose-attachments { margin-block: 12px; border: 1px dashed var(--theme--border-color); border-radius: 12px; background: color-mix(in srgb, var(--theme--background-subdued) 88%, transparent); transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
+        .symbolika-mail-compose-attachments.is-dragging { border-color: #F97316; background: rgb(249 115 22 / .10); box-shadow: inset 0 0 0 2px rgb(249 115 22 / .12); }
+        .symbolika-mail-attachment-picker { display: flex; align-items: center; gap: 10px; inline-size: 100%; padding: 12px 14px; border: 0; border-radius: 12px; background: transparent; color: var(--theme--foreground); text-align: start; cursor: pointer; }
+        .symbolika-mail-attachment-picker > .v-icon { color: #F97316; }
+        .symbolika-mail-attachment-picker span, .symbolika-mail-attachment-picker strong, .symbolika-mail-attachment-picker small { display: block; }
+        .symbolika-mail-attachment-picker strong { font-size: 12px; }
+        .symbolika-mail-attachment-picker small { margin-block-start: 2px; color: var(--theme--foreground-subdued); font-size: 9px; font-weight: 550; }
+        .symbolika-mail-compose-file-list { display: grid; gap: 6px; padding: 0 10px 10px; }
+        .symbolika-mail-compose-file { display: grid; grid-template-columns: 26px minmax(0, 1fr) 28px; align-items: center; gap: 8px; min-inline-size: 0; padding: 7px 8px; border: 1px solid var(--theme--border-color-subdued); border-radius: 9px; background: var(--theme--background-normal); }
+        .symbolika-mail-compose-file > .v-icon { color: #FB923C; }
+        .symbolika-mail-compose-file span, .symbolika-mail-compose-file strong, .symbolika-mail-compose-file small { display: block; min-inline-size: 0; }
+        .symbolika-mail-compose-file strong { overflow: hidden; color: var(--theme--foreground); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+        .symbolika-mail-compose-file small { margin-block-start: 1px; color: var(--theme--foreground-subdued); font-size: 9px; }
+        .symbolika-mail-compose-file button { display: grid; place-items: center; inline-size: 28px; block-size: 28px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--theme--foreground-subdued); cursor: pointer; }
+        .symbolika-mail-compose-file button:hover { background: rgb(244 63 94 / .12); color: #FB7185; }
         .symbolika-mail-help { margin: 0 0 16px; padding: 11px 13px; border: 1px solid rgb(249 115 22 / .28); border-radius: 10px; background: rgb(249 115 22 / .07); color: var(--theme--foreground-subdued); font-size: 12px; line-height: 1.5; }
         .symbolika-mail-signature-preview { margin-block: 9px 14px; padding: 12px; border-inline-start: 3px solid #F97316; background: var(--theme--background-subdued); color: var(--theme--foreground-subdued); font-size: 12px; white-space: pre-wrap; }
         .symbolika-mail-signature-preview small { display: block; margin-block-end: 7px; color: #FB923C; font-size: 9px; font-weight: 850; text-transform: uppercase; }
@@ -1499,8 +1574,29 @@ const MailWorkspace = {
                 <label class="symbolika-mail-field">Кому<input v-model.trim="composer.to" class="symbolika-mail-input" type="text" placeholder="client@example.ru" required /></label>
               </div>
               <label class="symbolika-mail-field">Тема<input v-model.trim="composer.subject" class="symbolika-mail-input" type="text" required /></label>
-              <label class="symbolika-mail-field">Сообщение<textarea v-model="composer.body" class="symbolika-mail-textarea" placeholder="Введите текст письма…" spellcheck="true" required @keydown.ctrl.enter.prevent="sendMessage"></textarea></label>
+              <label class="symbolika-mail-field">Сообщение<textarea v-model="composer.body" class="symbolika-mail-textarea" placeholder="Введите текст письма…" spellcheck="true" :required="!composer.attachments.length" @keydown.ctrl.enter.prevent="sendMessage"></textarea></label>
               <div class="symbolika-mail-compose-hint"><span>Ctrl + Enter — отправить</span><span>{{ composer.body.length }} символов</span></div>
+              <input ref="composerAttachmentInput" class="symbolika-mail-file-input" type="file" multiple @change="onComposerAttachmentInput" />
+              <section
+                class="symbolika-mail-compose-attachments"
+                :class="{ 'is-dragging': composerDragging }"
+                @dragenter.prevent="composerDragging = true"
+                @dragover.prevent="composerDragging = true"
+                @dragleave.prevent="composerDragging = false"
+                @drop.prevent="onComposerAttachmentDrop"
+              >
+                <button type="button" class="symbolika-mail-attachment-picker" @click="chooseComposerAttachments">
+                  <v-icon name="attach_file" small />
+                  <span><strong>Прикрепить файлы</strong><small>Перетащите сюда или выберите на компьютере · до 10 файлов, всего до 20 МБ</small></span>
+                </button>
+                <div v-if="composer.attachments.length" class="symbolika-mail-compose-file-list">
+                  <div v-for="(file, index) in composer.attachments" :key="file.name + ':' + file.size + ':' + file.lastModified" class="symbolika-mail-compose-file">
+                    <v-icon name="description" small />
+                    <span><strong>{{ file.name }}</strong><small>{{ formatBytes(file.size) }}</small></span>
+                    <button type="button" title="Убрать вложение" @click="removeComposerAttachment(index)"><v-icon name="close" small /></button>
+                  </div>
+                </div>
+              </section>
               <label class="symbolika-mail-checkbox"><input v-model="composer.include_signature" type="checkbox" /> Добавить мою подпись</label>
               <div v-if="composer.include_signature && actor?.signature" class="symbolika-mail-signature-preview"><small>Подпись</small><div v-html="actor.signature"></div></div>
               <span v-if="mode === 'mock'" class="symbolika-mail-mode"><v-icon name="science" small /> Письмо сохранится только в тестовой почте</span>

@@ -1,6 +1,7 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
+import Busboy from 'busboy';
 import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
@@ -16,6 +17,9 @@ const BRAND_LOGO_URL = 'https://symbcorp.ru/symbolika-mail/brand-logo.png';
 const SIGNATURE_ICON_BASE_URL = 'https://symbcorp.ru/symbolika-mail/signature-icon';
 const LEGACY_BRAND_LOGO_URL = 'https://static.tildacdn.com/tild6465-3739-4736-b565-653037393965/2.png';
 const BACKGROUND_SYNC_STATE_KEY = Symbol.for('symbolika.mail.background-sync');
+const DEFAULT_ATTACHMENT_MAX_FILES = 10;
+const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = 15 * 1024 * 1024;
+const DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES = 20 * 1024 * 1024;
 
 function cleanText(value, max = 5000) {
   return String(value ?? '').trim().slice(0, max);
@@ -225,6 +229,76 @@ export default {
   id: 'symbolika-mail',
   handler: (router, { database, env, logger }) => {
     let smtpTransport = null;
+
+    const attachmentLimits = () => ({
+      files: Math.min(Math.max(Number(env?.SYMBOLIKA_MAIL_ATTACHMENT_MAX_FILES || DEFAULT_ATTACHMENT_MAX_FILES), 1), 30),
+      fileBytes: Math.min(Math.max(Number(env?.SYMBOLIKA_MAIL_ATTACHMENT_MAX_FILE_MB || (DEFAULT_ATTACHMENT_MAX_FILE_BYTES / 1024 / 1024)), 1), 50) * 1024 * 1024,
+      totalBytes: Math.min(Math.max(Number(env?.SYMBOLIKA_MAIL_ATTACHMENT_MAX_TOTAL_MB || (DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES / 1024 / 1024)), 1), 75) * 1024 * 1024,
+    });
+
+    const outgoingPayload = (req) => {
+      if (!String(req.headers?.['content-type'] || '').toLowerCase().startsWith('multipart/form-data')) {
+        return Promise.resolve({ fields: req.body || {}, attachments: [] });
+      }
+      const limits = attachmentLimits();
+      return new Promise((resolve, reject) => {
+        const fields = {};
+        const attachments = [];
+        let totalBytes = 0;
+        let failed = null;
+        let parser;
+        try {
+          parser = Busboy({
+            headers: req.headers,
+            limits: { files: limits.files, fileSize: limits.fileBytes, fields: 80, fieldSize: 250000 },
+          });
+        } catch (error) {
+          reject(error);
+          return;
+        }
+        parser.on('field', (name, value) => {
+          fields[name] = value;
+        });
+        parser.on('file', (name, stream, info = {}) => {
+          if (name !== 'attachments') {
+            stream.resume();
+            return;
+          }
+          const chunks = [];
+          let fileBytes = 0;
+          stream.on('data', (chunk) => {
+            fileBytes += chunk.length;
+            totalBytes += chunk.length;
+            if (totalBytes > limits.totalBytes) {
+              failed ||= new Error(`Общий размер вложений не должен превышать ${Math.round(limits.totalBytes / 1024 / 1024)} МБ.`);
+              return;
+            }
+            chunks.push(chunk);
+          });
+          stream.on('limit', () => {
+            failed ||= new Error(`Размер одного вложения не должен превышать ${Math.round(limits.fileBytes / 1024 / 1024)} МБ.`);
+          });
+          stream.on('end', () => {
+            if (failed || !fileBytes) return;
+            attachments.push({
+              filename: safeAttachmentName(info.filename || 'Вложение'),
+              contentType: cleanText(info.mimeType || 'application/octet-stream', 255),
+              size: fileBytes,
+              content: Buffer.concat(chunks, fileBytes),
+            });
+          });
+        });
+        parser.on('filesLimit', () => {
+          failed ||= new Error(`К одному письму можно прикрепить не более ${limits.files} файлов.`);
+        });
+        parser.on('error', reject);
+        parser.on('finish', () => {
+          if (failed) reject(failed);
+          else resolve({ fields, attachments });
+        });
+        req.pipe(parser);
+      });
+    };
 
     router.get('/brand-logo.png', (req, res, next) => {
       res.set({
@@ -922,11 +996,20 @@ export default {
       try {
         const actor = await actorContext(req, res);
         if (!actor) return;
+        let parsedPayload;
+        try {
+          parsedPayload = await outgoingPayload(req);
+        } catch (error) {
+          return apiError(res, 400, cleanText(error?.message, 1000) || 'Не удалось прочитать вложения письма.');
+        }
+        req.body = parsedPayload.fields;
+        req.body.include_signature = String(req.body.include_signature ?? 'true') !== 'false';
+        const outgoingAttachments = parsedPayload.attachments;
         const to = cleanText(req.body?.to, 2000).split(/[;,]/).map((value) => value.trim().toLowerCase()).filter(Boolean);
         if (!to.length || to.some((email) => !EMAIL_PATTERN.test(email))) return apiError(res, 400, 'Укажите корректный адрес получателя.');
         const subject = cleanText(req.body?.subject || '(без темы)', 2000);
         const body = cleanText(req.body?.body, 200000);
-        if (!body) return apiError(res, 400, 'Введите текст письма.');
+        if (!body && !outgoingAttachments.length) return apiError(res, 400, 'Введите текст письма или прикрепите файл.');
 
         const replyThread = req.body?.thread_id ? await accessibleThread(req.body.thread_id, actor) : null;
         const requestedFolderId = Number(req.body?.folder_id || replyThread?.folder_id || 0);
@@ -968,6 +1051,11 @@ export default {
               subject,
               text: deliveredBody,
               html: deliveredHtml,
+              attachments: outgoingAttachments.map((file) => ({
+                filename: file.filename,
+                content: file.content,
+                contentType: file.contentType,
+              })),
               inReplyTo: replyThread?.external_thread_id?.startsWith('<') ? replyThread.external_thread_id : undefined,
             });
           } catch (error) {
@@ -1008,6 +1096,7 @@ export default {
             date_updated: new Date(),
           });
         }
+        const savedAttachments = await persistAttachments({ attachments: outgoingAttachments });
         await database('symbolika_mail_messages').insert({
           thread_id: threadId,
           message_id: messageId,
@@ -1020,7 +1109,7 @@ export default {
           subject,
           body_text: deliveredBody,
           body_html: deliveredHtml,
-          attachments: '[]',
+          attachments: JSON.stringify(savedAttachments),
           is_read: true,
           is_test: mailMode() !== 'imap',
           author_user: actor.user_id,

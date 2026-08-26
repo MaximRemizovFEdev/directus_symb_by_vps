@@ -11010,9 +11010,9 @@ export const CostingModule = {
         <tr>
           <td>${index + 1}</td>
           <td>${this.escapeHtml(item.product_name || '')}</td>
-          <td class="num">${this.escapeHtml(this.formatQuantity(item.quantity))}</td>
-          <td class="num">${this.escapeHtml(this.formatMoney(item.price_per_unit))}</td>
-          <td class="num">${this.escapeHtml(this.formatMoney(item.line_sum || this.parseMoney(item.quantity) * this.parseMoney(item.price_per_unit)))}</td>
+          <td class="num">${this.escapeHtml(this.excelNumber(item.quantity))}</td>
+          <td class="num">${this.escapeHtml(this.excelNumber(item.price_per_unit))}</td>
+          <td class="num">${this.escapeHtml(this.excelNumber(item.line_sum || this.parseMoney(item.quantity) * this.parseMoney(item.price_per_unit)))}</td>
           <td>${this.escapeHtml(this.formatDate(item.deadline || row.deadline))}</td>
           <td>${this.escapeHtml(item.technical_task_text || '')}</td>
           <td>${this.escapeHtml(item.url || '')}</td>
@@ -11031,7 +11031,7 @@ export const CostingModule = {
               th { background: #f97316; color: #111827; text-align: left; font-weight: 700; }
               th, td { border: 1px solid #d1d5db; padding: 8px 10px; font-size: 14px; vertical-align: top; }
               tr:nth-child(even) td { background: #f9fafb; }
-              .num { text-align: right; }
+              .num { text-align: right; mso-number-format: "\#\ ##0\,00"; }
               .total td { font-weight: 700; background: #fff7ed; }
             </style>
           </head>
@@ -11060,7 +11060,7 @@ export const CostingModule = {
                 ${tableRows}
                 <tr class="total">
                   <td colspan="4">Итого</td>
-                  <td class="num">${this.escapeHtml(this.formatMoney(total))}</td>
+                  <td class="num">${this.escapeHtml(this.excelNumber(total))}</td>
                   <td colspan="3"></td>
                 </tr>
               </tbody>
@@ -12637,10 +12637,10 @@ export const CostingModule = {
       if (!rows.length) return;
 
       const headers = Object.keys(rows[0]);
-      const csv = [
-        headers.join(';'),
-        ...rows.map((row) => headers.map((header) => this.csvCell(row[header])).join(';')),
-      ].join('\n');
+      const totals = this.exportTotalsRow(rows, headers);
+      const csvRows = rows.map((row) => headers.map((header) => this.csvCell(row[header], header)).join(';'));
+      if (totals) csvRows.push(headers.map((header) => this.csvCell(totals[header], header)).join(';'));
+      const csv = [headers.map((header) => this.csvCell(header)).join(';'), ...csvRows].join('\n');
 
       const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' });
       const link = document.createElement('a');
@@ -12797,11 +12797,11 @@ export const CostingModule = {
           <td>${this.escapeHtml(row.counterparty_name || row.customer_name || '')}</td>
           <td>${this.escapeHtml(row.customer_company_name || '')}</td>
           <td>${this.escapeHtml(row.product_name || '')}</td>
-          <td class="num">${this.escapeHtml(this.formatQuantity(row.quantity))}</td>
-          <td class="num">${this.escapeHtml(this.formatMoney(row.price_per_unit))}</td>
-          <td class="num">${this.escapeHtml(this.formatMoney(row.item_sum))}</td>
-          <td class="num">${this.escapeHtml(this.formatMoney(row.item_paid_amount))}</td>
-          <td class="num">${this.escapeHtml(this.formatMoney(row.item_payment_due))}</td>
+          <td class="num">${this.escapeHtml(this.excelNumber(row.quantity))}</td>
+          <td class="num">${this.escapeHtml(this.excelNumber(row.price_per_unit))}</td>
+          <td class="num">${this.escapeHtml(this.excelNumber(row.item_sum))}</td>
+          <td class="num">${this.escapeHtml(this.excelNumber(row.item_paid_amount))}</td>
+          <td class="num">${this.escapeHtml(this.excelNumber(row.item_payment_due))}</td>
           <td>${this.escapeHtml(row.order_status_name || '')}</td>
         </tr>
       `).join('');
@@ -12854,10 +12854,10 @@ export const CostingModule = {
                 ${tableRows}
                 <tr class="total">
                   <td colspan="8">Итого</td>
-                  <td class="num">${this.escapeHtml(this.formatMoney(totals.item_sum))}</td>
-                  <td class="num">${this.escapeHtml(this.formatMoney(totals.paid))}</td>
-                  <td class="num">${this.escapeHtml(this.formatMoney(totals.due))}</td>
-                  <td>${totals.overpayment > 0 ? `Переплата ${this.escapeHtml(this.formatMoney(totals.overpayment))}` : ''}</td>
+                  <td class="num">${this.escapeHtml(this.excelNumber(totals.item_sum))}</td>
+                  <td class="num">${this.escapeHtml(this.excelNumber(totals.paid))}</td>
+                  <td class="num">${this.escapeHtml(this.excelNumber(totals.due))}</td>
+                  <td>${totals.overpayment > 0 ? `Переплата ${this.escapeHtml(this.excelNumber(totals.overpayment))}` : ''}</td>
                 </tr>
               </tbody>
             </table>
@@ -13400,7 +13400,57 @@ export const CostingModule = {
       }));
     },
 
-    csvCell(value) {
+    exportColumnIsNumeric(header) {
+      const normalized = String(header || '').toLowerCase().replace(/[\s_-]+/g, '');
+      return [
+        'количество', 'колво', 'позиций', 'заказов', 'клиентов',
+        'цена', 'сумма', 'суммапозиции', 'суммазаказа', 'суммазаказов',
+        'выручка', 'номинал', 'остаток', 'остатокпозаказу', 'баланс',
+        'оплачено', 'оплаченопозаказу', 'оплаченоклиентами', 'неоплаченоклиентами',
+        'переплата', 'начислено', 'выплачено', 'авансы', 'долг',
+        'себестоимость', 'себестоимость1', 'себестоимость2',
+        'процентменеджера', 'проценты', 'налоги', 'прибыль',
+        'работ', 'работы', 'мыдолжны', 'намдолжны', 'нашдолг', 'долгнам',
+        'чистаяприбыль', 'расходы', 'зпиавансы', 'прочиерасходы', 'итог',
+      ].includes(normalized);
+    },
+
+    exportNumberValue(value) {
+      if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+      const normalized = String(value ?? '')
+        .trim()
+        .replace(/[\s\u00A0\u202F]/g, '')
+        .replace(/[₽]/g, '')
+        .replace(',', '.');
+      if (!normalized || !/^[+-]?\d+(?:\.\d+)?$/.test(normalized)) return null;
+      const result = Number(normalized);
+      return Number.isFinite(result) ? result : null;
+    },
+
+    excelNumber(value) {
+      const number = this.exportNumberValue(value);
+      return number === null ? '' : String(number).replace('.', ',');
+    },
+
+    exportTotalsRow(rows, headers) {
+      const numericHeaders = headers.filter((header) => (
+        this.exportColumnIsNumeric(header)
+        && rows.some((row) => this.exportNumberValue(row[header]) !== null)
+      ));
+      if (!numericHeaders.length) return null;
+      const totals = Object.fromEntries(headers.map((header) => [header, '']));
+      totals[headers[0]] = 'Итого';
+      numericHeaders.forEach((header) => {
+        totals[header] = rows.reduce((sum, row) => sum + (this.exportNumberValue(row[header]) || 0), 0);
+      });
+      return totals;
+    },
+
+    csvCell(value, header = '') {
+      if (this.exportColumnIsNumeric(header)) {
+        const number = this.exportNumberValue(value);
+        if (number !== null) return String(number).replace('.', ',');
+      }
       return `"${String(value ?? '').replace(/"/g, '""')}"`;
     },
 
