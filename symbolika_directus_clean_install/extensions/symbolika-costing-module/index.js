@@ -9821,12 +9821,33 @@ export const CostingModule = {
       });
       if (!matches.length) return [];
       const specificity = (row) => (this.entityId(row.product_subcategory) ? 2 : 0)
-        + (this.entityId(row.application_method) ? 2 : 0);
+        + (this.entityId(row.application_method) ? 4 : 0);
       const best = Math.max(...matches.map(specificity));
       return matches.filter((row) => specificity(row) === best);
     },
 
+    fixedInternalExecutor(item) {
+      const methodId = Number(this.entityId(item?.application_method) || 0);
+      const method = (this.applicationMethods || []).find((row) => Number(row.id) === methodId);
+      const methodName = String(method?.name || '').trim().toLocaleLowerCase('ru-RU');
+      let contractorName = '';
+      if (['цифровая печать', 'вышивка', 'гравировка'].includes(methodName)) {
+        contractorName = 'собственное производство';
+      } else if (['шелкография', 'шелкография с трансфером'].includes(methodName)) {
+        contractorName = 'шелкография';
+      }
+      if (!contractorName) return null;
+      return (this.contractors || []).find((contractor) => (
+        String(contractor?.name || '').trim().toLocaleLowerCase('ru-RU') === contractorName
+        && (contractor.approval_status || 'approved') === 'approved'
+      )) || null;
+    },
+
     capabilityContractorOptions(item, capabilityType) {
+      if (capabilityType === 'executor') {
+        const fixedExecutor = this.fixedInternalExecutor(item);
+        if (fixedExecutor) return [fixedExecutor];
+      }
       const contractorIds = [...new Set(this.matchingCapabilities(item, capabilityType)
         .map((row) => Number(this.entityId(row.contractor) || 0))
         .filter(Boolean))];

@@ -38,6 +38,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
   let pushTableReady = false;
   let workNotificationTableReady = false;
   let customerMailTransport = null;
+  const managementAlertsStartedAt = new Date();
 
   async function recordAutomationRun(handlerKey, title, status, context = {}, error = null) {
     try {
@@ -242,6 +243,14 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       .select('id');
 
     return users.map((user) => user.id).filter(Boolean);
+  }
+
+  async function getManagementUserIds() {
+    const [administrators, managers] = await Promise.all([
+      getRoleUserIds('Administrator'),
+      getRoleUserIds('\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u044e\u0449\u0438\u0439'),
+    ]);
+    return Array.from(new Set([...administrators, ...managers].filter(Boolean)));
   }
 
   async function getEmployeeUserId(employeeId) {
@@ -929,7 +938,10 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     }
   }
 
-  if (typeof schedule === 'function') schedule('5 * * * *', safelyRunBirthdayNotifications);
+  if (typeof schedule === 'function') {
+    schedule('5 * * * *', safelyRunBirthdayNotifications);
+    schedule('* * * * *', safelyScanNewProcurementAlerts);
+  }
   const birthdayStartupTimer = setTimeout(safelyRunBirthdayNotifications, 15000);
   birthdayStartupTimer.unref?.();
 
@@ -1407,6 +1419,127 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     }
   }
 
+  async function clearManagementAlertMarker(entityId, channel) {
+    if (!entityId || !channel || !await ensureWorkNotificationTable()) return;
+    await database('symbolika_work_assignment_notifications')
+      .where({ item: entityId, channel })
+      .delete();
+  }
+
+  async function notifyManagementLaunchNeeded(item) {
+    if (!item?.id) return;
+    const channel = 'management_launch';
+
+    if (String(item.item_status || '') !== 'sent_to_work') {
+      await clearManagementAlertMarker(item.id, channel);
+      return;
+    }
+
+    // contractor_2 is the work executor when the position also has a blank
+    // supplier. Otherwise contractor_1 is the executor. Internal workshops
+    // already receive their own production alerts.
+    const executorId = item.contractor_2 || item.contractor_1;
+    if (!executorId) return;
+    const executor = await database('contractors')
+      .where({ id: executorId })
+      .select('id', 'name', 'is_internal_production')
+      .first();
+    if (!executor || executor.is_internal_production || getWorkNotificationTarget(executor.name)) {
+      await clearManagementAlertMarker(item.id, channel);
+      return;
+    }
+
+    const recipients = await getManagementUserIds();
+    if (!recipients.length) return;
+    const shouldNotify = await markWorkAssignmentNotified(item.id, channel);
+    if (!shouldNotify) return;
+
+    const context = await getItemNotificationContext(item);
+    const orderLabel = context?.order_number || await getOrderLabel(item.order);
+    const subject = `\u041d\u0443\u0436\u043d\u043e \u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0443 \u043f\u043e\u0434\u0440\u044f\u0434\u0447\u0438\u043a\u0430 \u00b7 ${orderLabel}`;
+    const message = [
+      buildItemNotificationMessage(context),
+      `\u0418\u0441\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c: ${executor.name}`,
+      '\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u0435: \u043f\u0435\u0440\u0435\u0434\u0430\u0439\u0442\u0435 \u0422\u0417 \u043f\u043e\u0434\u0440\u044f\u0434\u0447\u0438\u043a\u0443 \u0438 \u043f\u043e\u0441\u0442\u0430\u0432\u044c\u0442\u0435 \u0441\u0442\u0430\u0442\u0443\u0441 \u00ab\u0412 \u0440\u0430\u0431\u043e\u0442\u0435\u00bb.',
+    ].filter(Boolean).join('\n');
+
+    await notifyUsers(recipients, subject, message, 'orders_items', item.id, 'production');
+  }
+
+  const PROCUREMENT_SECTION_LABELS = {
+    production: '\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u043e',
+    screen_printing: '\u0428\u0435\u043b\u043a\u043e\u0433\u0440\u0430\u0444\u0438\u044f',
+    office: '\u041e\u0444\u0438\u0441',
+    general: '\u041e\u0431\u0449\u0435\u0435',
+  };
+
+  async function getProcurementNotificationContext(requestId) {
+    return await database('procurement_requests as pr')
+      .leftJoin('contractors as supplier', 'supplier.id', 'pr.supplier')
+      .leftJoin('orders as o', 'o.id', 'pr.related_order')
+      .leftJoin('procurement_batches as pb', 'pb.id', 'pr.procurement_batch')
+      .leftJoin('employees as requester', 'requester.id', 'pr.requested_by_employee')
+      .where('pr.id', requestId)
+      .select(
+        'pr.*',
+        'supplier.name as supplier_name',
+        'o.order_number',
+        'pb.batch_number',
+        'requester.full_name as requester_name',
+      )
+      .first();
+  }
+
+  async function notifyManagementProcurementNeeded(requestOrId) {
+    const requestId = Number(requestOrId?.id || requestOrId || 0);
+    if (!requestId) return;
+    const request = await getProcurementNotificationContext(requestId);
+    if (!request || String(request.status || '') !== 'need_order') return;
+
+    const recipients = await getManagementUserIds();
+    if (!recipients.length) return;
+    const shouldNotify = await markWorkAssignmentNotified(requestId, 'management_procurement');
+    if (!shouldNotify) return;
+
+    const productName = notificationText(request.product_name, 300) || `\u0437\u0430\u044f\u0432\u043a\u0430 #${request.id}`;
+    const quantity = `${formatCustomerQuantity(request.quantity)} ${request.unit || '\u0448\u0442.'}`;
+    const supplier = request.supplier_name || request.purchase_place || '\u043d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d';
+    const total = round(num(request.quantity) * num(request.estimated_cost));
+    const subject = `\u041d\u043e\u0432\u0430\u044f \u0437\u0430\u043a\u0443\u043f\u043a\u0430 \u00b7 ${productName}`;
+    const message = [
+      request.batch_number ? `\u0417\u0430\u043a\u0443\u043f\u043a\u0430: ${request.batch_number}` : '',
+      `\u0427\u0442\u043e \u043a\u0443\u043f\u0438\u0442\u044c: ${productName} \u00b7 ${quantity}`,
+      `\u041f\u043e\u0441\u0442\u0430\u0432\u0449\u0438\u043a: ${supplier}`,
+      `\u0423\u0447\u0430\u0441\u0442\u043e\u043a: ${PROCUREMENT_SECTION_LABELS[request.section] || request.section || '\u041e\u0431\u0449\u0435\u0435'}`,
+      request.order_number ? `\u0417\u0430\u043a\u0430\u0437: ${request.order_number}` : '',
+      request.requester_name ? `\u0417\u0430\u044f\u0432\u0438\u0442\u0435\u043b\u044c: ${request.requester_name}` : '',
+      request.pickup_deadline ? `\u0421\u0440\u043e\u043a \u043f\u043e\u043b\u0443\u0447\u0435\u043d\u0438\u044f: ${formatNotificationDate(request.pickup_deadline)}` : '',
+      total > 0 ? `\u041f\u043b\u0430\u043d\u043e\u0432\u0430\u044f \u0441\u0443\u043c\u043c\u0430: ${formatCustomerMoney(total)}` : '',
+      request.product_url ? `\u0422\u043e\u0432\u0430\u0440: ${request.product_url}` : '',
+      request.comment ? `\u041a\u043e\u043c\u043c\u0435\u043d\u0442\u0430\u0440\u0438\u0439: ${notificationText(request.comment, 600)}` : '',
+    ].filter(Boolean).join('\n');
+
+    await notifyUsers(recipients, subject, message, 'procurement_requests', request.id, 'procurement');
+  }
+
+  async function scanNewProcurementAlerts() {
+    const requests = await database('procurement_requests')
+      .where({ status: 'need_order' })
+      .andWhere('date_created', '>=', managementAlertsStartedAt)
+      .select('id');
+    for (const request of requests) await notifyManagementProcurementNeeded(request.id);
+  }
+
+  async function safelyScanNewProcurementAlerts() {
+    try {
+      await scanNewProcurementAlerts();
+      await recordAutomationRun('management_procurement_alerts', '\u0423\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f \u043e \u043d\u043e\u0432\u044b\u0445 \u0437\u0430\u043a\u0443\u043f\u043a\u0430\u0445', 'ok');
+    } catch (error) {
+      logger.error(error);
+      await recordAutomationRun('management_procurement_alerts', '\u0423\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f \u043e \u043d\u043e\u0432\u044b\u0445 \u0437\u0430\u043a\u0443\u043f\u043a\u0430\u0445', 'error', {}, error);
+    }
+  }
+
   async function notifyItemCancellationChanged(item, prevItem = null) {
     if (!item?.id) return;
     const status = String(item.item_status || '');
@@ -1490,6 +1623,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     for (const item of items) {
       await syncDesignerTask(item);
       await notifyNewProductionAssignments(item);
+      await notifyManagementLaunchNeeded(item);
     }
   }
 
@@ -2372,6 +2506,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
         : null;
         await syncDesignerTask(item, null, { notifyOnRequest: true });
         await notifyNewProductionAssignments(item);
+        await notifyManagementLaunchNeeded(item);
         await notifyItemCancellationChanged(item);
       await notifyLayoutRevisionIfNeeded(item);
       await recalcOrder(orderId);
@@ -2406,6 +2541,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
           : null;
         await syncDesignerTask(item, prevItem);
         await notifyNewProductionAssignments(item, prevItem);
+        await notifyManagementLaunchNeeded(item);
         await notifyItemCancellationChanged(item, prevItem);
         await notifyLayoutRevisionIfNeeded(item, prevItem);
         await recalcOrder(orderId);
@@ -2489,10 +2625,12 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
         return;
       }
       if (collection === 'procurement_requests') {
-        const request = await database('procurement_requests').where({ id: key }).select('task_order_id').first();
-        if (!request?.task_order_id) return;
-        const task = await database('symbolika_tasks').where({ id: request.task_order_id }).first();
-        await notifyTaskParticipants(task);
+        const request = await database('procurement_requests').where({ id: key }).select('id', 'task_order_id').first();
+        if (request?.task_order_id) {
+          const task = await database('symbolika_tasks').where({ id: request.task_order_id }).first();
+          await notifyTaskParticipants(task);
+        }
+        await notifyManagementProcurementNeeded(request?.id || key);
       }
     } catch (error) {
       logger.error(error);

@@ -14765,6 +14765,37 @@ WHERE COALESCE(contractor.approval_status, 'approved') = 'approved'
   AND COALESCE(method.is_active, true)
 ON CONFLICT DO NOTHING;
 
+-- Fixed internal routes by application method. These routes are intentionally
+-- authoritative across product categories: the manager must not have to pick
+-- an executor for work that is always performed by an internal department.
+-- Keep this seed separate from the historical category routes above so newly
+-- added categories/method records receive the same routing on every deploy.
+WITH fixed_methods(method_name, contractor_name) AS (VALUES
+  (U&'\0426\0438\0444\0440\043e\0432\0430\044f \043f\0435\0447\0430\0442\044c', U&'\0421\043e\0431\0441\0442\0432\0435\043d\043d\043e\0435 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\043e'),
+  (U&'\0412\044b\0448\0438\0432\043a\0430', U&'\0421\043e\0431\0441\0442\0432\0435\043d\043d\043e\0435 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\043e'),
+  (U&'\0413\0440\0430\0432\0438\0440\043e\0432\043a\0430', U&'\0421\043e\0431\0441\0442\0432\0435\043d\043d\043e\0435 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\043e'),
+  (U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f'),
+  (U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f \0441 \0442\0440\0430\043d\0441\0444\0435\0440\043e\043c', U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f')
+)
+INSERT INTO contractor_capabilities (
+  contractor, capability_type, product_category, application_method,
+  priority, is_active
+)
+SELECT DISTINCT
+  contractor.id, 'executor', method.category, method.id, 1, true
+FROM fixed_methods fixed
+JOIN product_application_methods method
+  ON lower(trim(method.name)) = lower(trim(fixed.method_name))
+JOIN contractors contractor
+  ON lower(trim(contractor.name)) = lower(trim(fixed.contractor_name))
+WHERE method.category IS NOT NULL
+  AND COALESCE(method.is_active, true)
+  AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+ON CONFLICT (
+  contractor, capability_type, product_category,
+  (COALESCE(product_subcategory, 0)), (COALESCE(application_method, 0))
+) DO UPDATE SET priority = 1, is_active = true;
+
 CREATE OR REPLACE FUNCTION apply_category_contractors_trigger()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -14773,6 +14804,7 @@ DECLARE
   needs_blank boolean := false;
   executor_candidates integer[] := ARRAY[]::integer[];
   supplier_candidates integer[] := ARRAY[]::integer[];
+  fixed_executor integer;
 BEGIN
   IF TG_OP = 'INSERT'
      OR NEW.product_category IS DISTINCT FROM OLD.product_category
@@ -14807,10 +14839,32 @@ BEGIN
       NEW.application_method := NULL;
     END IF;
 
+    SELECT contractor.id
+      INTO fixed_executor
+    FROM product_application_methods method
+    JOIN contractors contractor ON lower(trim(contractor.name)) = lower(trim(
+      CASE
+        WHEN lower(trim(method.name)) IN (
+          lower(U&'\0426\0438\0444\0440\043e\0432\0430\044f \043f\0435\0447\0430\0442\044c'),
+          lower(U&'\0412\044b\0448\0438\0432\043a\0430'),
+          lower(U&'\0413\0440\0430\0432\0438\0440\043e\0432\043a\0430')
+        ) THEN U&'\0421\043e\0431\0441\0442\0432\0435\043d\043d\043e\0435 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\043e'
+        WHEN lower(trim(method.name)) IN (
+          lower(U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f'),
+          lower(U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f \0441 \0442\0440\0430\043d\0441\0444\0435\0440\043e\043c')
+        ) THEN U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f'
+        ELSE ''
+      END
+    ))
+    WHERE method.id = NEW.application_method
+      AND COALESCE(contractor.approval_status, 'approved') = 'approved'
+    ORDER BY contractor.id
+    LIMIT 1;
+
     WITH matching AS (
       SELECT capability.contractor,
         (CASE WHEN capability.product_subcategory IS NOT NULL THEN 2 ELSE 0 END
-         + CASE WHEN capability.application_method IS NOT NULL THEN 2 ELSE 0 END) AS specificity
+         + CASE WHEN capability.application_method IS NOT NULL THEN 4 ELSE 0 END) AS specificity
       FROM contractor_capabilities capability
       JOIN contractors contractor ON contractor.id = capability.contractor
       WHERE capability.capability_type = 'executor'
@@ -14825,12 +14879,18 @@ BEGIN
     FROM matching, best
     WHERE matching.specificity = best.specificity;
 
+    IF fixed_executor IS NOT NULL THEN
+      executor_candidates := ARRAY[fixed_executor];
+    END IF;
+
     IF needs_blank THEN
       IF NEW.blank_source IS NULL OR NEW.blank_source NOT IN ('supplier', 'customer', 'warehouse', 'contractor') THEN
         NEW.blank_source := 'supplier';
       END IF;
 
-      IF NEW.contractor_2 IS NULL AND cardinality(executor_candidates) = 1 THEN
+      IF fixed_executor IS NOT NULL THEN
+        NEW.contractor_2 := fixed_executor;
+      ELSIF NEW.contractor_2 IS NULL AND cardinality(executor_candidates) = 1 THEN
         NEW.contractor_2 := executor_candidates[1];
       ELSIF NEW.contractor_2 IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM contractors contractor
@@ -14844,7 +14904,7 @@ BEGIN
         WITH matching AS (
           SELECT capability.contractor,
             (CASE WHEN capability.product_subcategory IS NOT NULL THEN 2 ELSE 0 END
-             + CASE WHEN capability.application_method IS NOT NULL THEN 2 ELSE 0 END) AS specificity
+             + CASE WHEN capability.application_method IS NOT NULL THEN 4 ELSE 0 END) AS specificity
           FROM contractor_capabilities capability
           JOIN contractors contractor ON contractor.id = capability.contractor
           WHERE capability.capability_type = 'blank_supplier'
@@ -14878,7 +14938,9 @@ BEGIN
       NEW.blank_source := 'none';
       NEW.blank_ordered := false;
       NEW.contractor_2 := NULL;
-      IF NEW.contractor_1 IS NULL AND cardinality(executor_candidates) = 1 THEN
+      IF fixed_executor IS NOT NULL THEN
+        NEW.contractor_1 := fixed_executor;
+      ELSIF NEW.contractor_1 IS NULL AND cardinality(executor_candidates) = 1 THEN
         NEW.contractor_1 := executor_candidates[1];
       ELSIF NEW.contractor_1 IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM contractors contractor
@@ -14978,7 +15040,7 @@ BEGIN
     WITH matching AS (
       SELECT capability.contractor,
         (CASE WHEN capability.product_subcategory IS NOT NULL THEN 2 ELSE 0 END
-         + CASE WHEN capability.application_method IS NOT NULL THEN 2 ELSE 0 END) AS specificity
+         + CASE WHEN capability.application_method IS NOT NULL THEN 4 ELSE 0 END) AS specificity
       FROM contractor_capabilities capability
       JOIN contractors contractor ON contractor.id = capability.contractor
       WHERE capability.capability_type = 'executor'
@@ -15017,7 +15079,7 @@ BEGIN
       WITH matching AS (
         SELECT capability.contractor,
           (CASE WHEN capability.product_subcategory IS NOT NULL THEN 2 ELSE 0 END
-           + CASE WHEN capability.application_method IS NOT NULL THEN 2 ELSE 0 END) AS specificity
+           + CASE WHEN capability.application_method IS NOT NULL THEN 4 ELSE 0 END) AS specificity
         FROM contractor_capabilities capability
         JOIN contractors contractor ON contractor.id = capability.contractor
         WHERE capability.capability_type = 'blank_supplier'
@@ -15058,6 +15120,58 @@ CREATE TRIGGER symbolika_validate_item_route_for_work
 BEFORE INSERT OR UPDATE OF item_status, product_category, product_subcategory,
   application_method, blank_source, contractor_1, contractor_2 ON orders_items
 FOR EACH ROW EXECUTE FUNCTION symbolika_validate_item_route_for_work();
+
+-- Repair existing positions which were created before the fixed internal
+-- routes existed. Active work is normalized too, while completed, delivered
+-- and cancelled positions keep their historical executor.
+WITH fixed_routes AS (
+  SELECT
+    method.id AS application_method,
+    contractor.id AS contractor,
+    lower(trim(method.name)) AS method_name
+  FROM product_application_methods method
+  JOIN contractors contractor ON lower(trim(contractor.name)) = lower(trim(
+    CASE
+      WHEN lower(trim(method.name)) IN (
+        lower(U&'\0426\0438\0444\0440\043e\0432\0430\044f \043f\0435\0447\0430\0442\044c'),
+        lower(U&'\0412\044b\0448\0438\0432\043a\0430'),
+        lower(U&'\0413\0440\0430\0432\0438\0440\043e\0432\043a\0430')
+      ) THEN U&'\0421\043e\0431\0441\0442\0432\0435\043d\043d\043e\0435 \043f\0440\043e\0438\0437\0432\043e\0434\0441\0442\0432\043e'
+      WHEN lower(trim(method.name)) IN (
+        lower(U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f'),
+        lower(U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f \0441 \0442\0440\0430\043d\0441\0444\0435\0440\043e\043c')
+      ) THEN U&'\0428\0435\043b\043a\043e\0433\0440\0430\0444\0438\044f'
+      ELSE ''
+    END
+  ))
+  WHERE COALESCE(contractor.approval_status, 'approved') = 'approved'
+)
+UPDATE orders_items item
+SET contractor_1 = CASE
+      WHEN category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
+        OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%'
+        OR category.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%'
+      THEN item.contractor_1 ELSE route.contractor END,
+    contractor_2 = CASE
+      WHEN category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
+        OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%'
+        OR category.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%'
+      THEN route.contractor ELSE NULL END,
+    contractor_1_cost = CASE
+      WHEN category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
+        OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%'
+        OR category.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%'
+      THEN item.contractor_1_cost ELSE 0 END,
+    contractor_2_cost = CASE
+      WHEN category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
+        OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%'
+        OR category.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%'
+      THEN 0 ELSE item.contractor_2_cost END
+FROM fixed_routes route, product_categories category
+WHERE category.id = item.product_category
+  AND item.application_method = route.application_method
+  AND COALESCE(symbolika_normalize_item_status(item.item_status), 'new')
+      IN ('new', 'approval', 'layout_revision', 'sent_to_work', 'in_work');
 
 CREATE OR REPLACE FUNCTION symbolika_order_work_completion(order_id integer)
 RETURNS TABLE (
@@ -15319,7 +15433,7 @@ BEGIN
     WITH matching AS (
       SELECT capability.contractor,
         (CASE WHEN capability.product_subcategory IS NOT NULL THEN 2 ELSE 0 END
-         + CASE WHEN capability.application_method IS NOT NULL THEN 2 ELSE 0 END) AS specificity
+         + CASE WHEN capability.application_method IS NOT NULL THEN 4 ELSE 0 END) AS specificity
       FROM contractor_capabilities capability
       JOIN contractors contractor ON contractor.id = capability.contractor
       WHERE capability.capability_type = 'executor'
@@ -15350,7 +15464,7 @@ BEGIN
       WITH matching AS (
         SELECT capability.contractor,
           (CASE WHEN capability.product_subcategory IS NOT NULL THEN 2 ELSE 0 END
-           + CASE WHEN capability.application_method IS NOT NULL THEN 2 ELSE 0 END) AS specificity
+           + CASE WHEN capability.application_method IS NOT NULL THEN 4 ELSE 0 END) AS specificity
         FROM contractor_capabilities capability
         JOIN contractors contractor ON contractor.id = capability.contractor
         WHERE capability.capability_type = 'blank_supplier'
