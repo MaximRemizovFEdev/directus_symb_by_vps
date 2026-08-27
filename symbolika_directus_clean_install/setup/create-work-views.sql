@@ -5612,6 +5612,7 @@ WITH categories(name, detail_mode, sort) AS (VALUES
   (U&'\0422\043a\0430\043d\0438', 'subcategory', 80),
   (U&'\041a\043e\043d\0441\0442\0440\0443\043a\0446\0438\0438', 'subcategory', 90),
   (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', 'application_method', 100),
+  (U&'\041c\043e\043d\0442\0430\0436', 'none', 105),
   (U&'\0420\0430\0437\0440\0430\0431\043e\0442\043a\0430 \0434\0438\0437\0430\0439\043d\0430', 'none', 110)
 )
 INSERT INTO product_categories (name, detail_mode, sort, is_active)
@@ -5630,6 +5631,7 @@ WITH categories(name, detail_mode, sort) AS (VALUES
   (U&'\0422\043a\0430\043d\0438', 'subcategory', 80),
   (U&'\041a\043e\043d\0441\0442\0440\0443\043a\0446\0438\0438', 'subcategory', 90),
   (U&'\041d\0430\043d\0435\0441\0435\043d\0438\0435', 'application_method', 100),
+  (U&'\041c\043e\043d\0442\0430\0436', 'none', 105),
   (U&'\0420\0430\0437\0440\0430\0431\043e\0442\043a\0430 \0434\0438\0437\0430\0439\043d\0430', 'none', 110)
 )
 UPDATE product_categories pc
