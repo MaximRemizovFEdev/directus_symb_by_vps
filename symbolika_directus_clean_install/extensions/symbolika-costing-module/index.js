@@ -9481,6 +9481,8 @@ export const CostingModule = {
         product_subcategory: '',
         application_method: '',
         blank_source: 'none',
+        _show_all_blank_contractors: false,
+        _show_all_executor_contractors: false,
         contractor_1: '',
         contractor_1_cost: '',
         contractor_2: '',
@@ -9832,6 +9834,22 @@ export const CostingModule = {
       return this.capabilityContractorOptions(item, 'blank_supplier');
     },
 
+    contractorSelectionField(item, capabilityType) {
+      return capabilityType === 'blank_supplier' ? 'contractor_1' : this.executorField(item);
+    },
+
+    contractorOverrideFlag(capabilityType) {
+      return capabilityType === 'blank_supplier'
+        ? '_show_all_blank_contractors'
+        : '_show_all_executor_contractors';
+    },
+
+    approvedContractorOptions() {
+      return (this.contractors || [])
+        .filter((contractor) => contractor && (contractor.approval_status || 'approved') === 'approved')
+        .sort((left, right) => String(left.name || '').localeCompare(String(right.name || ''), 'ru'));
+    },
+
     matchingCapabilities(item, capabilityType) {
       const categoryId = Number(this.itemCategoryId(item) || 0);
       if (!categoryId) return [];
@@ -9869,7 +9887,7 @@ export const CostingModule = {
       )) || null;
     },
 
-    capabilityContractorOptions(item, capabilityType) {
+    recommendedContractorOptions(item, capabilityType) {
       if (capabilityType === 'executor') {
         const fixedExecutor = this.fixedInternalExecutor(item);
         if (fixedExecutor) return [fixedExecutor];
@@ -9880,26 +9898,59 @@ export const CostingModule = {
       const configured = contractorIds
         .map((id) => this.contractors.find((contractor) => Number(contractor.id) === id))
         .filter((contractor) => contractor && (contractor.approval_status || 'approved') === 'approved');
-      const approved = (this.contractors || [])
-        .filter((contractor) => contractor && (contractor.approval_status || 'approved') === 'approved');
 
-      // Routing capabilities narrow the manager's choice, but Administrator
-      // and Managing must be able to correct any route from the costing view.
-      // Returning the same complete list here also keeps a manual correction
-      // visible in the order and item cards instead of showing an empty select.
-      if (this.hasManagerOverrideAccess) return approved;
-      if (configured.length) return configured;
+      return configured;
+    },
 
-      // No capability means an unresolved route, not an invalid category.
-      // Other roles only see an already selected contractor and otherwise get
-      // the explicit fallback "Контрагент не определён".
-      const selectedField = capabilityType === 'blank_supplier'
-        ? 'contractor_1'
-        : this.executorField(item);
+    capabilityContractorOptions(item, capabilityType) {
+      const configured = this.recommendedContractorOptions(item, capabilityType);
+      const approved = this.approvedContractorOptions();
+      const selectedField = this.contractorSelectionField(item, capabilityType);
       const selectedId = Number(this.entityId(item?.[selectedField]) || 0);
+
+      if (this.hasManagerOverrideAccess && item?.[this.contractorOverrideFlag(capabilityType)]) {
+        return approved;
+      }
+      if (configured.length) {
+        if (!this.hasManagerOverrideAccess || !selectedId || configured.some((row) => Number(row.id) === selectedId)) {
+          return configured;
+        }
+        const selected = approved.find((contractor) => Number(contractor.id) === selectedId);
+        return selected ? [...configured, selected] : configured;
+      }
+
+      // Keep an existing manual correction visible without exposing the whole
+      // directory. The complete list is opened explicitly by a privileged user.
       return selectedId
         ? approved.filter((contractor) => Number(contractor.id) === selectedId)
         : [];
+    },
+
+    contractorRouteIsExpanded(item, capabilityType) {
+      return Boolean(item?.[this.contractorOverrideFlag(capabilityType)]);
+    },
+
+    canChooseOtherContractor(item, capabilityType) {
+      if (!this.hasManagerOverrideAccess || !item) return false;
+      if (capabilityType === 'executor' && this.fixedInternalExecutor(item)) return false;
+      const approvedCount = this.approvedContractorOptions().length;
+      const recommendedCount = this.recommendedContractorOptions(item, capabilityType).length;
+      return approvedCount > recommendedCount || recommendedCount === 0;
+    },
+
+    toggleContractorOverride(item, capabilityType) {
+      if (!this.hasManagerOverrideAccess || !item) return;
+      const flag = this.contractorOverrideFlag(capabilityType);
+      item[flag] = !item[flag];
+    },
+
+    contractorRouteLabel(item, capabilityType) {
+      if (this.contractorRouteIsExpanded(item, capabilityType)) return 'Все одобренные контрагенты';
+      const recommended = this.recommendedContractorOptions(item, capabilityType);
+      if (recommended.length) return capabilityType === 'blank_supplier'
+        ? 'Рекомендованные по маршруту · поставщики'
+        : 'Рекомендованные по маршруту · исполнители';
+      return capabilityType === 'blank_supplier' ? 'Поставщик заготовки' : 'Исполнитель работ';
     },
 
     executorOptions(item) {
@@ -17953,6 +18004,38 @@ export const CostingModule = {
           color: var(--theme--foreground);
           font-size: 12px;
           font-weight: 850;
+        }
+
+        .symbolika-costing-route-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          min-inline-size: 0;
+        }
+
+        .symbolika-costing-route-override {
+          appearance: none;
+          border: 0;
+          background: transparent;
+          color: var(--theme--primary);
+          padding: 0;
+          font: inherit;
+          font-size: 10px;
+          font-weight: 800;
+          line-height: 1.25;
+          text-align: end;
+          cursor: pointer;
+        }
+
+        .symbolika-costing-route-override:hover {
+          text-decoration: underline;
+        }
+
+        .symbolika-costing-route-override.is-table {
+          display: block;
+          margin-block-start: 5px;
+          text-align: start;
         }
 
         .symbolika-costing-error-toast {
@@ -29249,6 +29332,9 @@ export const CostingModule = {
                         {{ contractor.name }}
                       </option>
                     </select>
+                    <button v-if="canChooseOtherContractor(row, 'blank_supplier')" type="button" class="symbolika-costing-route-override is-table" @click.stop="toggleContractorOverride(row, 'blank_supplier')">
+                      {{ contractorRouteIsExpanded(row, 'blank_supplier') ? 'Только рекомендованные' : 'Выбрать другого контрагента' }}
+                    </button>
                     <input
                       class="symbolika-costing-input symbolika-costing-num symbolika-costing-stacked-input"
                       :class="savingClass(row, 'contractor_1_cost')"
@@ -29276,6 +29362,9 @@ export const CostingModule = {
                       {{ contractor.name }}
                     </option>
                   </select>
+                  <button v-if="canChooseOtherContractor(row, 'executor')" type="button" class="symbolika-costing-route-override is-table" @click.stop="toggleContractorOverride(row, 'executor')">
+                    {{ contractorRouteIsExpanded(row, 'executor') ? 'Только рекомендованные' : 'Выбрать другого контрагента' }}
+                  </button>
                   <input
                     class="symbolika-costing-input symbolika-costing-num symbolika-costing-stacked-input"
                     :class="savingClass(row, executorCostField(row))"
@@ -29395,6 +29484,9 @@ export const CostingModule = {
                       {{ contractor.name }}
                     </option>
                   </select>
+                  <button v-if="canChooseOtherContractor(row, 'blank_supplier')" type="button" class="symbolika-costing-route-override is-table" @click.stop="toggleContractorOverride(row, 'blank_supplier')">
+                    {{ contractorRouteIsExpanded(row, 'blank_supplier') ? 'Только рекомендованные' : 'Выбрать другого контрагента' }}
+                  </button>
                 </td>
                 <td>
                   <span class="symbolika-costing-badge">{{ blankSourceName(row.blank_source) }}</span>
@@ -32785,7 +32877,12 @@ export const CostingModule = {
                 </label>
 
                 <label v-if="itemNeedsBlank(item) && item.blank_source === 'supplier'" class="symbolika-costing-label symbolika-costing-new-order-route symbolika-mobile-item-extra">
-                  Поставщик заготовки
+                  <span class="symbolika-costing-route-head">
+                    <span>{{ contractorRouteLabel(item, 'blank_supplier') }}</span>
+                    <button v-if="canChooseOtherContractor(item, 'blank_supplier')" type="button" class="symbolika-costing-route-override" @click="toggleContractorOverride(item, 'blank_supplier')">
+                      {{ contractorRouteIsExpanded(item, 'blank_supplier') ? 'Только рекомендованные' : 'Выбрать другого контрагента' }}
+                    </button>
+                  </span>
                   <select v-model="item.contractor_1" class="symbolika-costing-select" @change="item.contractor_1_cost = ''">
                     <option value="">Контрагент не определён</option>
                     <option v-for="contractor in blankSupplierOptions(item)" :key="contractor.id" :value="contractor.id">
@@ -32800,7 +32897,12 @@ export const CostingModule = {
                 </label>
 
                 <label v-if="itemCategoryId(item)" class="symbolika-costing-label symbolika-costing-new-order-route symbolika-mobile-item-extra">
-                  {{ executorOptions(item).length === 1 ? 'Исполнитель (автоматически)' : 'Исполнитель работ' }}
+                  <span class="symbolika-costing-route-head">
+                    <span>{{ contractorRouteLabel(item, 'executor') }}</span>
+                    <button v-if="canChooseOtherContractor(item, 'executor')" type="button" class="symbolika-costing-route-override" @click="toggleContractorOverride(item, 'executor')">
+                      {{ contractorRouteIsExpanded(item, 'executor') ? 'Только рекомендованные' : 'Выбрать другого контрагента' }}
+                    </button>
+                  </span>
                   <select v-model="item[executorField(item)]" class="symbolika-costing-select" :disabled="executorOptions(item).length <= 1" @change="item[executorCostField(item)] = ''">
                     <option value="">{{ executorOptions(item).length ? 'Выберите исполнителя' : 'Контрагент не определён' }}</option>
                     <option v-for="contractor in executorOptions(item)" :key="'executor-' + contractor.id" :value="contractor.id">
@@ -34371,7 +34473,12 @@ export const CostingModule = {
                   </label>
 
                   <label v-if="itemNeedsBlank(detailItemForm) && detailItemForm.blank_source === 'supplier'" class="symbolika-costing-label">
-                    Поставщик заготовки
+                    <span class="symbolika-costing-route-head">
+                      <span>{{ contractorRouteLabel(detailItemForm, 'blank_supplier') }}</span>
+                      <button v-if="canChooseOtherContractor(detailItemForm, 'blank_supplier')" type="button" class="symbolika-costing-route-override" @click="toggleContractorOverride(detailItemForm, 'blank_supplier')">
+                        {{ contractorRouteIsExpanded(detailItemForm, 'blank_supplier') ? 'Только рекомендованные' : 'Выбрать другого контрагента' }}
+                      </button>
+                    </span>
                     <select v-model="detailItemForm.contractor_1" class="symbolika-costing-select" @change="detailItemForm.contractor_1_cost = ''">
                       <option value="">Контрагент не определён</option>
                       <option v-for="contractor in blankSupplierOptions(detailItemForm)" :key="contractor.id" :value="contractor.id">
@@ -34386,7 +34493,12 @@ export const CostingModule = {
                   </label>
 
                   <label v-if="itemCategoryId(detailItemForm)" class="symbolika-costing-label">
-                    {{ executorOptions(detailItemForm).length === 1 ? 'Исполнитель (автоматически)' : 'Исполнитель работ' }}
+                    <span class="symbolika-costing-route-head">
+                      <span>{{ contractorRouteLabel(detailItemForm, 'executor') }}</span>
+                      <button v-if="canChooseOtherContractor(detailItemForm, 'executor')" type="button" class="symbolika-costing-route-override" @click="toggleContractorOverride(detailItemForm, 'executor')">
+                        {{ contractorRouteIsExpanded(detailItemForm, 'executor') ? 'Только рекомендованные' : 'Выбрать другого контрагента' }}
+                      </button>
+                    </span>
                     <select v-model="detailItemForm[executorField(detailItemForm)]" class="symbolika-costing-select" :disabled="executorOptions(detailItemForm).length <= 1" @change="detailItemForm[executorCostField(detailItemForm)] = ''">
                       <option value="">{{ executorOptions(detailItemForm).length ? 'Выберите исполнителя' : 'Контрагент не определён' }}</option>
                       <option v-for="contractor in executorOptions(detailItemForm)" :key="'detail-executor-' + contractor.id" :value="contractor.id">
@@ -34787,7 +34899,12 @@ export const CostingModule = {
               </div>
             </div>
             <div v-if="itemNeedsBlank(detail.row) && detail.row.blank_source === 'supplier'" class="symbolika-costing-detail-field is-primary">
-              <div class="symbolika-costing-detail-label">Поставщик заготовки</div>
+              <div class="symbolika-costing-detail-label symbolika-costing-route-head">
+                <span>{{ contractorRouteLabel(detail.row, 'blank_supplier') }}</span>
+                <button v-if="canChooseOtherContractor(detail.row, 'blank_supplier')" type="button" class="symbolika-costing-route-override" @click="toggleContractorOverride(detail.row, 'blank_supplier')">
+                  {{ contractorRouteIsExpanded(detail.row, 'blank_supplier') ? 'Только рекомендованные' : 'Выбрать другого контрагента' }}
+                </button>
+              </div>
               <div class="symbolika-costing-detail-value">
                 <select
                   class="symbolika-costing-table-select"
@@ -34817,7 +34934,12 @@ export const CostingModule = {
               </div>
             </div>
             <div v-if="itemCategoryId(detail.row)" class="symbolika-costing-detail-field is-primary">
-              <div class="symbolika-costing-detail-label">{{ executorOptions(detail.row).length === 1 ? 'Исполнитель (автоматически)' : 'Исполнитель работ' }}</div>
+              <div class="symbolika-costing-detail-label symbolika-costing-route-head">
+                <span>{{ contractorRouteLabel(detail.row, 'executor') }}</span>
+                <button v-if="canChooseOtherContractor(detail.row, 'executor')" type="button" class="symbolika-costing-route-override" @click="toggleContractorOverride(detail.row, 'executor')">
+                  {{ contractorRouteIsExpanded(detail.row, 'executor') ? 'Только рекомендованные' : 'Выбрать другого контрагента' }}
+                </button>
+              </div>
               <div class="symbolika-costing-detail-value">
                 <select
                   class="symbolika-costing-table-select"

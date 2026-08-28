@@ -38,10 +38,34 @@ test('routing limits ordinary users to configured contractors', () => {
   assert.deepEqual(options.map((contractor) => contractor.id), [1]);
 });
 
-test('administrator and managing may override a configured contractor', () => {
+test('administrator and managing initially see only route recommendations', () => {
   const context = routingContext({ override: true });
   const options = context.capabilityContractorOptions(
     { product_category: 10, blank_source: 'none' },
+    'executor',
+  );
+
+  assert.deepEqual(options.map((contractor) => contractor.id), [1]);
+});
+
+test('administrator and managing explicitly open the complete contractor list', () => {
+  const context = routingContext({ override: true });
+  const item = { product_category: 10, blank_source: 'none' };
+
+  assert.equal(context.contractorRouteIsExpanded(item, 'executor'), false);
+  assert.equal(context.canChooseOtherContractor(item, 'executor'), true);
+
+  context.toggleContractorOverride(item, 'executor');
+  const options = context.capabilityContractorOptions(item, 'executor');
+
+  assert.equal(context.contractorRouteIsExpanded(item, 'executor'), true);
+  assert.deepEqual(options.map((contractor) => contractor.id), [1, 2]);
+});
+
+test('an existing manual contractor remains visible while recommendations stay collapsed', () => {
+  const context = routingContext({ override: true });
+  const options = context.capabilityContractorOptions(
+    { product_category: 10, blank_source: 'none', contractor_2: 2 },
     'executor',
   );
 
