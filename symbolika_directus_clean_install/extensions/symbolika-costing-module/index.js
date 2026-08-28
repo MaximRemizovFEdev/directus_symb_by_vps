@@ -758,8 +758,8 @@ const adminConfigs = {
         { value: 'we_owe_customer', text: 'Мы должны клиенту' },
       ] },
       { key: 'amount', label: 'Сумма', type: 'money', required: true },
-      { key: 'customer', label: 'Клиент', type: 'relation', options: 'customers' },
-      { key: 'customer_company', label: 'Компания', type: 'relation', options: 'companies' },
+      { key: 'customer', label: 'Клиент', type: 'relation', options: 'customers', searchable: true, placeholder: 'Начните вводить имя, телефон или e-mail' },
+      { key: 'customer_company', label: 'Компания', type: 'relation', options: 'companies', searchable: true, placeholder: 'Начните вводить название, телефон или e-mail' },
       { key: 'status', label: 'Статус', type: 'select', required: true, choices: [
         { value: 'draft', text: 'Черновик' },
         { value: 'confirmed', text: 'Подтверждена' },
@@ -8033,10 +8033,51 @@ export const CostingModule = {
       return payload;
     },
 
+    adminRelationQueryKey(column) {
+      return `${column.key}_query`;
+    },
+
+    adminRelationSuggestionList(column) {
+      return column.options === 'customers'
+        ? 'symbolika-customer-suggestions'
+        : 'symbolika-company-suggestions';
+    },
+
+    syncAdminSearchableRelation(column) {
+      const queryKey = this.adminRelationQueryKey(column);
+      const rows = this.adminOptions(column.options);
+      const labelMethod = column.options === 'customers'
+        ? this.customerSuggestionLabel
+        : this.companySuggestionLabel;
+      const query = String(this.adminForm[queryKey] || '').trim();
+      if (!query) {
+        this.adminForm[column.key] = '';
+        return;
+      }
+      const selected = this.autocompleteEntityByQuery(rows, query, labelMethod);
+      this.adminForm[column.key] = selected?.id ? String(selected.id) : '';
+      if (selected) this.adminForm[queryKey] = labelMethod.call(this, selected);
+    },
+
+    hydrateAdminSearchableRelations() {
+      const config = this.activeAdminConfig;
+      if (!config) return;
+      config.columns.filter((column) => column.type === 'relation' && column.searchable).forEach((column) => {
+        const queryKey = this.adminRelationQueryKey(column);
+        const selectedId = this.entityId(this.adminForm[column.key]);
+        const selected = this.adminOptions(column.options).find((item) => String(item.id) === selectedId);
+        const labelMethod = column.options === 'customers'
+          ? this.customerSuggestionLabel
+          : this.companySuggestionLabel;
+        this.adminForm[queryKey] = selected ? labelMethod.call(this, selected) : '';
+      });
+    },
+
     startAdminCreate() {
       if (!this.activeAdminConfig || this.activeAdminConfig.createDisabled) return;
       this.adminEditing = 'new';
       this.adminForm = this.adminEmptyForm(this.activeAdminConfig);
+      this.hydrateAdminSearchableRelations();
       if (this.activeAdminConfig.collection === 'procurement_requests') this.updateDeepLinkUrl('', null);
     },
 
@@ -8054,6 +8095,7 @@ export const CostingModule = {
     startAdminEdit(row) {
       this.adminEditing = row.id;
       this.adminForm = this.adminNormalizeForm(row);
+      this.hydrateAdminSearchableRelations();
       if (this.activeAdminConfig?.collection === 'procurement_requests') this.updateDeepLinkUrl('procurement', row.id);
     },
 
@@ -31083,6 +31125,18 @@ export const CostingModule = {
                 rows="3"
                 :disabled="adminColumnReadonly(column)"
               ></textarea>
+              <input
+                v-else-if="column.type === 'relation' && column.searchable"
+                v-model="adminForm[adminRelationQueryKey(column)]"
+                class="symbolika-costing-input"
+                type="search"
+                autocomplete="off"
+                :list="adminRelationSuggestionList(column)"
+                :placeholder="column.placeholder || 'Начните вводить'"
+                :disabled="adminColumnReadonly(column)"
+                @input="syncAdminSearchableRelation(column)"
+                @change="syncAdminSearchableRelation(column)"
+              />
               <select
                 v-else-if="column.type === 'relation'"
                 v-model="adminForm[column.key]"
