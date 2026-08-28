@@ -611,10 +611,12 @@ const notificationTopicChoices = [
 ];
 
 const tableSortOptions = [
-  { id: 'deadline', title: 'По сроку' },
+  { id: 'deadline_asc', key: 'deadline', direction: 'asc', title: 'Срок: по возрастанию' },
+  { id: 'deadline_desc', key: 'deadline', direction: 'desc', title: 'Срок: по убыванию' },
   { id: 'date', title: 'По дате' },
   { id: 'customer', title: 'По клиенту' },
-  { id: 'order_number', title: 'По номеру' },
+  { id: 'order_number_asc', key: 'order_number', direction: 'asc', title: 'Номер: по возрастанию' },
+  { id: 'order_number_desc', key: 'order_number', direction: 'desc', title: 'Номер: по убыванию' },
 ];
 
 const moduleSections = {
@@ -2068,7 +2070,12 @@ export const CostingModule = {
     },
 
     activeTableSortKey() {
-      return this.tableSort(this.activeSortContext).key;
+      const current = this.tableSort(this.activeSortContext);
+      const option = this.tableSortOptions.find((item) => (
+        (item.key || item.id) === current.key
+        && (!item.direction || item.direction === current.direction)
+      ));
+      return option?.id || current.key;
     },
 
     hasCostingAdvancedFilters() {
@@ -5647,9 +5654,11 @@ export const CostingModule = {
       return this.tableSorts?.[context] || { key: 'deadline', direction: 'asc' };
     },
 
-    setTableSort(context, key) {
-      if (!context || !key) return;
-      const direction = context.includes('archive') && key === 'date' ? 'desc' : 'asc';
+    setTableSort(context, optionId) {
+      if (!context || !optionId) return;
+      const option = this.tableSortOptions.find((item) => item.id === optionId);
+      const key = option?.key || optionId;
+      const direction = option?.direction || (context.includes('archive') && key === 'date' ? 'desc' : 'asc');
       this.tableSorts = {
         ...this.tableSorts,
         [context]: { key, direction },
@@ -5663,8 +5672,24 @@ export const CostingModule = {
 
       const direction = current.direction === 'desc' ? -1 : 1;
       return [...rows].sort((left, right) => {
-        const a = this.sortValue(left, current.key);
-        const b = this.sortValue(right, current.key);
+        const bothPositions = this.isPositionSortRow(left) && this.isPositionSortRow(right);
+
+        // Positions inside one order always retain their creation sequence.
+        // Changing the table sort must only move whole orders, not reshuffle
+        // their positions by deadline, product name or status.
+        if (bothPositions && this.arePositionsFromSameOrder(left, right)) {
+          return this.compareSortValues(
+            this.positionCreationSortValue(left),
+            this.positionCreationSortValue(right),
+          );
+        }
+
+        // Position views are grouped by order. Compare parent order values so
+        // a position-specific deadline cannot split one order into two places.
+        const leftSortRow = bothPositions ? this.detailOrderContext(left) : left;
+        const rightSortRow = bothPositions ? this.detailOrderContext(right) : right;
+        const a = this.sortValue(leftSortRow, current.key);
+        const b = this.sortValue(rightSortRow, current.key);
         const aEmpty = this.isEmptySortValue(a);
         const bEmpty = this.isEmptySortValue(b);
         if (aEmpty && bEmpty) return 0;
@@ -5676,11 +5701,11 @@ export const CostingModule = {
         // Stable business tie-breakers keep every view deterministic even when
         // several orders or positions have the same deadline.
         const tieBreakers = current.key === 'deadline'
-          ? ['date', 'order_number', 'product']
-          : ['deadline', 'order_number', 'product'];
+          ? ['date', 'order_number']
+          : ['deadline', 'order_number'];
         for (const key of tieBreakers) {
-          const tieA = this.sortValue(left, key);
-          const tieB = this.sortValue(right, key);
+          const tieA = this.sortValue(leftSortRow, key);
+          const tieB = this.sortValue(rightSortRow, key);
           const tieAEmpty = this.isEmptySortValue(tieA);
           const tieBEmpty = this.isEmptySortValue(tieB);
           if (tieAEmpty !== tieBEmpty) return tieAEmpty ? 1 : -1;
@@ -5689,6 +5714,27 @@ export const CostingModule = {
         }
         return this.compareSortValues(this.entityId(left.id), this.entityId(right.id));
       });
+    },
+
+    positionSortOrderKey(row) {
+      const orderId = this.entityId(this.orderId(row));
+      if (orderId) return `id:${orderId}`;
+      const orderNumber = this.orderNumber(row);
+      return orderNumber && orderNumber !== '-' ? `number:${orderNumber}` : '';
+    },
+
+    positionCreationSortValue(row) {
+      return this.entityId(row?.order_item) || this.entityId(row?.id) || '';
+    },
+
+    isPositionSortRow(row) {
+      return Boolean(row?.product_name || this.entityId(row?.order_item));
+    },
+
+    arePositionsFromSameOrder(left, right) {
+      if (!this.isPositionSortRow(left) || !this.isPositionSortRow(right)) return false;
+      const leftOrder = this.positionSortOrderKey(left);
+      return Boolean(leftOrder && leftOrder === this.positionSortOrderKey(right));
     },
 
     sortValue(row, key) {
@@ -15032,7 +15078,10 @@ export const CostingModule = {
       return [...positions.values()].sort((left, right) => {
         const orderDiff = this.orderNumber(left).localeCompare(this.orderNumber(right), 'ru');
         if (orderDiff) return orderDiff;
-        return String(left.product_name || '').localeCompare(String(right.product_name || ''), 'ru');
+        return this.compareSortValues(
+          this.positionCreationSortValue(left),
+          this.positionCreationSortValue(right),
+        );
       });
     },
 
@@ -15081,7 +15130,10 @@ export const CostingModule = {
         });
       });
 
-      return [...positions.values()];
+      return [...positions.values()].sort((left, right) => this.compareSortValues(
+        this.positionCreationSortValue(left),
+        this.positionCreationSortValue(right),
+      ));
     },
 
     positionPrice(item) {
