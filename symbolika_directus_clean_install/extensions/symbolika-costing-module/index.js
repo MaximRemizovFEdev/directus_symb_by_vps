@@ -2166,11 +2166,6 @@ export const CostingModule = {
 
     orderManagerOptions() {
       const options = new Map();
-      (this.employees || []).forEach((employee) => {
-        const id = this.entityId(employee);
-        const name = String(employee?.full_name || '').trim();
-        if (id && name) options.set(String(id), name);
-      });
       (this.allOrderRows || []).forEach((row) => {
         const id = this.entityId(row?.manager_employee);
         const name = String(row?.manager_name || this.relatedName(row?.manager_employee, 'full_name') || '').trim();
