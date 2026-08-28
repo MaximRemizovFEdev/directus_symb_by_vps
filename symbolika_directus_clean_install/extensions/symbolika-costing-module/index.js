@@ -395,6 +395,7 @@ const managerFinanceFields = [
 
 const expenseTypes = [
   { text: 'Аренда', value: 'rent' },
+  { text: 'Коммунальные услуги', value: 'utilities' },
   { text: 'Выплата зарплаты', value: 'salary_payment' },
   { text: 'Назначенная премия', value: 'employee_bonus' },
   { text: 'Оплата контрагенту', value: 'contractor_payment' },
@@ -1288,6 +1289,7 @@ export const CostingModule = {
       financeSettings: {
         id: 1,
         monthly_rent: 160000,
+        monthly_utilities: 0,
         rent_due_day_from: 26,
         rent_due_day_to: 30,
         advance_day: 28,
@@ -3145,8 +3147,8 @@ export const CostingModule = {
       const sumField = (rows, field) => rows.reduce((sum, row) => sum + this.parseMoney(row[field]), 0);
       const currentYearResult = sumField(yearRows, 'result');
       const previousYearResult = sumField(previousYearRows, 'result');
-      const unpaidRent = this.currentRentStatus.due;
-      const projectedExpenses = actualMonthExpenses + futureMonthExpenses + unpaidRent + salaryDebt;
+      const unpaidPremises = this.currentPremisesStatus.due;
+      const projectedExpenses = actualMonthExpenses + futureMonthExpenses + unpaidPremises + salaryDebt;
       const projectedResult = this.parseMoney(monthRow.clean_profit) - projectedExpenses;
 
       return {
@@ -3158,7 +3160,7 @@ export const CostingModule = {
         currentMonth: {
           ...monthRow,
           operational_expenses_to_date: actualMonthExpenses,
-          future_operational_expenses: futureMonthExpenses + unpaidRent,
+          future_operational_expenses: futureMonthExpenses + unpaidPremises,
           result_to_date: this.parseMoney(monthRow.clean_profit) - actualMonthExpenses,
           projected_expenses: projectedExpenses,
           projected_result: projectedResult,
@@ -3185,7 +3187,7 @@ export const CostingModule = {
             return sum + this.parseMoney(row.amount);
           }, 0),
         }))
-        .filter((row) => row.amount || ['rent', 'delivery', 'salary_payment', 'employee_advance'].includes(row.type));
+        .filter((row) => row.amount || ['rent', 'utilities', 'delivery', 'salary_payment', 'employee_advance'].includes(row.type));
     },
 
     visiblePayrollExpenseRows() {
@@ -3214,6 +3216,28 @@ export const CostingModule = {
         return sum + this.parseMoney(row.amount);
       }, 0);
       return { month, planned, paid, due: Math.max(planned - paid, 0) };
+    },
+
+    currentUtilitiesStatus() {
+      const month = this.monthKey(new Date());
+      const planned = this.parseMoney(this.financeSettings?.monthly_utilities);
+      const paid = this.expenseRows.reduce((sum, row) => {
+        if (row.expense_type !== 'utilities') return sum;
+        if (this.monthKey(row.accounting_month || row.expense_date) !== month) return sum;
+        return sum + this.parseMoney(row.amount);
+      }, 0);
+      return { month, planned, paid, due: Math.max(planned - paid, 0) };
+    },
+
+    currentPremisesStatus() {
+      const rent = this.currentRentStatus;
+      const utilities = this.currentUtilitiesStatus;
+      return {
+        month: rent.month,
+        planned: rent.planned + utilities.planned,
+        paid: rent.paid + utilities.paid,
+        due: rent.due + utilities.due,
+      };
     },
 
     visibleMyOrderRows() {
@@ -6472,6 +6496,17 @@ export const CostingModule = {
       });
     },
 
+    openCurrentUtilitiesPayment() {
+      const status = this.currentUtilitiesStatus;
+      if (!status.due) return;
+      this.openExpenseDialog('utilities', null, {
+        accounting_month: status.month,
+        expense_date: this.scheduledDate(status.month, this.financeSettings?.rent_due_day_from || 26),
+        amount: status.due,
+        comment: `Коммунальные услуги за ${this.monthLabel(status.month)}`,
+      });
+    },
+
     openContractorPositionPayment(row) {
       if (!row || this.parseMoney(row.due) <= 0) return;
       this.openExpenseDialog('contractor_payment', null, {
@@ -8588,8 +8623,13 @@ export const CostingModule = {
     async saveFinanceSettings() {
       if (this.financeSettingsSaving) return;
       const monthlyRent = this.parseMoney(this.financeSettings.monthly_rent);
+      const monthlyUtilities = this.parseMoney(this.financeSettings.monthly_utilities);
       if (monthlyRent < 0) {
         this.error = 'Сумма аренды не может быть отрицательной.';
+        return;
+      }
+      if (monthlyUtilities < 0) {
+        this.error = 'Сумма коммунальных услуг не может быть отрицательной.';
         return;
       }
       this.financeSettingsSaving = true;
@@ -8598,6 +8638,7 @@ export const CostingModule = {
           method: 'PATCH',
           body: JSON.stringify({
             monthly_rent: monthlyRent,
+            monthly_utilities: monthlyUtilities,
             rent_due_day_from: Number(this.financeSettings.rent_due_day_from || 26),
             rent_due_day_to: Number(this.financeSettings.rent_due_day_to || 30),
             advance_day: Number(this.financeSettings.advance_day || 28),
@@ -29839,7 +29880,7 @@ export const CostingModule = {
             <div class="symbolika-costing-form-card-head">
               <div>
                 <div class="symbolika-costing-subtle">Постоянные расходы и календарь</div>
-                <h3>Аренда и выплаты сотрудникам</h3>
+                <h3>Помещение и выплаты сотрудникам</h3>
               </div>
               <button type="button" class="symbolika-costing-mini-button" :disabled="financeSettingsSaving" @click="saveFinanceSettings">
                 <v-icon name="save" small />{{ financeSettingsSaving ? 'Сохраняю…' : 'Сохранить настройки' }}
@@ -29849,7 +29890,10 @@ export const CostingModule = {
               <label class="symbolika-costing-label">Аренда в месяц
                 <input v-model="financeSettings.monthly_rent" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" />
               </label>
-              <label class="symbolika-costing-label">Период оплаты аренды
+              <label class="symbolika-costing-label">Коммунальные услуги за текущий месяц
+                <input v-model="financeSettings.monthly_utilities" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" />
+              </label>
+              <label class="symbolika-costing-label">Период оплаты помещения
                 <div class="symbolika-costing-field-row">
                   <input v-model="financeSettings.rent_due_day_from" class="symbolika-costing-input symbolika-costing-num" type="number" min="1" max="31" />
                   <span>—</span>
@@ -29872,6 +29916,20 @@ export const CostingModule = {
                 <v-icon name="payments" small />Оплатить {{ formatMoney(currentRentStatus.due) }} ₽
               </button>
               <span v-else class="symbolika-costing-pill symbolika-costing-pill-green">Оплачено</span>
+            </div>
+            <div class="symbolika-recurring-expense-status" :class="currentUtilitiesStatus.due > 0 ? 'is-due' : 'is-paid'">
+              <div>
+                <strong>Коммунальные услуги за {{ monthLabel(currentUtilitiesStatus.month) }}</strong>
+                <span>Начислено {{ formatMoney(currentUtilitiesStatus.planned) }} ₽ · оплачено {{ formatMoney(currentUtilitiesStatus.paid) }} ₽</span>
+              </div>
+              <button v-if="currentUtilitiesStatus.due > 0" type="button" class="symbolika-costing-button" @click="openCurrentUtilitiesPayment">
+                <v-icon name="payments" small />Оплатить {{ formatMoney(currentUtilitiesStatus.due) }} ₽
+              </button>
+              <span v-else class="symbolika-costing-pill symbolika-costing-pill-green">Оплачено</span>
+            </div>
+            <div class="symbolika-costing-info-banner">
+              <v-icon name="account_balance" />
+              <span>Помещение за {{ monthLabel(currentPremisesStatus.month) }}: {{ formatMoney(currentPremisesStatus.planned) }} ₽ · осталось {{ formatMoney(currentPremisesStatus.due) }} ₽</span>
             </div>
           </section>
 
@@ -32094,7 +32152,7 @@ export const CostingModule = {
                 Месяц начисления
                 <input v-model="expenseDialog.bonus_month" class="symbolika-costing-input" type="month" />
               </label>
-              <label v-if="['salary_payment', 'employee_advance', 'rent'].includes(expenseDialog.expense_type)" class="symbolika-costing-label">
+              <label v-if="['salary_payment', 'employee_advance', 'rent', 'utilities'].includes(expenseDialog.expense_type)" class="symbolika-costing-label">
                 Расчётный месяц
                 <input v-model="expenseDialog.accounting_month" class="symbolika-costing-input" type="month" />
               </label>

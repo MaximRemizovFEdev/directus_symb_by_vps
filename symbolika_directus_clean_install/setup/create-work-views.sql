@@ -896,12 +896,15 @@ FOR EACH ROW EXECUTE FUNCTION normalize_business_expense_accounting_month();
 CREATE TABLE IF NOT EXISTS finance_settings (
   id smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   monthly_rent numeric(14,2) NOT NULL DEFAULT 160000,
+  monthly_utilities numeric(14,2) NOT NULL DEFAULT 0,
   rent_due_day_from smallint NOT NULL DEFAULT 26 CHECK (rent_due_day_from BETWEEN 1 AND 31),
   rent_due_day_to smallint NOT NULL DEFAULT 30 CHECK (rent_due_day_to BETWEEN 1 AND 31),
   advance_day smallint NOT NULL DEFAULT 28 CHECK (advance_day BETWEEN 1 AND 31),
   salary_day smallint NOT NULL DEFAULT 12 CHECK (salary_day BETWEEN 1 AND 31),
   updated_at timestamp with time zone NOT NULL DEFAULT now()
 );
+
+ALTER TABLE finance_settings ADD COLUMN IF NOT EXISTS monthly_utilities numeric(14,2) NOT NULL DEFAULT 0;
 
 INSERT INTO finance_settings (id, monthly_rent)
 VALUES (1, 160000)
@@ -9220,7 +9223,7 @@ INSERT INTO directus_fields (
   ('business_expenses', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'half', NULL, true, true),
   ('business_expenses', 'expense_date', NULL, 'datetime', NULL, 'datetime', NULL, false, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0430\0442\0430'))::json, true, true),
   ('business_expenses', 'accounting_month', NULL, 'datetime', NULL, 'datetime', NULL, false, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0420\0430\0441\0447\0451\0442\043d\044b\0439 \043c\0435\0441\044f\0446'))::json, false, true),
-  ('business_expenses', 'expense_type', NULL, 'select-dropdown', '{"choices":[{"text":"Аренда","value":"rent"},{"text":"Материалы (бумага, тонер)","value":"production_materials"},{"text":"Производственная расходка","value":"production_consumables"},{"text":"Обслуживание и ремонт техники","value":"equipment_maintenance"},{"text":"Закупка прочих запасов","value":"inventory_purchase"},{"text":"Выплата зарплаты","value":"salary_payment"},{"text":"Назначенная премия","value":"employee_bonus"},{"text":"Оплата за доставку","value":"delivery"},{"text":"Прочие расходы","value":"other"},{"text":"Аванс сотруднику","value":"employee_advance"}]}'::json, 'labels', NULL, false, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0438\043f \0440\0430\0441\0445\043e\0434\0430'))::json, true, true),
+  ('business_expenses', 'expense_type', NULL, 'select-dropdown', '{"choices":[{"text":"Аренда","value":"rent"},{"text":"Коммунальные услуги","value":"utilities"},{"text":"Материалы (бумага, тонер)","value":"production_materials"},{"text":"Производственная расходка","value":"production_consumables"},{"text":"Обслуживание и ремонт техники","value":"equipment_maintenance"},{"text":"Закупка прочих запасов","value":"inventory_purchase"},{"text":"Выплата зарплаты","value":"salary_payment"},{"text":"Назначенная премия","value":"employee_bonus"},{"text":"Оплата за доставку","value":"delivery"},{"text":"Прочие расходы","value":"other"},{"text":"Аванс сотруднику","value":"employee_advance"}]}'::json, 'labels', NULL, false, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0438\043f \0440\0430\0441\0445\043e\0434\0430'))::json, true, true),
   ('business_expenses', 'amount', NULL, 'input', NULL, NULL, NULL, false, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\0443\043c\043c\0430'))::json, true, true),
   ('business_expenses', 'employee', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}"}'::json, 'related-values', '{"template":"{{full_name}}"}'::json, false, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
   ('business_expenses', 'payment_type', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}"}'::json, 'related-values', '{"template":"{{name}}"}'::json, false, false, 7, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0422\0438\043f \043e\043f\043b\0430\0442\044b'))::json, false, true),
@@ -9228,11 +9231,12 @@ INSERT INTO directus_fields (
   ('business_expenses', 'created_at', NULL, 'datetime', NULL, NULL, NULL, true, true, 9, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0437\0434\0430\043d\043e'))::json, false, true),
   ('finance_settings', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'half', NULL, true, true),
   ('finance_settings', 'monthly_rent', NULL, 'input', NULL, NULL, NULL, false, false, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0410\0440\0435\043d\0434\0430 \0432 \043c\0435\0441\044f\0446'))::json, true, true),
-  ('finance_settings', 'rent_due_day_from', NULL, 'input', NULL, NULL, NULL, false, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\043f\043b\0430\0442\0430 \0430\0440\0435\043d\0434\044b \0441'))::json, true, true),
-  ('finance_settings', 'rent_due_day_to', NULL, 'input', NULL, NULL, NULL, false, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\043f\043b\0430\0442\0430 \0430\0440\0435\043d\0434\044b \0434\043e'))::json, true, true),
-  ('finance_settings', 'advance_day', NULL, 'input', NULL, NULL, NULL, false, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0435\043d\044c \0430\0432\0430\043d\0441\0430'))::json, true, true),
-  ('finance_settings', 'salary_day', NULL, 'input', NULL, NULL, NULL, false, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0435\043d\044c \0437\0430\0440\043f\043b\0430\0442\044b'))::json, true, true),
-  ('finance_settings', 'updated_at', NULL, 'datetime', NULL, NULL, NULL, true, true, 7, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\0431\043d\043e\0432\043b\0435\043d\043e'))::json, false, true),
+  ('finance_settings', 'monthly_utilities', NULL, 'input', NULL, NULL, NULL, false, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041a\043e\043c\043c\0443\043d\0430\043b\044c\043d\044b\0435 \0443\0441\043b\0443\0433\0438'))::json, true, true),
+  ('finance_settings', 'rent_due_day_from', NULL, 'input', NULL, NULL, NULL, false, false, 4, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\043f\043b\0430\0442\0430 \0430\0440\0435\043d\0434\044b \0441'))::json, true, true),
+  ('finance_settings', 'rent_due_day_to', NULL, 'input', NULL, NULL, NULL, false, false, 5, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\043f\043b\0430\0442\0430 \0430\0440\0435\043d\0434\044b \0434\043e'))::json, true, true),
+  ('finance_settings', 'advance_day', NULL, 'input', NULL, NULL, NULL, false, false, 6, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0435\043d\044c \0430\0432\0430\043d\0441\0430'))::json, true, true),
+  ('finance_settings', 'salary_day', NULL, 'input', NULL, NULL, NULL, false, false, 7, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0414\0435\043d\044c \0437\0430\0440\043f\043b\0430\0442\044b'))::json, true, true),
+  ('finance_settings', 'updated_at', NULL, 'datetime', NULL, NULL, NULL, true, true, 8, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\041e\0431\043d\043e\0432\043b\0435\043d\043e'))::json, false, true),
   ('employee_salary_summary', 'id', NULL, 'numeric', NULL, NULL, NULL, true, true, 1, 'half', NULL, true, true),
   ('employee_salary_summary', 'employee', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}"}'::json, 'related-values', '{"template":"{{full_name}}"}'::json, true, true, 2, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
   ('employee_salary_summary', 'employee_name', NULL, 'input', NULL, NULL, NULL, true, false, 3, 'half', json_build_array(json_build_object('language','ru-RU','translation', U&'\0421\043e\0442\0440\0443\0434\043d\0438\043a'))::json, false, true),
