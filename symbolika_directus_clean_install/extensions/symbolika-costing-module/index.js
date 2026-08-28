@@ -1202,6 +1202,7 @@ export const CostingModule = {
       workspaceViewModes: {},
       mobileViewport: false,
       mobileNavigationOpen: false,
+      mobileOrderToolbarOpen: false,
       mobileOrderExtrasOpen: false,
       draggedWorkspaceEntry: null,
       productionStatuses: [],
@@ -3730,6 +3731,7 @@ export const CostingModule = {
       this.detail = null;
       this.updateOrderLinkUrl(null);
       this.smartToolbarHidden = false;
+      this.mobileOrderToolbarOpen = false;
       this.smartToolbarLastScrollTop = this.smartToolbarScrollTop();
       if (tab === 'notification_center') this.loadNotificationCenter({ silent: true });
       if (tab === 'events') this.loadEventRows({ silent: true });
@@ -18268,6 +18270,7 @@ export const CostingModule = {
 
         .symbolika-costing-mobile-extra-toggle,
         .symbolika-costing-mobile-item-toggle,
+        .symbolika-costing-mobile-order-controls-toggle,
         .symbolika-costing-mobile-nav-toggle {
           display: none;
         }
@@ -27070,6 +27073,211 @@ export const CostingModule = {
             max-inline-size: 100%;
           }
         }
+
+        /* Compact mobile workspace: one useful header row, optional filters and
+           controls that never force the page beyond the viewport. */
+        @media (max-width: 760px) {
+          .symbolika-costing-smart-toolbar.is-order-toolbar {
+            margin-block-end: 6px;
+            padding-block-end: 6px;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-toolbar {
+            gap: 6px;
+            margin-block-end: 6px;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-search,
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-mobile-nav-toggle {
+            block-size: 40px;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-actions {
+            display: flex;
+            grid-column: 1 / -1;
+            align-items: stretch;
+            gap: 6px;
+            min-inline-size: 0;
+            overflow: hidden;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-actions > * {
+            min-inline-size: 0 !important;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-actions > .symbolika-costing-button:first-child {
+            flex: 1 1 112px;
+            inline-size: auto;
+            min-block-size: 40px;
+            padding-inline: 9px;
+            font-size: 12px;
+            white-space: nowrap;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-view-switch {
+            flex: 0 0 100px;
+            inline-size: 100px;
+            justify-content: space-around;
+            padding: 3px;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-area-refresh,
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-actions > .symbolika-costing-button:last-child {
+            display: inline-grid;
+            flex: 0 0 40px;
+            place-items: center;
+            inline-size: 40px;
+            min-inline-size: 40px !important;
+            min-block-size: 40px;
+            padding: 0;
+            font-size: 0;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-area-refresh span {
+            display: none;
+          }
+
+          .symbolika-costing-mobile-order-controls-toggle {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto 20px;
+            align-items: center;
+            gap: 7px;
+            inline-size: 100%;
+            min-block-size: 40px;
+            padding: 7px 10px;
+            border: 1px solid var(--theme--border-color);
+            border-radius: 10px;
+            background: var(--theme--background-normal);
+            color: var(--theme--foreground);
+            font: inherit;
+            cursor: pointer;
+          }
+
+          .symbolika-costing-mobile-order-controls-toggle.is-open,
+          .symbolika-costing-mobile-order-controls-toggle.has-active-filters {
+            border-color: color-mix(in srgb, var(--theme--primary) 56%, var(--theme--border-color));
+            background: color-mix(in srgb, var(--theme--primary) 9%, var(--theme--background-normal));
+          }
+
+          .symbolika-costing-mobile-order-controls-title {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-inline-size: 0;
+            font-size: 12px;
+            font-weight: 850;
+            white-space: nowrap;
+          }
+
+          .symbolika-costing-mobile-order-controls-toggle small {
+            overflow: hidden;
+            color: var(--theme--foreground-subdued);
+            font-size: 10px;
+            font-weight: 750;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-order-controls-row:not(.is-mobile-open) {
+            display: none !important;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-order-controls-row.is-mobile-open {
+            display: grid;
+            gap: 8px;
+            margin-block: 7px 0;
+            padding: 8px;
+            border: 1px solid var(--theme--border-color-subdued);
+            border-radius: 11px;
+            background: color-mix(in srgb, var(--theme--background-normal) 92%, transparent);
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-order-filter-controls {
+            gap: 7px;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-order-filter-controls > .symbolika-costing-sort {
+            display: grid;
+            grid-template-columns: 78px minmax(0, 1fr);
+            align-items: center;
+            gap: 7px;
+            inline-size: 100%;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-order-filter-controls > .symbolika-costing-sort .symbolika-costing-select {
+            inline-size: 100%;
+            min-inline-size: 0;
+            max-inline-size: none;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-order-controls-row .symbolika-costing-filter-panels {
+            position: static;
+            inline-size: 100%;
+            max-inline-size: 100%;
+            margin-block-start: 3px;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-order-controls-row > .symbolika-costing-view-toggle {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 6px;
+            inline-size: 100%;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-order-controls-row > .symbolika-costing-view-toggle > .symbolika-costing-toggle-label {
+            grid-column: 1 / -1;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-order-controls-row > .symbolika-costing-view-toggle > .symbolika-costing-filter-chip {
+            inline-size: 100%;
+            min-inline-size: 0;
+            padding-inline: 6px;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-order-controls-row > .symbolika-costing-view-toggle > .symbolika-costing-filter-chip:nth-last-child(-n + 2) {
+            grid-column: span 1;
+          }
+
+          .symbolika-costing-smart-toolbar.is-order-toolbar .symbolika-costing-order-controls-row > .symbolika-costing-view-toggle > .symbolika-costing-toggle-divider {
+            display: none;
+          }
+
+          .symbolika-costing-modal :is(.symbolika-costing-label, .symbolika-costing-detail-field),
+          .symbolika-costing-detail :is(.symbolika-costing-label, .symbolika-costing-detail-field) {
+            min-inline-size: 0;
+          }
+
+          .symbolika-costing-modal :is(input, select, textarea),
+          .symbolika-costing-detail :is(input, select, textarea) {
+            inline-size: 100%;
+            min-inline-size: 0;
+            max-inline-size: 100%;
+          }
+
+          .symbolika-costing-modal-actions {
+            align-items: stretch;
+          }
+        }
+
+        @media (max-width: 420px) {
+          .symbolika-costing-order-modal .symbolika-costing-new-order-item {
+            grid-template-columns: minmax(0, 1fr);
+          }
+
+          .symbolika-costing-order-modal .symbolika-costing-new-order-item > * {
+            grid-column: 1 / -1 !important;
+          }
+
+          .symbolika-costing-modal-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .symbolika-costing-modal-actions > * {
+            inline-size: 100%;
+            min-inline-size: 0;
+          }
+        }
       `;
       document.head.appendChild(style);
     },
@@ -27146,7 +27354,10 @@ export const CostingModule = {
         <div
           v-if="availableTabs.length && activeTab !== 'profile'"
           class="symbolika-costing-smart-toolbar"
-          :class="{ 'is-hidden': mobileViewport && smartToolbarHidden }"
+          :class="{
+            'is-hidden': mobileViewport && smartToolbarHidden,
+            'is-order-toolbar': ['all_orders', 'my_orders', 'orders_archive'].includes(activeTab),
+          }"
         >
         <div class="symbolika-costing-toolbar">
           <button type="button" class="symbolika-costing-mobile-nav-toggle" title="Открыть разделы" aria-label="Открыть разделы" @click="mobileNavigationOpen = true">
@@ -27241,7 +27452,33 @@ export const CostingModule = {
           </label>
         </div>
 
-        <div v-if="hasOrderAdvancedFilters || hasOrderDisplayMode" class="symbolika-costing-order-controls-row">
+        <button
+          v-if="mobileViewport && (hasOrderAdvancedFilters || hasOrderDisplayMode)"
+          type="button"
+          class="symbolika-costing-mobile-order-controls-toggle"
+          :class="{ 'is-open': mobileOrderToolbarOpen, 'has-active-filters': activeOrderFiltersCount || orderManagerFilter }"
+          :aria-expanded="mobileOrderToolbarOpen ? 'true' : 'false'"
+          @click="mobileOrderToolbarOpen = !mobileOrderToolbarOpen"
+        >
+          <span class="symbolika-costing-mobile-order-controls-title">
+            <v-icon name="tune" small />
+            Фильтры и вид
+            <span v-if="activeOrderFiltersCount + (orderManagerFilter ? 1 : 0)" class="symbolika-costing-segment-count">
+              {{ activeOrderFiltersCount + (orderManagerFilter ? 1 : 0) }}
+            </span>
+          </span>
+          <small>
+            {{ orderArchiveMode === 'archive' ? 'Архив' : (orderArchiveMode === 'all' ? 'Все' : 'Активные') }}
+            · {{ orderDisplayMode === 'items' ? 'Позиции' : 'Заказы' }}
+          </small>
+          <v-icon :name="mobileOrderToolbarOpen ? 'expand_less' : 'expand_more'" small />
+        </button>
+
+        <div
+          v-if="hasOrderAdvancedFilters || hasOrderDisplayMode"
+          class="symbolika-costing-order-controls-row"
+          :class="{ 'is-mobile-open': mobileOrderToolbarOpen }"
+        >
           <div class="symbolika-costing-order-filter-controls">
           <label v-if="hasTableSortSelect" class="symbolika-costing-sort symbolika-costing-order-sort">
             Сортировка
