@@ -1238,6 +1238,9 @@ export const CostingModule = {
         fill: false,
       },
       costingFillFilter: 'all',
+      costingContractorFilter: '',
+      costingBulkCost: '',
+      costingBulkSaving: false,
       costingDateFrom: '',
       costingDateTo: '',
       costingDeadlineFrom: '',
@@ -1438,6 +1441,8 @@ export const CostingModule = {
       detailItemForm: null,
       detailParentOrder: null,
       detailReturnsToParentOrder: false,
+      detailSplitOrder: null,
+      detailSplitOrderScrollTop: 0,
       copiedOrderLinkId: null,
       copiedDeepLinkKey: '',
       itemPublicLinks: {},
@@ -1467,6 +1472,14 @@ export const CostingModule = {
 
     moduleTitle() {
       return moduleSections[this.moduleSection]?.title || 'Рабочий центр';
+    },
+
+    detailPanels() {
+      if (!this.detail) return [];
+      if (this.detailSplitOrder && !this.detailIsOrder(this.detail.row)) {
+        return [this.detailSplitOrder, this.detail];
+      }
+      return [this.detail];
     },
 
     filteredNotificationRows() {
@@ -2067,6 +2080,7 @@ export const CostingModule = {
 
     activeCostingFiltersCount() {
       let count = 0;
+      if (this.costingContractorFilter) count += 1;
       if (this.costingFillFilter !== 'all') count += 1;
       if (this.costingDateFrom || this.costingDateTo) count += 1;
       if (this.costingDeadlineFrom || this.costingDeadlineTo) count += 1;
@@ -2075,6 +2089,10 @@ export const CostingModule = {
 
     costingFilterSummary() {
       const parts = [];
+      if (this.costingContractorFilter) {
+        const contractor = this.contractors.find((item) => String(item.id) === String(this.costingContractorFilter));
+        parts.push(`Контрагент: ${contractor?.name || 'не найден'}`);
+      }
       if (this.costingFillFilter !== 'all') {
         const title = costingFillChoices.find((filter) => filter.id === this.costingFillFilter)?.title;
         if (title) parts.push(title);
@@ -2086,6 +2104,16 @@ export const CostingModule = {
         parts.push(`Срок ${this.costingDeadlineFrom ? this.formatDate(this.costingDeadlineFrom) : 'с начала'} - ${this.costingDeadlineTo ? this.formatDate(this.costingDeadlineTo) : 'без конца'}`);
       }
       return parts.join(' · ');
+    },
+
+    selectedCostingContractor() {
+      if (!this.costingContractorFilter) return null;
+      return this.contractors.find((item) => String(item.id) === String(this.costingContractorFilter)) || null;
+    },
+
+    costingBulkTargetRows() {
+      if (!this.costingContractorFilter) return [];
+      return this.visibleRows.filter((row) => this.costingFieldsForContractor(row, this.costingContractorFilter).length > 0);
     },
 
     hasWorkDeadlineFilters() {
@@ -3449,6 +3477,10 @@ export const CostingModule = {
     taskArchiveDateTo() { this.completeActivePagingSoon(); },
     purchaseStatusFilter() { this.completeActivePagingSoon(); },
     costingFillFilter() { this.completeActivePagingSoon(); },
+    costingContractorFilter() {
+      this.costingBulkCost = '';
+      this.completeActivePagingSoon();
+    },
     orderDeadlineFrom() { this.completeActivePagingSoon(); },
     orderDeadlineTo() { this.completeActivePagingSoon(); },
     orderDateFrom() { this.completeActivePagingSoon(); },
@@ -5331,6 +5363,8 @@ export const CostingModule = {
 
     clearCostingFilters() {
       this.costingFillFilter = 'all';
+      this.costingContractorFilter = '';
+      this.costingBulkCost = '';
       this.costingDateFrom = '';
       this.costingDateTo = '';
       this.costingDeadlineFrom = '';
@@ -5531,11 +5565,21 @@ export const CostingModule = {
     matchesCostingFilters(row) {
       if (!this.matchesDateRange(row.date, this.costingDateFrom, this.costingDateTo)) return false;
       if (!this.matchesDateRange(row.deadline, this.costingDeadlineFrom, this.costingDeadlineTo)) return false;
+      if (this.costingContractorFilter && !this.costingFieldsForContractor(row, this.costingContractorFilter).length) return false;
 
       if (this.costingFillFilter === 'missing_cost') return !this.hasCostingCost(row);
       if (this.costingFillFilter === 'filled') return this.hasCostingContractor(row) && this.hasCostingCost(row);
       if (this.costingFillFilter === 'missing_contractor') return !this.hasCostingContractor(row);
       return true;
+    },
+
+    costingFieldsForContractor(row, contractorId) {
+      const target = String(contractorId || '');
+      if (!target) return [];
+      const fields = [];
+      if (String(this.contractorId(row?.contractor_1) || '') === target) fields.push('contractor_1_cost');
+      if (String(this.contractorId(row?.contractor_2) || '') === target) fields.push('contractor_2_cost');
+      return fields;
     },
 
     purchaseNeedsBlank(row) {
@@ -5794,6 +5838,12 @@ export const CostingModule = {
       const entityType = this.detailEntityType(type, row);
       type = entityType === 'order' ? 'order' : 'orders_items';
       row = { ...row, _entity_type: entityType };
+      const currentOrderPanel = this.detailIsOrder(this.detail?.row)
+        ? this.detail
+        : this.detailSplitOrder;
+      const opensLinkedOrderItem = entityType === 'item'
+        && !!options.returnToParentOrder
+        && !!currentOrderPanel?.row;
       if (this.isProductionWorkerRole() && this.detailIsOrder(row) && !this.orderBelongsToCurrentEmployee(row)) {
         this.error = 'Чужой заказ целиком недоступен. Откройте назначенную вашему участку позицию.';
         return;
@@ -5818,15 +5868,23 @@ export const CostingModule = {
         row = { ...row, ...allowedOrder };
       }
       this.entityDetail = null;
-      this.detailOrderItems = [];
-      this.detailOrderItemsOrderId = null;
-      this.detailPayments = [];
-      this.detailPaymentsOrderId = null;
+      if (opensLinkedOrderItem) {
+        this.detailSplitOrder = currentOrderPanel;
+        const orderPanel = document.querySelector('aside.symbolika-costing-detail:not(.is-split-item)');
+        this.detailSplitOrderScrollTop = Number(orderPanel?.scrollTop || this.detailSplitOrderScrollTop || 0);
+      } else {
+        this.detailSplitOrder = null;
+        this.detailSplitOrderScrollTop = 0;
+        this.detailOrderItems = [];
+        this.detailOrderItemsOrderId = null;
+        this.detailPayments = [];
+        this.detailPaymentsOrderId = null;
+      }
       const abandonedDraftToken = this.detailItemForm?._upload_status !== 'idle' ? this.detailItemForm?._draft_upload_token : null;
       if (this.detailItemForm) this.detailItemForm._draft_upload_token = this.draftLayoutToken();
       if (abandonedDraftToken) this.cleanupDraftLayout(abandonedDraftToken);
       this.detailItemForm = null;
-      this.detailParentOrder = options.parentOrder || row?.order_context || null;
+      this.detailParentOrder = options.parentOrder || currentOrderPanel?.row || row?.order_context || null;
       if (entityType === 'item' && !this.detailParentOrder) {
         const linkedOrderId = this.entityId(this.orderId(row));
         if (linkedOrderId) this.detailParentOrder = await this.findLinkedOrder(linkedOrderId);
@@ -5856,11 +5914,19 @@ export const CostingModule = {
         this.loadItemPublicLink(detailRow);
         await this.loadItemAttachments(detailRow);
       }
+      if (opensLinkedOrderItem) {
+        await this.$nextTick();
+        const orderPanel = document.querySelector('aside.symbolika-costing-detail.is-split-order');
+        if (orderPanel) orderPanel.scrollTop = this.detailSplitOrderScrollTop;
+      }
     },
 
     async closeDetail() {
-      const parentOrder = this.detailParentOrder;
+      const parentOrder = this.detailSplitOrder?.row || this.detailParentOrder;
       const returnToParentOrder = this.detailReturnsToParentOrder;
+      const parentScrollTop = Number(document.querySelector('aside.symbolika-costing-detail.is-split-order')?.scrollTop
+        || this.detailSplitOrderScrollTop
+        || 0);
       const closingRow = this.detail?.row || null;
       const orderId = Number(this.entityId(this.orderId(closingRow))
         || this.entityId(this.orderId(parentOrder))
@@ -5873,6 +5939,8 @@ export const CostingModule = {
       this.detailItemForm = null;
       this.detailParentOrder = null;
       this.detailReturnsToParentOrder = false;
+      this.detailSplitOrder = null;
+      this.detailSplitOrderScrollTop = 0;
 
       if (orderId) {
         const nextItems = { ...this.expandedOrderItems };
@@ -5885,6 +5953,9 @@ export const CostingModule = {
       if (parentOrder && returnToParentOrder) {
         const refreshedParent = orderId ? await this.findLinkedOrder(orderId) : null;
         await this.openDetail('order', refreshedParent || parentOrder);
+        await this.$nextTick();
+        const orderPanel = document.querySelector('aside.symbolika-costing-detail');
+        if (orderPanel) orderPanel.scrollTop = parentScrollTop;
         return;
       }
 
@@ -5897,6 +5968,32 @@ export const CostingModule = {
         }
       }
       this.updateOrderLinkUrl(null);
+    },
+
+    closeDetailPanel(panel) {
+      if (this.detailSplitOrder && this.detailIsOrder(panel?.row)) {
+        this.detailReturnsToParentOrder = false;
+        this.detailParentOrder = null;
+        this.detailSplitOrder = null;
+      }
+      return this.closeDetail();
+    },
+
+    detailPanelKey(panel) {
+      const entity = this.detailIsOrder(panel?.row) ? 'order' : 'item';
+      return `${entity}:${this.entityId(entity === 'order' ? this.orderId(panel?.row) : panel?.row?.id) || 'new'}`;
+    },
+
+    detailPanelClass(panel) {
+      if (!this.detailSplitOrder || this.detailPanels.length < 2) return {};
+      return this.detailIsOrder(panel?.row)
+        ? { 'is-split-order': true }
+        : { 'is-split-item': true };
+    },
+
+    detailPanelRole(panel) {
+      if (!this.detailSplitOrder || this.detailPanels.length < 2) return 'single';
+      return this.detailIsOrder(panel?.row) ? 'order' : 'item';
     },
 
     openParentOrderDetail(row) {
@@ -6011,7 +6108,9 @@ export const CostingModule = {
 
     canAddOrderItem(row) {
       const editableOrderContexts = ['all_orders', 'my_orders', 'deadlines', 'dashboard', 'queue', 'problems', 'search', 'order'];
-      const context = this.detail?.type || this.activeTab;
+      const context = this.detailSplitOrder && this.detailIsOrder(row)
+        ? 'order'
+        : (this.detail?.type || this.activeTab);
       return this.canCreateOrders
         && this.detailIsOrder(row)
         && editableOrderContexts.includes(context)
@@ -7179,13 +7278,13 @@ export const CostingModule = {
       return parts.join(' · ');
     },
 
-    detailEventRows() {
-      if (!this.detail?.row) return [];
-      if (this.detailIsOrder(this.detail.row)) {
-        const orderId = Number(this.entityId(this.orderId(this.detail.row)) || 0);
+    detailEventRows(row = this.detail?.row) {
+      if (!row) return [];
+      if (this.detailIsOrder(row)) {
+        const orderId = Number(this.entityId(this.orderId(row)) || 0);
         return this.eventRows.filter((event) => Number(event.order_id) === orderId).slice(0, 80);
       }
-      const itemId = Number(this.detail.row.id || 0);
+      const itemId = Number(row.id || 0);
       return this.eventRows.filter((event) => Number(event.item_id) === itemId).slice(0, 80);
     },
 
@@ -11416,6 +11515,63 @@ export const CostingModule = {
       }
     },
 
+    async bulkSetFilteredCostingCost() {
+      const contractorId = String(this.costingContractorFilter || '');
+      if (!contractorId || this.costingBulkSaving) return;
+
+      const contractor = this.selectedCostingContractor;
+      const normalizedCost = this.contractorIsInternal(contractor)
+        ? 0
+        : this.parseMoney(this.costingBulkCost);
+      if (!this.contractorIsInternal(contractor) && normalizedCost <= 0) {
+        this.error = 'Укажите себестоимость за единицу больше нуля.';
+        return;
+      }
+
+      this.costingBulkSaving = true;
+      this.error = '';
+      try {
+        await this.loadAllActivePages();
+        const targets = this.visibleRows
+          .map((row) => {
+            const fields = this.costingFieldsForContractor(row, contractorId);
+            const itemId = this.entityId(row?.order_item) || row?.id;
+            if (!itemId || !fields.length) return null;
+            return {
+              row,
+              itemId,
+              patch: Object.fromEntries(fields.map((field) => [field, normalizedCost])),
+            };
+          })
+          .filter(Boolean);
+
+        if (!targets.length) {
+          this.error = 'По выбранным фильтрам нет позиций этого контрагента.';
+          return;
+        }
+
+        for (let offset = 0; offset < targets.length; offset += 12) {
+          const batch = targets.slice(offset, offset + 12);
+          await Promise.all(batch.map(async ({ row, itemId, patch }) => {
+            await this.request(`/items/orders_items/${itemId}`, {
+              method: 'PATCH',
+              body: JSON.stringify(patch),
+            });
+            Object.assign(row, patch);
+            this.updateOrderItemCaches(itemId, patch);
+          }));
+        }
+
+        this.feedbackSavedMessage = `Себестоимость обновлена: ${targets.length} поз.`;
+        await this.loadRows({ silent: true });
+      } catch (error) {
+        this.error = error.message;
+        await this.loadRows({ silent: true });
+      } finally {
+        this.costingBulkSaving = false;
+      }
+    },
+
     async bulkSetBlankOrdered(value) {
       const selected = this.selectedFor('purchasing');
       if (!selected.length) return;
@@ -15582,6 +15738,53 @@ export const CostingModule = {
           align-items: center;
         }
 
+        .symbolika-costing-filter-select-wrap {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          min-inline-size: min(100%, 260px);
+          color: var(--theme--foreground-subdued);
+        }
+
+        .symbolika-costing-filter-select-wrap .v-icon {
+          flex: 0 0 auto;
+          color: var(--theme--primary);
+        }
+
+        .symbolika-costing-filter-select {
+          inline-size: min(100%, 230px);
+        }
+
+        .symbolika-costing-cost-bulkbar {
+          justify-content: flex-start;
+        }
+
+        .symbolika-costing-cost-bulk-field {
+          inline-size: min(100%, 220px);
+          margin-inline-start: auto;
+        }
+
+        .symbolika-costing-cost-bulk-field .symbolika-costing-input {
+          inline-size: 100%;
+        }
+
+        @media (max-width: 720px) {
+          .symbolika-costing-filter-select-wrap,
+          .symbolika-costing-filter-select,
+          .symbolika-costing-cost-bulk-field {
+            inline-size: 100%;
+            max-inline-size: none;
+          }
+
+          .symbolika-costing-cost-bulk-field {
+            margin-inline-start: 0;
+          }
+
+          .symbolika-costing-cost-bulkbar .symbolika-costing-button {
+            inline-size: 100%;
+          }
+        }
+
         .symbolika-costing-filter-toggle {
           display: inline-flex;
           align-items: center;
@@ -17957,6 +18160,18 @@ export const CostingModule = {
           font-size: 17px;
         }
 
+        .symbolika-costing-new-order-items-head.is-sticky-add-item {
+          position: sticky;
+          inset-block-start: 0;
+          z-index: 5;
+          margin: 8px -10px 0;
+          padding: 10px;
+          border-block-end: 1px solid color-mix(in srgb, var(--theme--border-color) 76%, transparent);
+          background: color-mix(in srgb, var(--theme--background) 94%, transparent);
+          box-shadow: 0 10px 22px rgb(0 0 0 / 14%);
+          backdrop-filter: blur(12px);
+        }
+
         .symbolika-costing-new-order-items {
           display: grid;
           gap: 8px;
@@ -19652,6 +19867,25 @@ export const CostingModule = {
           z-index: 93;
           background: color-mix(in srgb, var(--theme--background-normal) 94%, #2c2c2e);
           box-shadow: 0 6px 18px rgb(0 0 0 / 24%);
+        }
+
+        @media (min-width: 981px) {
+          .symbolika-costing-detail.is-split-order {
+            inset-inline-end: min(720px, 52vw);
+            inline-size: min(620px, 40vw);
+            border-inline-start: 1px solid var(--theme--border-color);
+            box-shadow: -18px 0 40px rgb(0 0 0 / 22%);
+          }
+
+          .symbolika-costing-detail.is-split-item {
+            inline-size: min(720px, 52vw);
+            border-inline-start-color: color-mix(in srgb, var(--symbolika-orange) 48%, var(--theme--border-color));
+            box-shadow: -14px 0 34px rgb(0 0 0 / 32%);
+          }
+
+          aside.symbolika-costing-detail.is-split-order .symbolika-costing-detail-head-actions > .symbolika-costing-detail-close {
+            inset-inline-end: calc(min(720px, 52vw) + 18px);
+          }
         }
 
         .symbolika-costing-detail-grid {
@@ -22327,6 +22561,10 @@ export const CostingModule = {
           .symbolika-costing-detail {
             inline-size: 100vw;
             padding: 18px;
+          }
+
+          .symbolika-costing-detail.is-split-order {
+            display: none;
           }
 
           .symbolika-costing-detail-grid {
@@ -25997,6 +26235,19 @@ export const CostingModule = {
             background: var(--theme--background);
           }
 
+          .symbolika-costing-order-modal .symbolika-costing-new-order-items-head.is-sticky-add-item {
+            inset-block-start: 62px;
+            z-index: 3;
+            margin-inline: -2px;
+            padding: 8px 2px;
+            box-shadow: 0 8px 18px rgb(0 0 0 / 12%);
+          }
+
+          .symbolika-costing-order-modal .symbolika-costing-new-order-items-head.is-sticky-add-item .symbolika-costing-mini-button {
+            min-block-size: 40px;
+            padding-inline: 14px;
+          }
+
           .symbolika-costing-order-modal .symbolika-costing-new-order-grid,
           .symbolika-costing-order-modal .symbolika-costing-new-order-items {
             gap: 8px;
@@ -29266,6 +29517,15 @@ export const CostingModule = {
 
         <div v-if="activeTab === 'costing'" class="symbolika-costing-filter-bar">
           <div class="symbolika-costing-filter-groups">
+            <label class="symbolika-costing-filter-select-wrap">
+              <v-icon name="handshake" small />
+              <select v-model="costingContractorFilter" class="symbolika-costing-select symbolika-costing-filter-select" aria-label="Фильтр по контрагенту">
+                <option value="">Все контрагенты</option>
+                <option v-for="contractor in contractors" :key="'costing-contractor-' + contractor.id" :value="String(contractor.id)">
+                  {{ contractor.name }}
+                </option>
+              </select>
+            </label>
             <button
               type="button"
               class="symbolika-costing-filter-toggle"
@@ -29348,6 +29608,35 @@ export const CostingModule = {
           <div v-if="costingFilterSummary" class="symbolika-costing-filter-summary">
             <v-icon name="filter_alt" small />
             {{ costingFilterSummary }}
+          </div>
+
+          <div v-if="costingContractorFilter" class="symbolika-costing-bulkbar symbolika-costing-cost-bulkbar">
+            <div class="symbolika-costing-cell-stack">
+              <strong>{{ selectedCostingContractor?.name || 'Контрагент' }}</strong>
+              <span class="symbolika-costing-subtle">Отфильтровано позиций: {{ costingBulkTargetRows.length }}</span>
+            </div>
+            <template v-if="!contractorIsInternal(selectedCostingContractor)">
+              <label class="symbolika-costing-label symbolika-costing-cost-bulk-field">
+                Себестоимость за единицу
+                <input
+                  v-model="costingBulkCost"
+                  class="symbolika-costing-input symbolika-costing-num"
+                  inputmode="decimal"
+                  placeholder="0,00"
+                  @keyup.enter="bulkSetFilteredCostingCost"
+                />
+              </label>
+              <button
+                type="button"
+                class="symbolika-costing-button"
+                :disabled="costingBulkSaving || !costingBulkTargetRows.length || parseMoney(costingBulkCost) <= 0"
+                @click="bulkSetFilteredCostingCost"
+              >
+                <v-icon name="done_all" small />
+                {{ costingBulkSaving ? 'Сохраняем…' : 'Заполнить все' }}
+              </button>
+            </template>
+            <span v-else class="symbolika-costing-subtle">Для собственного производства себестоимость всегда равна нулю.</span>
           </div>
         </div>
 
@@ -32908,7 +33197,7 @@ export const CostingModule = {
               </label>
             </div>
 
-            <div class="symbolika-costing-new-order-items-head">
+            <div class="symbolika-costing-new-order-items-head is-sticky-add-item">
               <h3>Позиции</h3>
               <button type="button" class="symbolika-costing-mini-button" @click="addNewOrderItem">
                 <v-icon name="add" small />
@@ -34214,7 +34503,13 @@ export const CostingModule = {
           </div>
         </aside>
 
-        <aside v-if="detail" class="symbolika-costing-detail">
+        <aside
+          v-for="detail in detailPanels"
+          :key="detailPanelKey(detail)"
+          class="symbolika-costing-detail"
+          :class="detailPanelClass(detail)"
+          :data-detail-panel="detailPanelRole(detail)"
+        >
           <div class="symbolika-costing-detail-head">
             <div class="symbolika-costing-detail-title">
               <div class="symbolika-costing-subtle">{{ detailIsOrder(detail.row) ? 'Карточка заказа' : orderNumber(detail.row) }}</div>
@@ -34254,7 +34549,7 @@ export const CostingModule = {
                 <v-icon :name="copiedOrderLinkId === Number(entityId(orderId(detail.row))) ? 'check' : 'link'" small />
                 {{ copiedOrderLinkId === Number(entityId(orderId(detail.row))) ? 'Скопировано' : 'Ссылка' }}
               </button>
-              <button type="button" class="symbolika-costing-detail-close" @click="closeDetail">×</button>
+              <button type="button" class="symbolika-costing-detail-close" @click="closeDetailPanel(detail)">×</button>
             </div>
           </div>
 
@@ -35394,9 +35689,9 @@ export const CostingModule = {
                 <v-icon name="refresh" small />
               </button>
             </header>
-            <div v-if="detailEventRows().length" class="symbolika-costing-event-list is-compact">
+            <div v-if="detailEventRows(detail.row).length" class="symbolika-costing-event-list is-compact">
               <div
-                v-for="event in detailEventRows()"
+                v-for="event in detailEventRows(detail.row)"
                 :key="'detail-event-' + event.event_id"
                 class="symbolika-costing-event"
                 :class="eventToneClass(event)"
