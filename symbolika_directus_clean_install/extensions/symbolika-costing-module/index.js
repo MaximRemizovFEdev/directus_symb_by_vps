@@ -16676,8 +16676,8 @@ export const CostingModule = {
         }
 
         .symbolika-costing-position-panel {
-          padding: 8px 10px;
-          background: color-mix(in srgb, var(--theme--background-normal) 54%, black);
+          padding: 10px;
+          background: color-mix(in srgb, var(--theme--background-normal) 78%, var(--theme--background));
         }
 
         .symbolika-costing-position-list {
@@ -16687,32 +16687,17 @@ export const CostingModule = {
 
         .symbolika-costing-position-row {
           display: grid;
-          grid-template-columns:
-            minmax(130px, .75fr)
-            68px
-            140px
-            60px
-            78px
-            92px
-            repeat(3, minmax(128px, 1fr));
-          gap: 8px;
+          grid-template-columns: minmax(0, 1.35fr) minmax(390px, 1fr);
+          gap: 14px;
           align-items: center;
           border: 1px solid color-mix(in srgb, var(--theme--border-color) 72%, transparent);
-          border-radius: 10px;
-          background: color-mix(in srgb, var(--theme--background) 94%, black);
-          padding: 8px 12px;
+          border-radius: 12px;
+          background: var(--theme--background-normal);
+          padding: 10px 12px;
         }
 
         .symbolika-costing-position-row.has-send-work {
-          grid-template-columns:
-            minmax(120px, .65fr)
-            68px
-            140px
-            60px
-            78px
-            92px
-            repeat(3, minmax(126px, 1fr))
-            minmax(148px, 164px);
+          grid-template-columns: minmax(0, 1.25fr) minmax(470px, 1fr);
         }
 
         .symbolika-costing-position-row-clickable {
@@ -16728,7 +16713,11 @@ export const CostingModule = {
         }
 
         .symbolika-costing-position-main {
-          display: contents;
+          display: grid;
+          grid-template-columns: minmax(138px, 1.5fr) 70px 138px 64px 80px 104px;
+          gap: 7px;
+          align-items: center;
+          min-inline-size: 0;
         }
 
         .symbolika-costing-position-main > .symbolika-costing-product {
@@ -16841,7 +16830,7 @@ export const CostingModule = {
           min-inline-size: 0;
           min-block-size: auto;
           border: 0;
-          border-inline-start: 1px solid color-mix(in srgb, var(--theme--border-color) 72%, transparent);
+          border-inline-start: 1px solid color-mix(in srgb, var(--theme--border-color) 82%, transparent);
           border-radius: 0;
           background: transparent;
           padding: 0 0 0 7px;
@@ -16867,10 +16856,24 @@ export const CostingModule = {
 
         .symbolika-costing-position-number.is-sum strong {
           color: #a7f3d0;
+          font-size: 12px;
         }
 
         .symbolika-costing-position-statuses {
-          display: contents;
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 8px;
+          align-items: center;
+          min-inline-size: 0;
+        }
+
+        .symbolika-costing-position-row.has-send-work .symbolika-costing-position-statuses {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .symbolika-costing-position-row.has-send-work .symbolika-costing-position-send-work {
+          grid-column: 1 / -1;
+          min-block-size: 32px;
         }
 
         .symbolika-costing-position-statuses-cell {
@@ -20492,21 +20495,17 @@ export const CostingModule = {
           gap: 8px;
         }
 
-        @media (max-width: 1380px) {
+        @media (max-width: 1500px) {
           .symbolika-costing-position-row {
-            grid-template-columns: minmax(130px, 1fr) 68px 140px 60px 78px 92px;
+            grid-template-columns: minmax(0, 1fr);
           }
 
           .symbolika-costing-position-row.has-send-work {
-            grid-template-columns: minmax(130px, 1fr) 68px 140px 60px 78px 92px;
+            grid-template-columns: minmax(0, 1fr);
           }
 
           .symbolika-costing-position-statuses {
-            display: grid;
-            grid-column: 1 / -1;
             grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 6px;
-            min-inline-size: 0;
           }
 
           .symbolika-costing-position-row.has-send-work .symbolika-costing-position-statuses {
@@ -20534,6 +20533,7 @@ export const CostingModule = {
           .symbolika-costing-position-main {
             display: grid;
             grid-template-columns: minmax(0, 1fr);
+            gap: 7px;
             overflow: visible;
           }
 
@@ -27348,22 +27348,45 @@ export const CostingModule = {
 
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
           .symbolika-order-hover-preview {
-          border-color: var(--symbolika-line-strong) !important;
-          background: var(--theme--background-normal) !important;
-          box-shadow: 0 18px 42px rgb(54 43 30 / 16%) !important;
+          border-color: color-mix(in srgb, var(--theme--primary) 28%, var(--symbolika-line-strong)) !important;
+          background: #fffdf9 !important;
+          box-shadow: 0 14px 34px rgb(54 43 30 / 14%) !important;
         }
 
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
           .symbolika-order-hover-preview-head {
-          border-color: var(--symbolika-line-strong) !important;
-          background: var(--symbolika-light-table-head) !important;
+          border-color: color-mix(in srgb, var(--theme--primary) 18%, var(--symbolika-line-strong)) !important;
+          background: color-mix(in srgb, var(--theme--primary) 7%, #fffdf9) !important;
+          color: #232a30 !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-order-hover-preview-head :is(span:first-child, strong) {
+          color: #39434b !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-order-hover-count {
+          border: 1px solid color-mix(in srgb, var(--theme--primary) 38%, transparent);
+          background: color-mix(in srgb, var(--theme--primary) 14%, #ffffff) !important;
+          color: #8d3d0a !important;
         }
 
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
           .symbolika-order-hover-item {
-          border-color: var(--symbolika-line-strong) !important;
-          background: var(--symbolika-light-row-alt) !important;
-          box-shadow: 0 2px 8px rgb(54 43 30 / 6%);
+          border-color: #c5ced5 !important;
+          background: #ffffff !important;
+          box-shadow: 0 2px 8px rgb(54 43 30 / 7%);
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-order-hover-item-copy strong {
+          color: #182028 !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-order-hover-item-copy small {
+          color: #596873 !important;
         }
 
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
@@ -27371,6 +27394,62 @@ export const CostingModule = {
           border-color: color-mix(in srgb, var(--theme--primary) 72%, var(--symbolika-line-strong)) !important;
           background: color-mix(in srgb, var(--theme--primary) 7%, var(--theme--background-normal)) !important;
           box-shadow: 0 8px 20px rgb(54 43 30 / 12%);
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-expanded-row > .symbolika-costing-position-panel {
+          background: #eef2f4 !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-position-row {
+          border-color: #b8c3ca !important;
+          background: #ffffff !important;
+          box-shadow: 0 3px 10px rgb(31 43 51 / 8%);
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-position-row-clickable:is(:hover, :focus-visible) {
+          border-color: color-mix(in srgb, var(--theme--primary) 68%, #aeb9c0) !important;
+          background: #fffaf5 !important;
+          box-shadow: 0 5px 15px rgb(71 49 30 / 11%);
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-position-main > .symbolika-costing-product {
+          color: #17212a !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-position-order-date {
+          border-color: #bdc7ce !important;
+          background: #f3f5f6 !important;
+          color: #42515c !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-position-number {
+          border-inline-start-color: #c4cdd3 !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-position-number strong {
+          color: #202a32 !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-position-number.is-sum {
+          min-block-size: 30px;
+          border: 1px solid var(--symbolika-light-green-border) !important;
+          border-radius: 8px;
+          background: var(--symbolika-light-green-bg) !important;
+          padding: 4px 8px;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-costing-position-number.is-sum strong {
+          color: var(--symbolika-light-green-text) !important;
+          font-weight: 900 !important;
         }
 
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
