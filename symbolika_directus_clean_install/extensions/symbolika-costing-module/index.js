@@ -18875,6 +18875,210 @@ export const CostingModule = {
           cursor: help;
         }
 
+        .symbolika-order-hover-preview-row {
+          display: none;
+        }
+
+        .symbolika-order-hover-preview-row > td {
+          padding: 0 10px 10px !important;
+          border: 0 !important;
+          background: transparent !important;
+          overflow: visible !important;
+        }
+
+        .symbolika-order-hover-preview {
+          overflow: hidden;
+          border: 1px solid color-mix(in srgb, var(--theme--primary) 28%, var(--theme--border-color));
+          border-radius: 14px;
+          background: color-mix(in srgb, var(--theme--background-normal) 95%, var(--theme--primary));
+          box-shadow: 0 18px 42px rgb(0 0 0 / 22%);
+          transform: translateY(-7px);
+        }
+
+        .symbolika-order-hover-preview-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 11px 14px;
+          border-block-end: 1px solid color-mix(in srgb, var(--theme--border-color) 72%, transparent);
+          background: color-mix(in srgb, var(--theme--background-accent) 86%, var(--theme--primary));
+        }
+
+        .symbolika-order-hover-preview-head > div {
+          display: flex;
+          align-items: baseline;
+          gap: 8px;
+          min-inline-size: 0;
+        }
+
+        .symbolika-order-hover-preview-head span:first-child {
+          color: var(--theme--foreground-subdued);
+          font-size: 11px;
+          font-weight: 760;
+          letter-spacing: .03em;
+          text-transform: uppercase;
+        }
+
+        .symbolika-order-hover-preview-head strong {
+          overflow: hidden;
+          color: var(--theme--foreground);
+          font-size: 13px;
+          font-weight: 850;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .symbolika-order-hover-count {
+          display: inline-grid;
+          place-items: center;
+          flex: 0 0 auto;
+          min-inline-size: 26px;
+          block-size: 26px;
+          padding-inline: 8px;
+          border-radius: 999px;
+          background: color-mix(in srgb, var(--theme--primary) 18%, var(--theme--background-normal));
+          color: var(--theme--primary);
+          font-size: 12px !important;
+          font-weight: 850 !important;
+          letter-spacing: 0 !important;
+          text-transform: none !important;
+        }
+
+        .symbolika-order-hover-items {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr));
+          gap: 8px;
+          max-block-size: 282px;
+          padding: 10px;
+          overflow: auto;
+        }
+
+        .symbolika-order-hover-item {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto 18px;
+          align-items: center;
+          gap: 10px;
+          min-inline-size: 0;
+          min-block-size: 58px;
+          padding: 9px 10px 9px 12px;
+          border: 1px solid color-mix(in srgb, var(--theme--border-color) 78%, transparent);
+          border-radius: 11px;
+          background: color-mix(in srgb, var(--theme--background-normal) 96%, var(--theme--background-accent));
+          color: var(--theme--foreground);
+          text-align: start;
+          cursor: pointer;
+          transition: border-color 150ms ease, background 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+        }
+
+        .symbolika-order-hover-item:hover,
+        .symbolika-order-hover-item:focus-visible {
+          border-color: color-mix(in srgb, var(--theme--primary) 64%, var(--theme--border-color));
+          background: color-mix(in srgb, var(--theme--primary) 9%, var(--theme--background-normal));
+          box-shadow: 0 8px 20px rgb(0 0 0 / 14%);
+          transform: translateY(-1px);
+          outline: none;
+        }
+
+        .symbolika-order-hover-item-copy {
+          display: grid;
+          gap: 4px;
+          min-inline-size: 0;
+        }
+
+        .symbolika-order-hover-item-copy strong {
+          overflow: hidden;
+          color: var(--theme--foreground);
+          font-size: 12.5px;
+          font-weight: 850;
+          line-height: 1.2;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .symbolika-order-hover-item-copy small {
+          overflow: hidden;
+          color: var(--theme--foreground-subdued);
+          font-size: 10.5px;
+          font-weight: 680;
+          line-height: 1.2;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .symbolika-order-hover-status {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          max-inline-size: 145px;
+          min-block-size: 28px;
+          padding: 5px 9px;
+          overflow: hidden;
+          border: 1px solid var(--theme--border-color);
+          border-radius: 999px;
+          background: var(--theme--background-accent);
+          color: var(--theme--foreground-subdued);
+          font-size: 10.5px;
+          font-weight: 820;
+          line-height: 1;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .symbolika-order-hover-status.symbolika-costing-select-green {
+          border-color: color-mix(in srgb, #35d6a0 58%, var(--theme--border-color));
+          background: color-mix(in srgb, #35d6a0 14%, var(--theme--background-normal));
+          color: #69e7bb;
+        }
+
+        .symbolika-order-hover-status.symbolika-costing-select-blue {
+          border-color: color-mix(in srgb, #6aaeff 58%, var(--theme--border-color));
+          background: color-mix(in srgb, #6aaeff 14%, var(--theme--background-normal));
+          color: #94c5ff;
+        }
+
+        .symbolika-order-hover-status.symbolika-costing-select-orange {
+          border-color: color-mix(in srgb, #ffab45 58%, var(--theme--border-color));
+          background: color-mix(in srgb, #ffab45 14%, var(--theme--background-normal));
+          color: #ffc16f;
+        }
+
+        .symbolika-order-hover-status.symbolika-costing-select-purple {
+          border-color: color-mix(in srgb, #b990e9 58%, var(--theme--border-color));
+          background: color-mix(in srgb, #b990e9 14%, var(--theme--background-normal));
+          color: #d0acf7;
+        }
+
+        .symbolika-order-hover-status.symbolika-costing-select-danger {
+          border-color: color-mix(in srgb, #ff6f87 58%, var(--theme--border-color));
+          background: color-mix(in srgb, #ff6f87 14%, var(--theme--background-normal));
+          color: #ff9caf;
+        }
+
+        .symbolika-order-hover-status.symbolika-costing-select-muted {
+          border-color: color-mix(in srgb, var(--theme--foreground-subdued) 38%, var(--theme--border-color));
+          background: color-mix(in srgb, var(--theme--foreground-subdued) 8%, var(--theme--background-normal));
+          color: var(--theme--foreground-subdued);
+        }
+
+        .symbolika-order-hover-empty {
+          grid-column: 1 / -1;
+          padding: 20px;
+          color: var(--theme--foreground-subdued);
+          font-size: 12px;
+          font-weight: 700;
+          text-align: center;
+        }
+
+        @media (hover: hover) and (pointer: fine) and (min-width: 981px) {
+          .symbolika-costing-row-clickable:hover + .symbolika-order-hover-preview-row,
+          .symbolika-costing-row-clickable:focus-within + .symbolika-order-hover-preview-row,
+          .symbolika-order-hover-preview-row:hover,
+          .symbolika-order-hover-preview-row:focus-within {
+            display: table-row;
+          }
+        }
+
         .symbolika-attention-items-summary {
           display: inline-flex;
           align-items: center;
@@ -19921,20 +20125,70 @@ export const CostingModule = {
 
         @media (min-width: 981px) {
           .symbolika-costing-detail.is-split-order {
-            inset-inline-end: min(720px, 52vw);
-            inline-size: min(620px, 40vw);
+            inset-inline-end: 0;
+            inline-size: min(620px, 42vw);
             border-inline-start: 1px solid var(--theme--border-color);
             box-shadow: -18px 0 40px rgb(0 0 0 / 22%);
+            z-index: 90;
           }
 
           .symbolika-costing-detail.is-split-item {
-            inline-size: min(720px, 52vw);
+            inset-inline-end: min(620px, 42vw);
+            inline-size: min(600px, 46vw);
+            padding: 16px 18px;
             border-inline-start-color: color-mix(in srgb, var(--symbolika-orange) 48%, var(--theme--border-color));
+            border-inline-end: 1px solid color-mix(in srgb, var(--symbolika-orange) 38%, var(--theme--border-color));
             box-shadow: -14px 0 34px rgb(0 0 0 / 32%);
+            z-index: 91;
           }
 
           aside.symbolika-costing-detail.is-split-order .symbolika-costing-detail-head-actions > .symbolika-costing-detail-close {
-            inset-inline-end: calc(min(720px, 52vw) + 18px);
+            inset-inline-end: 18px;
+          }
+
+          aside.symbolika-costing-detail.is-split-item .symbolika-costing-detail-head-actions > .symbolika-costing-detail-close {
+            inset-inline-end: calc(min(620px, 42vw) + 18px);
+          }
+
+          .symbolika-costing-detail.is-split-item > .symbolika-costing-detail-head {
+            margin-block-end: 10px;
+            padding-inline-end: 42px;
+          }
+
+          .symbolika-costing-detail.is-split-item h2 {
+            font-size: 24px;
+            line-height: 1.12;
+          }
+
+          .symbolika-costing-detail.is-split-item .symbolika-costing-detail-grid {
+            gap: 7px;
+          }
+
+          .symbolika-costing-detail.is-split-item .symbolika-costing-detail-section-title {
+            gap: 6px;
+            margin-block: 3px -1px;
+            font-size: 12px;
+          }
+
+          .symbolika-costing-detail.is-split-item .symbolika-costing-detail-field {
+            gap: 5px;
+            padding: 8px 9px;
+          }
+
+          .symbolika-costing-detail.is-split-item .symbolika-costing-detail-label {
+            font-size: 10px;
+          }
+
+          .symbolika-costing-detail.is-split-item .symbolika-costing-detail-grid-item :is(
+            .symbolika-costing-input,
+            .symbolika-costing-table-select,
+            .symbolika-costing-table-date
+          ) {
+            min-block-size: 34px;
+          }
+
+          .symbolika-costing-detail.is-split-item .symbolika-costing-detail-grid-item .symbolika-costing-comment {
+            min-block-size: 64px;
           }
         }
 
@@ -20527,6 +20781,53 @@ export const CostingModule = {
 
         .symbolika-costing-table-order-list {
           table-layout: fixed;
+          border-spacing: 0 7px;
+          background: transparent;
+        }
+
+        .symbolika-costing-table-order-list thead th {
+          border-block-end: 0;
+          background: transparent !important;
+          color: var(--theme--foreground-subdued);
+        }
+
+        .symbolika-costing-table-order-list tbody > tr.symbolika-costing-row-clickable {
+          box-shadow: 0 6px 18px rgb(0 0 0 / 10%);
+        }
+
+        .symbolika-costing-table-order-list tbody > tr.symbolika-costing-row-clickable > td {
+          border-block: 1px solid color-mix(in srgb, var(--theme--border-color) 82%, transparent);
+          border-block-end-color: color-mix(in srgb, var(--theme--border-color) 82%, transparent);
+          background: color-mix(in srgb, var(--theme--background-normal) 96%, var(--theme--background-accent));
+          transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+        }
+
+        .symbolika-costing-table-order-list tbody > tr.symbolika-costing-row-clickable > td:first-child {
+          border-inline-start: 1px solid color-mix(in srgb, var(--theme--border-color) 82%, transparent);
+          border-start-start-radius: 13px;
+          border-end-start-radius: 13px;
+        }
+
+        .symbolika-costing-table-order-list tbody > tr.symbolika-costing-row-clickable > td:last-child {
+          border-inline-end: 1px solid color-mix(in srgb, var(--theme--border-color) 82%, transparent);
+          border-start-end-radius: 13px;
+          border-end-end-radius: 13px;
+        }
+
+        .symbolika-costing-table-order-list tbody > tr.symbolika-costing-row-clickable:hover > td,
+        .symbolika-costing-table-order-list tbody > tr.symbolika-costing-row-clickable:focus-within > td {
+          border-block-color: color-mix(in srgb, var(--theme--primary) 46%, var(--theme--border-color));
+          background: color-mix(in srgb, var(--theme--primary) 7%, var(--theme--background-normal));
+        }
+
+        .symbolika-costing-table-order-list tbody > tr.symbolika-costing-row-clickable:hover > td:first-child,
+        .symbolika-costing-table-order-list tbody > tr.symbolika-costing-row-clickable:focus-within > td:first-child {
+          border-inline-start-color: color-mix(in srgb, var(--theme--primary) 64%, var(--theme--border-color));
+        }
+
+        .symbolika-costing-table-order-list tbody > tr.symbolika-costing-row-clickable:hover > td:last-child,
+        .symbolika-costing-table-order-list tbody > tr.symbolika-costing-row-clickable:focus-within > td:last-child {
+          border-inline-end-color: color-mix(in srgb, var(--theme--primary) 46%, var(--theme--border-color));
         }
 
         .symbolika-costing-table-order-list col:first-child {
@@ -27046,6 +27347,75 @@ export const CostingModule = {
         }
 
         html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-order-hover-preview {
+          border-color: var(--symbolika-line-strong) !important;
+          background: var(--theme--background-normal) !important;
+          box-shadow: 0 18px 42px rgb(54 43 30 / 16%) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-order-hover-preview-head {
+          border-color: var(--symbolika-line-strong) !important;
+          background: var(--symbolika-light-table-head) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-order-hover-item {
+          border-color: var(--symbolika-line-strong) !important;
+          background: var(--symbolika-light-row-alt) !important;
+          box-shadow: 0 2px 8px rgb(54 43 30 / 6%);
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-order-hover-item:is(:hover, :focus-visible) {
+          border-color: color-mix(in srgb, var(--theme--primary) 72%, var(--symbolika-line-strong)) !important;
+          background: color-mix(in srgb, var(--theme--primary) 7%, var(--theme--background-normal)) !important;
+          box-shadow: 0 8px 20px rgb(54 43 30 / 12%);
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-order-hover-status.symbolika-costing-select-green {
+          border-color: var(--symbolika-light-green-border) !important;
+          background: var(--symbolika-light-green-bg) !important;
+          color: var(--symbolika-light-green-text) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-order-hover-status.symbolika-costing-select-blue {
+          border-color: var(--symbolika-light-blue-border) !important;
+          background: var(--symbolika-light-blue-bg) !important;
+          color: var(--symbolika-light-blue-text) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-order-hover-status.symbolika-costing-select-orange {
+          border-color: var(--symbolika-light-orange-border) !important;
+          background: var(--symbolika-light-orange-bg) !important;
+          color: var(--symbolika-light-orange-text) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-order-hover-status.symbolika-costing-select-purple {
+          border-color: var(--symbolika-light-purple-border) !important;
+          background: var(--symbolika-light-purple-bg) !important;
+          color: var(--symbolika-light-purple-text) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-order-hover-status.symbolika-costing-select-danger {
+          border-color: var(--symbolika-light-red-border) !important;
+          background: var(--symbolika-light-red-bg) !important;
+          color: var(--symbolika-light-red-text) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+          .symbolika-order-hover-status.symbolika-costing-select-muted {
+          border-color: var(--symbolika-line-strong) !important;
+          background: var(--symbolika-light-row-expanded) !important;
+          color: var(--symbolika-muted) !important;
+        }
+
+        html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
           .symbolika-costing-page .symbolika-costing-amount-badge {
           border-color: var(--symbolika-light-green-border) !important;
           background: var(--symbolika-light-green-bg) !important;
@@ -29060,6 +29430,38 @@ export const CostingModule = {
                   </div>
                 </td>
               </tr>
+              <tr v-if="!isOrderRowExpanded(row)" class="symbolika-order-hover-preview-row">
+                <td colspan="7">
+                  <section class="symbolika-order-hover-preview" @click.stop>
+                    <header class="symbolika-order-hover-preview-head">
+                      <div>
+                        <span>Состав заказа</span>
+                        <strong>{{ row.order_number }}</strong>
+                      </div>
+                      <span class="symbolika-order-hover-count">{{ detailPositions(row).length }}</span>
+                    </header>
+                    <div class="symbolika-order-hover-items">
+                      <button
+                        v-for="item in detailPositions(row)"
+                        :key="'my-order-hover-position-' + (entityId(item.order_item) || item.id || item.product_name)"
+                        type="button"
+                        class="symbolika-order-hover-item"
+                        @click.stop="openDetail('orders_items', item, { parentOrder: row })"
+                      >
+                        <span class="symbolika-order-hover-item-copy">
+                          <strong>{{ item.product_name || '-' }}</strong>
+                          <small>{{ formatQuantity(item.quantity) }} шт. · срок {{ formatDate(item.deadline) }}</small>
+                        </span>
+                        <span class="symbolika-order-hover-status" :class="statusToneClass(itemStatusName(item.item_status))">
+                          {{ itemStatusName(item.item_status) || 'Без статуса' }}
+                        </span>
+                        <v-icon name="chevron_right" small />
+                      </button>
+                      <div v-if="!detailPositions(row).length" class="symbolika-order-hover-empty">Позиции пока не добавлены</div>
+                    </div>
+                  </section>
+                </td>
+              </tr>
               <tr v-if="isOrderRowExpanded(row)" class="symbolika-costing-expanded-row">
                 <td colspan="7" class="symbolika-costing-position-panel">
                   <div class="symbolika-costing-position-list">
@@ -29253,6 +29655,38 @@ export const CostingModule = {
                   </div>
                 </td>
               </tr>
+              <tr v-if="!isOrderRowExpanded(row)" class="symbolika-order-hover-preview-row">
+                <td colspan="7">
+                  <section class="symbolika-order-hover-preview" @click.stop>
+                    <header class="symbolika-order-hover-preview-head">
+                      <div>
+                        <span>Состав заказа</span>
+                        <strong>{{ row.order_number }}</strong>
+                      </div>
+                      <span class="symbolika-order-hover-count">{{ detailPositions(row).length }}</span>
+                    </header>
+                    <div class="symbolika-order-hover-items">
+                      <button
+                        v-for="item in detailPositions(row)"
+                        :key="'all-order-hover-position-' + (entityId(item.order_item) || item.id || item.product_name)"
+                        type="button"
+                        class="symbolika-order-hover-item"
+                        @click.stop="openDetail('orders_items', item, { parentOrder: row })"
+                      >
+                        <span class="symbolika-order-hover-item-copy">
+                          <strong>{{ item.product_name || '-' }}</strong>
+                          <small>{{ formatQuantity(item.quantity) }} шт. · срок {{ formatDate(item.deadline) }}</small>
+                        </span>
+                        <span class="symbolika-order-hover-status" :class="statusToneClass(itemStatusName(item.item_status))">
+                          {{ itemStatusName(item.item_status) || 'Без статуса' }}
+                        </span>
+                        <v-icon name="chevron_right" small />
+                      </button>
+                      <div v-if="!detailPositions(row).length" class="symbolika-order-hover-empty">Позиции пока не добавлены</div>
+                    </div>
+                  </section>
+                </td>
+              </tr>
               <tr v-if="isOrderRowExpanded(row)" class="symbolika-costing-expanded-row">
                 <td colspan="7" class="symbolika-costing-position-panel">
                   <div class="symbolika-costing-position-list">
@@ -29395,6 +29829,38 @@ export const CostingModule = {
                     <span>Оплачено <strong>{{ formatMoney(row.paid_amount) }}</strong></span>
                     <span>Остаток <strong><span class="symbolika-costing-pill" :class="paymentBadgeClass(row.payment_due)">{{ formatMoney(row.payment_due) }}</span></strong></span>
                   </div>
+                </td>
+              </tr>
+              <tr v-if="!isOrderRowExpanded(row)" class="symbolika-order-hover-preview-row">
+                <td colspan="7">
+                  <section class="symbolika-order-hover-preview" @click.stop>
+                    <header class="symbolika-order-hover-preview-head">
+                      <div>
+                        <span>Состав заказа</span>
+                        <strong>{{ row.order_number }}</strong>
+                      </div>
+                      <span class="symbolika-order-hover-count">{{ detailPositions(row).length }}</span>
+                    </header>
+                    <div class="symbolika-order-hover-items">
+                      <button
+                        v-for="item in detailPositions(row)"
+                        :key="'archive-order-hover-position-' + (entityId(item.order_item) || item.id || item.product_name)"
+                        type="button"
+                        class="symbolika-order-hover-item"
+                        @click.stop="openDetail('orders_items', item, { parentOrder: row })"
+                      >
+                        <span class="symbolika-order-hover-item-copy">
+                          <strong>{{ item.product_name || '-' }}</strong>
+                          <small>{{ formatQuantity(item.quantity) }} шт. · срок {{ formatDate(item.deadline) }}</small>
+                        </span>
+                        <span class="symbolika-order-hover-status" :class="statusToneClass(itemStatusName(item.item_status))">
+                          {{ itemStatusName(item.item_status) || 'Без статуса' }}
+                        </span>
+                        <v-icon name="chevron_right" small />
+                      </button>
+                      <div v-if="!detailPositions(row).length" class="symbolika-order-hover-empty">Позиции пока не добавлены</div>
+                    </div>
+                  </section>
                 </td>
               </tr>
               <tr v-if="isOrderRowExpanded(row)" class="symbolika-costing-expanded-row">
