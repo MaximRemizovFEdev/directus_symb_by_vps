@@ -5967,6 +5967,7 @@ export const CostingModule = {
     async closeDetail() {
       const parentOrder = this.detailSplitOrder?.row || this.detailParentOrder;
       const returnToParentOrder = this.detailReturnsToParentOrder;
+      const preservedParentPanel = this.detailSplitOrder;
       const parentScrollTop = Number(document.querySelector('aside.symbolika-costing-detail.is-split-order')?.scrollTop
         || this.detailSplitOrderScrollTop
         || 0);
@@ -5974,6 +5975,38 @@ export const CostingModule = {
       const orderId = Number(this.entityId(this.orderId(closingRow))
         || this.entityId(this.orderId(parentOrder))
         || 0);
+
+      // When an item was opened from an already visible order card, keep that
+      // order panel mounted. Recreating it through openDetail() made the card
+      // disappear for a moment and then look as if it had opened once again.
+      if (parentOrder && returnToParentOrder) {
+        this.detail = preservedParentPanel || {
+          type: 'order',
+          sourceType: 'order',
+          row: parentOrder,
+        };
+        this.detailItemForm = null;
+        this.detailParentOrder = null;
+        this.detailReturnsToParentOrder = false;
+        this.detailSplitOrder = null;
+        this.detailSplitOrderScrollTop = 0;
+
+        await this.refreshCurrentArea();
+        const refreshedParent = orderId ? await this.findLinkedOrder(orderId) : null;
+        if (refreshedParent) {
+          this.detail.row = await this.hydrateOrderDetailRow({ ...this.detail.row, ...refreshedParent });
+        }
+        this.updateOrderLinkUrl(this.detail.row);
+        await Promise.all([
+          this.loadDetailOrderItems(this.detail.row),
+          this.loadDetailPayments(this.detail.row),
+        ]);
+        await this.$nextTick();
+        const orderPanel = document.querySelector('aside.symbolika-costing-detail');
+        if (orderPanel) orderPanel.scrollTop = parentScrollTop;
+        return;
+      }
+
       this.detail = null;
       this.detailOrderItems = [];
       this.detailOrderItemsOrderId = null;
@@ -5992,15 +6025,6 @@ export const CostingModule = {
       }
 
       await this.refreshCurrentArea();
-
-      if (parentOrder && returnToParentOrder) {
-        const refreshedParent = orderId ? await this.findLinkedOrder(orderId) : null;
-        await this.openDetail('order', refreshedParent || parentOrder);
-        await this.$nextTick();
-        const orderPanel = document.querySelector('aside.symbolika-costing-detail');
-        if (orderPanel) orderPanel.scrollTop = parentScrollTop;
-        return;
-      }
 
       if (orderId && this.expandedOrderRows[String(orderId)]) {
         const refreshedOrder = await this.findLinkedOrder(orderId);
@@ -16714,8 +16738,8 @@ export const CostingModule = {
 
         .symbolika-costing-position-main {
           display: grid;
-          grid-template-columns: minmax(138px, 1.5fr) 70px 138px 64px 80px 104px;
-          gap: 7px;
+          grid-template-columns: minmax(138px, 1.5fr) 68px 156px 52px 66px 100px;
+          gap: 6px;
           align-items: center;
           min-inline-size: 0;
         }
@@ -16752,7 +16776,7 @@ export const CostingModule = {
           inline-size: 100% !important;
           min-inline-size: 0;
           min-block-size: 26px !important;
-          padding: 4px 8px !important;
+          padding: 4px 6px !important;
           border-radius: 8px !important;
           font-size: 10.5px;
           font-weight: 750;
@@ -16788,13 +16812,13 @@ export const CostingModule = {
         .symbolika-costing-position-deadline-icon {
           flex: 0 0 auto;
           block-size: 14px;
-          margin-inline-end: 6px;
+          margin-inline-end: 5px;
         }
 
         .symbolika-costing-position-deadline-icon {
           display: inline-grid;
           place-items: center;
-          inline-size: 28px;
+          inline-size: 24px;
           box-sizing: border-box;
           border-inline: 1px solid currentColor;
           padding: 0;
@@ -35378,7 +35402,7 @@ export const CostingModule = {
                 <v-icon :name="copiedOrderLinkId === Number(entityId(orderId(detail.row))) ? 'check' : 'link'" small />
                 {{ copiedOrderLinkId === Number(entityId(orderId(detail.row))) ? 'Скопировано' : 'Ссылка' }}
               </button>
-              <button type="button" class="symbolika-costing-detail-close" @click="closeDetailPanel(detail)">×</button>
+              <button type="button" class="symbolika-costing-detail-close" @click.stop="closeDetailPanel(detail)">×</button>
             </div>
           </div>
 
