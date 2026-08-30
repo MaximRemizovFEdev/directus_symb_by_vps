@@ -1417,6 +1417,7 @@ export const CostingModule = {
       appearanceThemeSaving: false,
       profileLoading: false,
       profileSaving: false,
+      profileBirthdaySaving: false,
       profileUploading: false,
       profileSavedMessage: '',
       expandedOfficeOrders: {},
@@ -5046,6 +5047,32 @@ export const CostingModule = {
     profileBirthdayInput(value) {
       const match = String(value || '').match(/^(\d{4}-\d{2}-\d{2})/);
       return match?.[1] || '';
+    },
+
+    async saveProfileBirthday() {
+      if (this.profileBirthdaySaving || !this.profileData?.person?.employee_id) return;
+
+      const requestedBirthday = this.profileBirthdayInput(this.profileForm.birthday);
+      this.profileBirthdaySaving = true;
+      this.profileSavedMessage = '';
+      this.error = '';
+      try {
+        const payload = await this.request('/symbolika-profile', {
+          method: 'PATCH',
+          body: JSON.stringify({ birthday: requestedBirthday }),
+        });
+        const returnedBirthday = this.profileBirthdayInput(payload?.data?.person?.birthday);
+        if (returnedBirthday !== requestedBirthday) {
+          throw new Error('Дата рождения не была сохранена. Повторите попытку.');
+        }
+        this.profileData = payload?.data || this.profileData;
+        this.profileForm.birthday = returnedBirthday;
+        this.profileSavedMessage = requestedBirthday ? 'Дата рождения сохранена' : 'Дата рождения удалена';
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.profileBirthdaySaving = false;
+      }
     },
 
     async uploadProfileAvatar(event) {
@@ -28585,7 +28612,15 @@ export const CostingModule = {
                 </label>
                 <label v-if="profileData.person.employee_id" class="symbolika-costing-label">
                   Дата рождения
-                  <input v-model="profileForm.birthday" class="symbolika-costing-input" type="date" autocomplete="bday" />
+                  <input
+                    v-model="profileForm.birthday"
+                    class="symbolika-costing-input"
+                    type="date"
+                    autocomplete="bday"
+                    :disabled="profileBirthdaySaving"
+                    @change="saveProfileBirthday"
+                  />
+                  <small class="symbolika-costing-hint">{{ profileBirthdaySaving ? 'Сохраняем…' : 'Сохраняется сразу после выбора даты' }}</small>
                 </label>
                 <div class="symbolika-profile-contact-actions">
                   <span v-if="profileSavedMessage" class="symbolika-profile-saved"><v-icon name="check_circle" small />{{ profileSavedMessage }}</span>
@@ -29533,38 +29568,6 @@ export const CostingModule = {
                   </div>
                 </td>
               </tr>
-              <tr v-if="!isOrderRowExpanded(row)" class="symbolika-order-hover-preview-row">
-                <td colspan="7">
-                  <section class="symbolika-order-hover-preview" @click.stop>
-                    <header class="symbolika-order-hover-preview-head">
-                      <div>
-                        <span>Состав заказа</span>
-                        <strong>{{ row.order_number }}</strong>
-                      </div>
-                      <span class="symbolika-order-hover-count">{{ detailPositions(row).length }}</span>
-                    </header>
-                    <div class="symbolika-order-hover-items">
-                      <button
-                        v-for="item in detailPositions(row)"
-                        :key="'my-order-hover-position-' + (entityId(item.order_item) || item.id || item.product_name)"
-                        type="button"
-                        class="symbolika-order-hover-item"
-                        @click.stop="openDetail('orders_items', item, { parentOrder: row })"
-                      >
-                        <span class="symbolika-order-hover-item-copy">
-                          <strong>{{ item.product_name || '-' }}</strong>
-                          <small>{{ formatQuantity(item.quantity) }} шт. · срок {{ formatDate(item.deadline) }}</small>
-                        </span>
-                        <span class="symbolika-order-hover-status" :class="statusToneClass(itemStatusName(item.item_status))">
-                          {{ itemStatusName(item.item_status) || 'Без статуса' }}
-                        </span>
-                        <v-icon name="chevron_right" small />
-                      </button>
-                      <div v-if="!detailPositions(row).length" class="symbolika-order-hover-empty">Позиции пока не добавлены</div>
-                    </div>
-                  </section>
-                </td>
-              </tr>
               <tr v-if="isOrderRowExpanded(row)" class="symbolika-costing-expanded-row">
                 <td colspan="7" class="symbolika-costing-position-panel">
                   <div class="symbolika-costing-position-list">
@@ -29758,38 +29761,6 @@ export const CostingModule = {
                   </div>
                 </td>
               </tr>
-              <tr v-if="!isOrderRowExpanded(row)" class="symbolika-order-hover-preview-row">
-                <td colspan="7">
-                  <section class="symbolika-order-hover-preview" @click.stop>
-                    <header class="symbolika-order-hover-preview-head">
-                      <div>
-                        <span>Состав заказа</span>
-                        <strong>{{ row.order_number }}</strong>
-                      </div>
-                      <span class="symbolika-order-hover-count">{{ detailPositions(row).length }}</span>
-                    </header>
-                    <div class="symbolika-order-hover-items">
-                      <button
-                        v-for="item in detailPositions(row)"
-                        :key="'all-order-hover-position-' + (entityId(item.order_item) || item.id || item.product_name)"
-                        type="button"
-                        class="symbolika-order-hover-item"
-                        @click.stop="openDetail('orders_items', item, { parentOrder: row })"
-                      >
-                        <span class="symbolika-order-hover-item-copy">
-                          <strong>{{ item.product_name || '-' }}</strong>
-                          <small>{{ formatQuantity(item.quantity) }} шт. · срок {{ formatDate(item.deadline) }}</small>
-                        </span>
-                        <span class="symbolika-order-hover-status" :class="statusToneClass(itemStatusName(item.item_status))">
-                          {{ itemStatusName(item.item_status) || 'Без статуса' }}
-                        </span>
-                        <v-icon name="chevron_right" small />
-                      </button>
-                      <div v-if="!detailPositions(row).length" class="symbolika-order-hover-empty">Позиции пока не добавлены</div>
-                    </div>
-                  </section>
-                </td>
-              </tr>
               <tr v-if="isOrderRowExpanded(row)" class="symbolika-costing-expanded-row">
                 <td colspan="7" class="symbolika-costing-position-panel">
                   <div class="symbolika-costing-position-list">
@@ -29932,38 +29903,6 @@ export const CostingModule = {
                     <span>Оплачено <strong>{{ formatMoney(row.paid_amount) }}</strong></span>
                     <span>Остаток <strong><span class="symbolika-costing-pill" :class="paymentBadgeClass(row.payment_due)">{{ formatMoney(row.payment_due) }}</span></strong></span>
                   </div>
-                </td>
-              </tr>
-              <tr v-if="!isOrderRowExpanded(row)" class="symbolika-order-hover-preview-row">
-                <td colspan="7">
-                  <section class="symbolika-order-hover-preview" @click.stop>
-                    <header class="symbolika-order-hover-preview-head">
-                      <div>
-                        <span>Состав заказа</span>
-                        <strong>{{ row.order_number }}</strong>
-                      </div>
-                      <span class="symbolika-order-hover-count">{{ detailPositions(row).length }}</span>
-                    </header>
-                    <div class="symbolika-order-hover-items">
-                      <button
-                        v-for="item in detailPositions(row)"
-                        :key="'archive-order-hover-position-' + (entityId(item.order_item) || item.id || item.product_name)"
-                        type="button"
-                        class="symbolika-order-hover-item"
-                        @click.stop="openDetail('orders_items', item, { parentOrder: row })"
-                      >
-                        <span class="symbolika-order-hover-item-copy">
-                          <strong>{{ item.product_name || '-' }}</strong>
-                          <small>{{ formatQuantity(item.quantity) }} шт. · срок {{ formatDate(item.deadline) }}</small>
-                        </span>
-                        <span class="symbolika-order-hover-status" :class="statusToneClass(itemStatusName(item.item_status))">
-                          {{ itemStatusName(item.item_status) || 'Без статуса' }}
-                        </span>
-                        <v-icon name="chevron_right" small />
-                      </button>
-                      <div v-if="!detailPositions(row).length" class="symbolika-order-hover-empty">Позиции пока не добавлены</div>
-                    </div>
-                  </section>
                 </td>
               </tr>
               <tr v-if="isOrderRowExpanded(row)" class="symbolika-costing-expanded-row">
