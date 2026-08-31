@@ -224,15 +224,6 @@ BEFORE INSERT OR UPDATE OF item_status, product_category, product_subcategory, b
 ON public.orders_items
 FOR EACH ROW EXECUTE FUNCTION public.symbolika_validate_rollup_two_stage_route();
 
-UPDATE public.orders_items AS item
-SET blank_source = 'supplier'
-WHERE public.symbolika_item_needs_blank(
-        item.product_category,
-        item.product_subcategory,
-        item.product_name
-      )
-  AND COALESCE(item.blank_source, 'none') = 'none'
-  AND (
-    public.symbolika_normalize_item_status(item.item_status) NOT IN ('sent_to_work', 'in_work')
-    OR item.contractor_2 IS NOT NULL
-  );
+-- Existing rows are deliberately not rewritten by this migration. They are
+-- normalized by the routing trigger on their next explicit edit, which keeps
+-- deployment safe for the live order database.
