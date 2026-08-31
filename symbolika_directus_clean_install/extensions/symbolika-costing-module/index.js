@@ -10085,6 +10085,14 @@ export const CostingModule = {
       return String(this.categoryById(categoryId)?.name || '').toLowerCase();
     },
 
+    subcategoryName(subcategoryId) {
+      const id = this.entityId(subcategoryId);
+      if (!id) return '';
+      const subcategory = (this.productSubcategories || [])
+        .find((item) => Number(item.id) === Number(id));
+      return String(subcategory?.name || '').trim().toLocaleLowerCase('ru-RU');
+    },
+
     itemCategoryId(item) {
       return this.entityId(item?.product_category) || this.entityId(item?.category);
     },
@@ -10095,7 +10103,14 @@ export const CostingModule = {
 
     itemNeedsBlank(item) {
       const name = this.categoryName(this.itemCategoryId(item));
-      return name.includes('текстиль') || name.includes('сувенир') || name.includes('упаков');
+      const subcategoryName = this.subcategoryName(item?.product_subcategory);
+      const productName = String(item?.product_name || item?.name || '').trim().toLocaleLowerCase('ru-RU');
+      const isRollup = [subcategoryName, productName]
+        .some((value) => value.includes('ролап') || value.includes('роллап'));
+      return name.includes('текстиль')
+        || name.includes('сувенир')
+        || name.includes('упаков')
+        || (name.includes('конструкц') && isRollup);
     },
 
     isTextileBlankItem(item) {
@@ -10258,6 +10273,12 @@ export const CostingModule = {
 
     syncContractorSelections(item) {
       if (!item) return;
+      const needsBlank = this.itemNeedsBlank(item);
+      if (needsBlank && !['supplier', 'customer', 'warehouse', 'contractor'].includes(item.blank_source)) {
+        item.blank_source = 'supplier';
+      } else if (!needsBlank) {
+        item.blank_source = 'none';
+      }
       const executorField = this.executorField(item);
       const executorOptions = this.executorOptions(item);
       const executorIds = executorOptions.map((row) => Number(row.id));
@@ -10266,13 +10287,13 @@ export const CostingModule = {
         item[this.executorCostField(item)] = '';
       }
 
-      if (this.itemNeedsBlank(item) && item.blank_source === 'supplier') {
+      if (needsBlank && item.blank_source === 'supplier') {
         const supplierOptions = this.blankSupplierOptions(item);
         const supplierIds = supplierOptions.map((row) => Number(row.id));
         if (!supplierIds.includes(Number(this.entityId(item.contractor_1) || 0))) {
           item.contractor_1 = supplierIds.length === 1 ? supplierIds[0] : '';
         }
-      } else if (this.itemNeedsBlank(item)) {
+      } else if (needsBlank) {
         if (executorField === 'contractor_2') {
           item.contractor_1 = '';
           item.contractor_1_cost = '';
@@ -11995,34 +12016,52 @@ export const CostingModule = {
       if (!executorId) return false;
       const contractor = this.contractors.find((row) => String(row.id) === String(executorId))
         || item?.[this.executorField(item)];
+      if (this.isInternalExecutionContractor(contractor)) return false;
+
+      // For products with a blank, contractor_2 is explicitly the work
+      // executor. The same company may be classified as a blank supplier in
+      // the directory, but when it is selected in this slot the position must
+      // still pass through the external-work launch queue.
+      if (this.executorField(item) === 'contractor_2') return true;
+
       const kind = String(contractor?.supplier_kind || 'contractor');
-      return !this.isInternalExecutionContractor(contractor) && ['contractor', 'both'].includes(kind);
+      return ['contractor', 'both'].includes(kind);
     },
 
-    isExternalExecutorWorkRow(row) {
+    contractorWorkRowIsExecutor(row) {
       const item = row?.order_item || {};
+      const rowContractorId = String(this.contractorId(row?.contractor) || '');
       const firstContractorId = String(this.contractorId(item?.contractor_1) || '');
       const secondContractorId = String(this.contractorId(item?.contractor_2) || '');
-      const executorId = secondContractorId || firstContractorId;
-      const rowContractorId = String(this.contractorId(row?.contractor) || '');
-      if (!executorId || !rowContractorId || executorId !== rowContractorId) return false;
-      if (this.isInternalExecutionContractor(row?.contractor)) return false;
+      if (!rowContractorId) return false;
+
+      // A populated second slot is always the executor. The first slot is an
+      // executor only when there is no second slot and the counterparty is not
+      // merely a blank supplier.
+      if (secondContractorId) return rowContractorId === secondContractorId;
+      if (rowContractorId !== firstContractorId) return false;
       const contractorKind = String(row?.contractor?.supplier_kind || 'contractor');
       return ['contractor', 'both'].includes(contractorKind);
     },
 
+    isExternalExecutorWorkRow(row) {
+      if (!this.contractorWorkRowIsExecutor(row)) return false;
+      if (this.isInternalExecutionContractor(row?.contractor)) return false;
+      return true;
+    },
+
     isPendingExternalWorkRow(row) {
       const item = row?.order_item || {};
-      if (this.normalizedWorkflowStatus(item?.item_status) !== 'sent_to_work') return false;
-      if (this.isInternalExecutionContractor(row?.contractor)) return false;
-      const contractorKind = String(row?.contractor?.supplier_kind || 'contractor');
-      if (!['contractor', 'both'].includes(contractorKind)) return false;
+      if (!this.isExternalExecutorWorkRow(row)) return false;
 
-      const rowContractorId = String(this.contractorId(row?.contractor) || '');
-      const firstContractorId = String(this.contractorId(item?.contractor_1) || '');
-      const secondContractorId = String(this.contractorId(item?.contractor_2) || '');
-      const executorId = secondContractorId || firstContractorId;
-      return Boolean(rowContractorId && executorId && rowContractorId === executorId);
+      const itemStatus = this.normalizedWorkflowStatus(item?.item_status);
+      if (itemStatus === 'sent_to_work') return true;
+
+      // Recover positions launched before the executor-slot fix: they could
+      // receive item_status=in_work while the contractor work status remained
+      // "Not in work". They still need an admin/manager hand-off.
+      const productionStatus = this.normalizeStatus(this.relatedName(row?.production_status));
+      return itemStatus === 'in_work' && (!productionStatus || productionStatus === 'не в работе');
     },
 
     workLaunchBusy(row) {
