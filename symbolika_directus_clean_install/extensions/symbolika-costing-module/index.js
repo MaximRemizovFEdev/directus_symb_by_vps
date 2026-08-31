@@ -14528,7 +14528,9 @@ export const CostingModule = {
       );
       let allowedNames;
 
-      if (['новый', 'согласование'].includes(currentName)) allowedNames = ['новый', 'согласование'];
+      if (['новый', 'ждем макет', 'ждём макет', 'согласование'].includes(currentName)) {
+        allowedNames = ['новый', 'ждем макет', 'ждём макет', 'согласование'];
+      }
       else if (currentName === 'доработка макета') allowedNames = ['доработка макета'];
       else if (['отправлен в работу', 'в работе'].includes(currentName)) allowedNames = [currentName, 'готов', 'доставлен'];
       else if (currentName === 'готов') allowedNames = ['готов', 'доставлен'];
@@ -14989,14 +14991,14 @@ export const CostingModule = {
     canSendOrderToWork(row) {
       if (!this.canCreateOrders || !this.detailIsOrder(row)) return false;
       const status = this.normalizedWorkflowStatus(row?.order_status_name || this.detailOrderStatus(row));
-      if (!['новый', 'согласование', 'доработка макета'].includes(status)) return false;
+      if (!['новый', 'ждем макет', 'ждём макет', 'согласование', 'доработка макета'].includes(status)) return false;
       return this.orderWorkReadinessMissing(row).length === 0;
     },
 
     canExplainOrderWorkReadiness(row) {
       if (!this.canCreateOrders || !this.detailIsOrder(row)) return false;
       const status = this.normalizedWorkflowStatus(row?.order_status_name || this.detailOrderStatus(row));
-      if (!['новый', 'согласование', 'доработка макета'].includes(status)) return false;
+      if (!['новый', 'ждем макет', 'ждём макет', 'согласование', 'доработка макета'].includes(status)) return false;
       return this.orderWorkReadinessMissing(row).length > 0;
     },
 
