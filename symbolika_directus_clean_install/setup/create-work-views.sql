@@ -14900,6 +14900,44 @@ ON CONFLICT (
   (COALESCE(product_subcategory, 0)), (COALESCE(application_method, 0))
 ) DO UPDATE SET priority = 1, is_active = true;
 
+-- A roll-up consists of two independent stages: the construction/blank and
+-- the printing/application. Keep this rule in one place so routing, launch
+-- validation and readiness calculations cannot disagree about the slots.
+CREATE OR REPLACE FUNCTION symbolika_item_needs_blank(
+  p_category_id integer,
+  p_subcategory_id integer,
+  p_product_name text
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT COALESCE((
+    SELECT
+      category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
+      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%'
+      OR category.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%'
+      OR (
+        category.name ILIKE U&'%\043a\043e\043d\0441\0442\0440\0443\043a\0446%'
+        AND (
+          COALESCE(p_product_name, '') ILIKE U&'%\0440\043e\043b\0430\043f%'
+          OR COALESCE(p_product_name, '') ILIKE U&'%\0440\043e\043b\043b\0430\043f%'
+          OR EXISTS (
+            SELECT 1
+            FROM product_subcategories subcategory
+            WHERE subcategory.id = p_subcategory_id
+              AND (
+                subcategory.name ILIKE U&'%\0440\043e\043b\0430\043f%'
+                OR subcategory.name ILIKE U&'%\0440\043e\043b\043b\0430\043f%'
+              )
+          )
+        )
+      )
+    FROM product_categories category
+    WHERE category.id = p_category_id
+  ), false);
+$$;
+
 CREATE OR REPLACE FUNCTION apply_category_contractors_trigger()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -14916,14 +14954,11 @@ BEGIN
      OR NEW.application_method IS DISTINCT FROM OLD.application_method
      OR NEW.blank_source IS DISTINCT FROM OLD.blank_source THEN
 
-    SELECT COALESCE(
-      pc.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
-      OR pc.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%'
-      OR pc.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%', false
-    ) INTO needs_blank
-    FROM product_categories pc
-    WHERE pc.id = NEW.product_category;
-    needs_blank := COALESCE(needs_blank, false);
+    needs_blank := symbolika_item_needs_blank(
+      NEW.product_category,
+      NEW.product_subcategory,
+      NEW.product_name
+    );
 
     IF NEW.product_subcategory IS NOT NULL AND NOT EXISTS (
       SELECT 1 FROM product_subcategories subcategory
@@ -15128,14 +15163,11 @@ BEGIN
       RAISE EXCEPTION USING MESSAGE = U&'\0414\043b\044f \0437\0430\043f\0443\0441\043a\0430 \043f\043e\0437\0438\0446\0438\0438 \0443\043a\0430\0436\0438\0442\0435 \043a\0430\0442\0435\0433\043e\0440\0438\044e';
     END IF;
 
-    SELECT COALESCE(
-      category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
-      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%'
-      OR category.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%', false
-    ) INTO needs_blank
-    FROM product_categories category
-    WHERE category.id = NEW.product_category;
-    needs_blank := COALESCE(needs_blank, false);
+    needs_blank := symbolika_item_needs_blank(
+      NEW.product_category,
+      NEW.product_subcategory,
+      NEW.product_name
+    );
     selected_executor := CASE
       WHEN needs_blank THEN NEW.contractor_2
       ELSE NEW.contractor_1
@@ -15322,13 +15354,11 @@ BEGIN
     IF item_row.product_category IS NOT NULL THEN checks_filled := checks_filled + 1;
     ELSE missing_values := array_append(missing_values, item_label || U&': \043a\0430\0442\0435\0433\043e\0440\0438\044f'); END IF;
 
-    SELECT COALESCE(
-      category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
-      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%'
-      OR category.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%', false
-    ) INTO needs_blank
-    FROM product_categories category WHERE category.id = item_row.product_category;
-    needs_blank := COALESCE(needs_blank, false);
+    needs_blank := symbolika_item_needs_blank(
+      item_row.product_category,
+      item_row.product_subcategory,
+      item_row.product_name
+    );
 
     checks_total := checks_total + 1;
     IF (needs_blank AND item_row.contractor_2 IS NOT NULL)
@@ -15521,14 +15551,11 @@ BEGIN
       CONTINUE;
     END IF;
 
-    SELECT COALESCE(
-      category.name ILIKE U&'%\0442\0435\043a\0441\0442\0438\043b%'
-      OR category.name ILIKE U&'%\0441\0443\0432\0435\043d\0438\0440%'
-      OR category.name ILIKE U&'%\0443\043f\0430\043a\043e\0432%', false
-    ) INTO needs_blank
-    FROM product_categories category
-    WHERE category.id = item_row.product_category;
-    needs_blank := COALESCE(needs_blank, false);
+    needs_blank := symbolika_item_needs_blank(
+      item_row.product_category,
+      item_row.product_subcategory,
+      item_row.product_name
+    );
     selected_executor := CASE
       WHEN needs_blank THEN item_row.contractor_2
       ELSE item_row.contractor_1
