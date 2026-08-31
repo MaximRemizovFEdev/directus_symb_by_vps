@@ -617,8 +617,8 @@ export default {
           .pluck('disk_path');
         const item = { ...accessibleItem, ...(diskMeta || {}) };
         const status = String(item?.item_status || 'new').trim().toLowerCase();
-        if (!['new', 'approval'].includes(status)) {
-          throw apiError('Удалить позицию можно только до её запуска в работу.', 409);
+        if (!['new', 'approval', 'cancelled'].includes(status)) {
+          throw apiError('Удалить позицию можно до запуска в работу или после её отмены.', 409);
         }
 
         const relatedTaskIds = (await database('symbolika_tasks')

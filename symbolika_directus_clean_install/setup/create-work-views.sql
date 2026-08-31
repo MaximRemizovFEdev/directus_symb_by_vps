@@ -13346,12 +13346,12 @@ WHERE collection = 'orders_items'
   );
 
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy) VALUES
-  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000201'),
-  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000202'),
-  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000204'),
-  ('orders_items', 'delete', '{"item_status":{"_in":["new","approval"]}}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
-  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000206'),
-  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000208');
+  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval","cancelled"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000201'),
+  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval","cancelled"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000202'),
+  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval","cancelled"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000204'),
+  ('orders_items', 'delete', '{"item_status":{"_in":["new","approval","cancelled"]}}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
+  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval","cancelled"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000206'),
+  ('orders_items', 'delete', '{"_and":[{"item_status":{"_in":["new","approval","cancelled"]}},{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000208');
 
 WITH self_sales_policies(policy) AS (
   VALUES
@@ -14607,7 +14607,7 @@ WITH workshop_sales_policies(policy) AS (
       '{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json, NULL::json,
       'product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,item_status,deadline,production_comment,technical_task_text,shipping_method,office_status,url,contractor_1,contractor_1_cost,needs_designer_help,designer_comment,designer_source_url'),
     ('orders_items', 'delete',
-      '{"_and":[{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}},{"item_status":{"_in":["new","approval"]}}]}'::json,
+      '{"_and":[{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}},{"item_status":{"_in":["new","approval","cancelled"]}}]}'::json,
       NULL::json, NULL::json, '*')
 )
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)

@@ -14726,7 +14726,7 @@ export const CostingModule = {
       const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
       if (!itemId) return false;
       const status = this.normalizedWorkflowStatus(item?.item_status || 'new');
-      return ['new', 'approval'].includes(status);
+      return ['new', 'approval', 'cancelled'].includes(status);
     },
 
     canReorganizeOrderItem(item) {
