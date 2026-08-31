@@ -11869,7 +11869,7 @@ export const CostingModule = {
       }
     },
 
-    async saveOrderItemField(row, field, value) {
+    async saveOrderItemField(row, field, value, additionalPatch = null) {
       const itemId = this.entityId(row?.order_item) || row?.id;
       if (!itemId) return;
 
@@ -11898,7 +11898,10 @@ export const CostingModule = {
               : textFields.includes(field)
                 ? (String(value || '').trim() || null)
                 : (value || null);
-        const patch = { [field]: normalized };
+        const patch = {
+          [field]: normalized,
+          ...(additionalPatch && typeof additionalPatch === 'object' ? additionalPatch : {}),
+        };
 
         if (field === 'blank_source' && ['customer', 'warehouse', 'contractor', 'none'].includes(normalized)) {
           patch.contractor_1 = null;
@@ -11968,11 +11971,13 @@ export const CostingModule = {
     async saveOrderItemContractor(row, field, value) {
       const previousId = Number(this.entityId(row?.[field]) || 0);
       const nextId = Number(value || 0);
-      await this.saveOrderItemField(row, field, value);
-      if (previousId !== nextId) {
-        const costField = field === 'contractor_2' ? 'contractor_2_cost' : 'contractor_1_cost';
-        await this.saveOrderItemField(row, costField, 0);
-      }
+      const costField = field === 'contractor_2' ? 'contractor_2_cost' : 'contractor_1_cost';
+      const resetCost = previousId !== nextId ? { [costField]: 0 } : null;
+
+      // Contractor and its cost must be changed by one PATCH. Previously the
+      // delayed second PATCH that reset the cost could arrive after the user
+      // had already entered a new value and silently overwrite it with zero.
+      await this.saveOrderItemField(row, field, value, resetCost);
     },
 
     itemAttachmentRows(row) {
@@ -15250,7 +15255,15 @@ export const CostingModule = {
     },
 
     savingClass(row, field) {
-      return this.saving[`${row.id}:${field}`] ? 'is-saving' : '';
+      const itemId = this.entityId(row?.order_item) || row?.id;
+      return this.saving[`orders_items:${itemId}:${field}`] || this.saving[`${row?.id}:${field}`]
+        ? 'is-saving'
+        : '';
+    },
+
+    isOrderItemFieldSaving(row, field) {
+      const itemId = this.entityId(row?.order_item) || row?.id;
+      return Boolean(itemId && this.saving[`orders_items:${itemId}:${field}`]);
     },
 
     savingWorkClass(collection, row, field) {
@@ -30543,7 +30556,7 @@ export const CostingModule = {
                       :class="savingClass(row, 'contractor_1_cost')"
                       inputmode="decimal"
                       :value="row.contractor_1_cost"
-                      :disabled="contractorIsInternal(row.contractor_1)"
+                      :disabled="contractorIsInternal(row.contractor_1) || isOrderItemFieldSaving(row, 'contractor_1')"
                       :title="contractorIsInternal(row.contractor_1) ? 'Для собственного производства себестоимость равна нулю' : 'Себестоимость заготовки за единицу'"
                       placeholder="Себестоимость за единицу"
                       @change="saveField(row, 'contractor_1_cost', $event.target.value)"
@@ -30573,7 +30586,7 @@ export const CostingModule = {
                     :class="savingClass(row, executorCostField(row))"
                     inputmode="decimal"
                     :value="row[executorCostField(row)]"
-                    :disabled="contractorIsInternal(row[executorField(row)])"
+                    :disabled="contractorIsInternal(row[executorField(row)]) || isOrderItemFieldSaving(row, executorField(row))"
                     :title="contractorIsInternal(row[executorField(row)]) ? 'Для собственного производства себестоимость равна нулю' : 'Себестоимость работ за единицу'"
                     placeholder="Себестоимость за единицу"
                     @change="saveField(row, executorCostField(row), $event.target.value)"
@@ -30679,7 +30692,7 @@ export const CostingModule = {
                     class="symbolika-costing-select"
                     :class="savingClass(row, 'contractor_1')"
                     :value="contractorId(row.contractor_1)"
-                    @change="saveField(row, 'contractor_1', $event.target.value)"
+                    @change="saveOrderItemContractor(row, 'contractor_1', $event.target.value)"
                   >
                     <option value="">Не выбран</option>
                     <option v-if="!blankSupplierOptions(row).length" value="" disabled>Нет отмеченных поставщиков</option>
@@ -30701,6 +30714,7 @@ export const CostingModule = {
                     :class="savingClass(row, 'contractor_1_cost')"
                     inputmode="decimal"
                     :value="row.contractor_1_cost"
+                    :disabled="isOrderItemFieldSaving(row, 'contractor_1')"
                     @change="saveField(row, 'contractor_1_cost', $event.target.value)"
                   />
                 </td>
@@ -36166,6 +36180,7 @@ export const CostingModule = {
                   :class="savingWorkClass('orders_items', detail.row, 'contractor_1_cost')"
                   inputmode="decimal"
                   :value="detail.row.contractor_1_cost"
+                  :disabled="contractorIsInternal(detail.row.contractor_1) || isOrderItemFieldSaving(detail.row, 'contractor_1')"
                   @focus="clearZeroInput(detail.row, 'contractor_1_cost')"
                   @change="saveOrderItemField(detail.row, 'contractor_1_cost', $event.target.value)"
                 />
@@ -36201,6 +36216,7 @@ export const CostingModule = {
                   :class="savingWorkClass('orders_items', detail.row, executorCostField(detail.row))"
                   inputmode="decimal"
                   :value="detail.row[executorCostField(detail.row)]"
+                  :disabled="contractorIsInternal(detail.row[executorField(detail.row)]) || isOrderItemFieldSaving(detail.row, executorField(detail.row))"
                   @focus="clearZeroInput(detail.row, executorCostField(detail.row))"
                   @change="saveOrderItemField(detail.row, executorCostField(detail.row), $event.target.value)"
                 />
