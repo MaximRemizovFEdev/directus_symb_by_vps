@@ -1904,7 +1904,13 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       payments.reduce((s, x) => s + num(x.amount), 0)
     );
 
-    const balance = round(payments_total_out - items_total_cost);
+    const contractor = await database('contractors')
+      .where({ id: contractorId })
+      .select('balance_adjustment')
+      .first();
+    const balance = round(
+      payments_total_out - items_total_cost + num(contractor?.balance_adjustment)
+    );
 
     await database('contractors').where({ id: contractorId }).update({
       items_total_cost,
@@ -2874,6 +2880,20 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
         if (payment?.contractor) {
           await recalcContractorBalance(payment.contractor);
         }
+      }
+    } catch (error) {
+      logger.error(error);
+    }
+  });
+
+  // CONTRACTOR BALANCE ADJUSTMENT UPDATE
+  action('items.update', async ({ collection, keys, payload }) => {
+    try {
+      if (collection !== 'contractors') return;
+      if (!Object.prototype.hasOwnProperty.call(payload || {}, 'balance_adjustment')) return;
+
+      for (const key of keys || []) {
+        await recalcContractorBalance(key);
       }
     } catch (error) {
       logger.error(error);

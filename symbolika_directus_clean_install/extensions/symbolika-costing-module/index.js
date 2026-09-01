@@ -323,6 +323,10 @@ const contractorFields = [
   'balance',
   'debt_to_contractor',
   'contractor_debt_to_us',
+  'balance_adjustment',
+  'balance_adjustment_comment',
+  'balance_adjusted_at',
+  'balance_adjusted_by',
   'has_own_view',
   'supplier_kind',
   'approval_status',
@@ -776,7 +780,7 @@ const adminConfigs = {
     endpoint: '/items/contractors',
     title: 'Контрагенты',
     sort: 'name',
-    fields: 'id,name,contact_name,phone,email,website_url,city,pickup_address,default_delivery_method,default_transport_company,default_pickup_days,pickup_notes,supplier_kind,default_product_category,default_product_subcategory,supplies_textile_blanks,supplies_merch_blanks,is_internal_production,has_own_view,directus_user,comment,approval_status,proposed_by_employee,approved_by_employee,approved_at,approval_comment',
+    fields: 'id,name,contact_name,phone,email,website_url,city,pickup_address,default_delivery_method,default_transport_company,default_pickup_days,pickup_notes,supplier_kind,default_product_category,default_product_subcategory,supplies_textile_blanks,supplies_merch_blanks,is_internal_production,has_own_view,directus_user,comment,approval_status,proposed_by_employee,approved_by_employee,approved_at,approval_comment,items_total_cost,payments_total_out,balance,debt_to_contractor,contractor_debt_to_us,balance_adjustment,balance_adjustment_comment,balance_adjusted_at,balance_adjusted_by',
     tableColumns: [
       { key: 'name', label: 'Название', type: 'text' },
       { key: 'contact_name', label: 'Контакт', type: 'text' },
@@ -1282,6 +1286,7 @@ export const CostingModule = {
       expenseRows: [],
       contractorPaymentRows: [],
       contractorSettlementView: 'contractors',
+      contractorBalanceDialog: null,
       orderEconomicsView: 'orders',
       orderEconomicsArchiveMode: 'all',
       orderEconomicsDateFrom: '',
@@ -6718,6 +6723,77 @@ export const CostingModule = {
         contractor: row.id,
         comment: `Общая оплата контрагенту «${row.name || ''}»`,
       });
+    },
+
+    async openContractorEditor(row) {
+      if (!row?.id) return;
+      this.activeTab = 'contractors';
+      await this.loadAdminRows('contractors');
+      const fullRow = (this.adminRows.contractors || []).find(
+        (item) => String(item.id) === String(row.id)
+      );
+      this.startAdminEdit(fullRow || row);
+    },
+
+    openContractorBalanceDialog(row) {
+      if (!row?.id) return;
+      const itemsTotal = this.parseMoney(row.items_total_cost);
+      const paymentsTotal = this.parseMoney(row.payments_total_out);
+      this.contractorBalanceDialog = {
+        id: row.id,
+        name: row.name || 'Контрагент',
+        itemsTotal,
+        paymentsTotal,
+        baseBalance: paymentsTotal - itemsTotal,
+        currentBalance: this.parseMoney(row.balance),
+        targetBalance: String(this.parseMoney(row.balance)).replace('.', ','),
+        comment: row.balance_adjustment_comment || '',
+        saving: false,
+      };
+    },
+
+    closeContractorBalanceDialog() {
+      if (this.contractorBalanceDialog?.saving) return;
+      this.contractorBalanceDialog = null;
+    },
+
+    async saveContractorBalanceAdjustment() {
+      const dialog = this.contractorBalanceDialog;
+      if (!dialog || dialog.saving) return;
+
+      const rawTarget = String(dialog.targetBalance ?? '').trim();
+      const comment = String(dialog.comment || '').trim();
+      if (!rawTarget) {
+        this.error = 'Укажите новый баланс взаиморасчётов.';
+        return;
+      }
+      if (!comment) {
+        this.error = 'Укажите причину ручной корректировки баланса.';
+        return;
+      }
+
+      const targetBalance = this.parseMoney(rawTarget);
+      const adjustment = Math.round((targetBalance - dialog.baseBalance) * 100) / 100;
+      dialog.saving = true;
+
+      try {
+        await this.request(`/items/contractors/${dialog.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            balance_adjustment: adjustment,
+            balance_adjustment_comment: comment,
+            balance_adjusted_at: new Date().toISOString(),
+            balance_adjusted_by: this.currentUserId || null,
+          }),
+        });
+        this.contractorBalanceDialog = null;
+        await this.loadContractorRows();
+        if (this.activeTab === 'contractors') await this.loadAdminRows('contractors');
+        this.success = 'Баланс взаиморасчётов скорректирован.';
+      } catch (error) {
+        this.error = error?.message || 'Не удалось скорректировать баланс взаиморасчётов.';
+        dialog.saving = false;
+      }
     },
 
     closeExpenseDialog() {
@@ -16670,6 +16746,61 @@ export const CostingModule = {
           display: flex;
           flex-wrap: wrap;
           gap: 6px;
+        }
+
+        .symbolika-costing-contractor-name {
+          appearance: none;
+          border: 0;
+          background: transparent;
+          color: var(--theme--foreground);
+          padding: 0;
+          font: inherit;
+          font-weight: 800;
+          text-align: start;
+          cursor: pointer;
+        }
+
+        .symbolika-costing-contractor-name:hover {
+          color: var(--symbolika-orange);
+          text-decoration: underline;
+          text-underline-offset: 3px;
+        }
+
+        .symbolika-costing-balance-modal {
+          inline-size: min(620px, calc(100vw - 28px));
+        }
+
+        .symbolika-costing-balance-summary {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 9px;
+          margin-block-end: 14px;
+        }
+
+        .symbolika-costing-balance-summary article {
+          display: grid;
+          gap: 5px;
+          min-inline-size: 0;
+          padding: 11px;
+          border: 1px solid var(--theme--border-color);
+          border-radius: 9px;
+          background: var(--theme--background-normal);
+        }
+
+        .symbolika-costing-balance-summary span {
+          color: var(--theme--foreground-subdued);
+          font-size: 11px;
+        }
+
+        .symbolika-costing-balance-summary strong {
+          color: var(--theme--foreground);
+          font-size: 16px;
+        }
+
+        @media (max-width: 600px) {
+          .symbolika-costing-balance-summary {
+            grid-template-columns: 1fr;
+          }
         }
 
         .symbolika-costing-mini-button.muted {
@@ -31287,7 +31418,9 @@ export const CostingModule = {
               <tbody>
                 <tr v-for="row in visibleContractorSettlementRows" :key="row.id">
                   <td>
-                    <div class="symbolika-costing-product">{{ row.name }}</div>
+                    <button type="button" class="symbolika-costing-contractor-name" @click="openContractorEditor(row)">
+                      {{ row.name }}
+                    </button>
                     <div class="symbolika-costing-subtle">{{ [row.contact_name, row.phone].filter(Boolean).join(' · ') || '-' }}</div>
                   </td>
                   <td class="symbolika-costing-num">{{ formatMoney(row.items_total_cost) }}</td>
@@ -31299,7 +31432,12 @@ export const CostingModule = {
                     </span>
                   </td>
                   <td class="symbolika-costing-num">{{ formatMoney(row.contractor_debt_to_us) }}</td>
-                  <td><button type="button" class="symbolika-costing-mini-button" @click="openContractorQuickPayment(row)">Оплатить</button></td>
+                  <td>
+                    <div class="symbolika-costing-row-actions">
+                      <button type="button" class="symbolika-costing-mini-button" @click="openContractorQuickPayment(row)">Оплатить</button>
+                      <button type="button" class="symbolika-costing-mini-button muted" @click="openContractorBalanceDialog(row)">Скорректировать</button>
+                    </div>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -32479,6 +32617,14 @@ export const CostingModule = {
                         {{ choice.text }}
                       </option>
                     </select>
+                    <button
+                      v-else-if="activeTab === 'contractors' && column.key === 'name'"
+                      type="button"
+                      class="symbolika-costing-contractor-name"
+                      @click="startAdminEdit(row)"
+                    >
+                      {{ adminDisplayValue(row, column) }}
+                    </button>
                     <span
                       v-else-if="column.type === 'boolean'"
                       class="symbolika-costing-pill"
@@ -33321,6 +33467,38 @@ export const CostingModule = {
               </div>
               <div class="symbolika-costing-modal-actions"><button type="button" class="symbolika-costing-mini-button" @click="closePayslipDialog">Закрыть</button><button type="button" class="symbolika-costing-button" @click="printPayslip"><v-icon name="print" small />Печать / PDF</button></div>
             </template>
+          </div>
+        </div>
+
+        <div v-if="contractorBalanceDialog" class="symbolika-costing-modal-backdrop" @click.self="closeContractorBalanceDialog">
+          <div class="symbolika-costing-modal symbolika-costing-balance-modal">
+            <div class="symbolika-costing-modal-head">
+              <div>
+                <div class="symbolika-costing-subtle">Взаиморасчёты</div>
+                <h2>{{ contractorBalanceDialog.name }}</h2>
+              </div>
+              <button type="button" class="symbolika-costing-detail-close" @click="closeContractorBalanceDialog">×</button>
+            </div>
+            <div class="symbolika-costing-balance-summary">
+              <article><span>Начислено</span><strong>{{ formatMoney(contractorBalanceDialog.itemsTotal) }}</strong></article>
+              <article><span>Оплачено</span><strong>{{ formatMoney(contractorBalanceDialog.paymentsTotal) }}</strong></article>
+              <article><span>Текущий баланс</span><strong>{{ formatMoney(contractorBalanceDialog.currentBalance) }}</strong></article>
+            </div>
+            <label class="symbolika-costing-label">
+              Новый баланс
+              <input v-model="contractorBalanceDialog.targetBalance" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" />
+              <span class="symbolika-costing-subtle">0 — расчёты закрыты; отрицательное значение — мы должны контрагенту; положительное — переплата или долг контрагента нам.</span>
+            </label>
+            <label class="symbolika-costing-label">
+              Причина корректировки *
+              <textarea v-model="contractorBalanceDialog.comment" class="symbolika-costing-comment" placeholder="Например: начальный остаток на дату переноса данных"></textarea>
+            </label>
+            <div class="symbolika-costing-modal-actions">
+              <button type="button" class="symbolika-costing-mini-button" @click="closeContractorBalanceDialog">Отмена</button>
+              <button type="button" class="symbolika-costing-button" :disabled="contractorBalanceDialog.saving" @click="saveContractorBalanceAdjustment">
+                {{ contractorBalanceDialog.saving ? 'Сохраняю…' : 'Сохранить корректировку' }}
+              </button>
+            </div>
           </div>
         </div>
 

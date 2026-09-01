@@ -492,6 +492,10 @@ ALTER TABLE contractors ADD COLUMN IF NOT EXISTS pickup_notes text;
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS supplier_kind character varying(64) DEFAULT 'contractor';
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS is_internal_production boolean NOT NULL DEFAULT false;
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS website_url text;
+ALTER TABLE contractors ADD COLUMN IF NOT EXISTS balance_adjustment numeric(14,2) NOT NULL DEFAULT 0;
+ALTER TABLE contractors ADD COLUMN IF NOT EXISTS balance_adjustment_comment text;
+ALTER TABLE contractors ADD COLUMN IF NOT EXISTS balance_adjusted_at timestamptz;
+ALTER TABLE contractors ADD COLUMN IF NOT EXISTS balance_adjusted_by uuid REFERENCES directus_users(id) ON DELETE SET NULL;
 
 UPDATE contractors
 SET is_internal_production = true
@@ -1960,9 +1964,9 @@ WHERE totals.order_id = o.id;
 
 UPDATE contractors c
 SET items_total_cost = 0,
-    balance = COALESCE(c.payments_total_out, 0),
-    debt_to_contractor = 0,
-    contractor_debt_to_us = GREATEST(COALESCE(c.payments_total_out, 0), 0)
+    balance = COALESCE(c.payments_total_out, 0) + COALESCE(c.balance_adjustment, 0),
+    debt_to_contractor = GREATEST(-(COALESCE(c.payments_total_out, 0) + COALESCE(c.balance_adjustment, 0)), 0),
+    contractor_debt_to_us = GREATEST(COALESCE(c.payments_total_out, 0) + COALESCE(c.balance_adjustment, 0), 0)
 WHERE COALESCE(c.is_internal_production, false);
 
 CREATE OR REPLACE FUNCTION sync_work_routing_rule_trigger()
