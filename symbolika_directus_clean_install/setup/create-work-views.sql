@@ -2333,7 +2333,6 @@ LANGUAGE sql
 IMMUTABLE
 AS $$
   SELECT CASE status_value
-    WHEN 'waiting_layout' THEN 'new'
     WHEN 'send_to_work' THEN 'sent_to_work'
     WHEN U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d' THEN 'delivered'
     ELSE COALESCE(status_value, 'new')
@@ -2520,6 +2519,7 @@ BEGIN
     WHEN bool_or(item_status = 'cancellation_requested') THEN U&'\0412 \0440\0430\0431\043e\0442\0435'
     WHEN bool_or(item_status = 'sent_to_work') THEN U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443'
     WHEN bool_or(item_status = 'in_work') THEN U&'\0412 \0440\0430\0431\043e\0442\0435'
+    WHEN bool_or(item_status = 'waiting_layout') THEN U&'\0416\0434\0435\043c \043c\0430\043a\0435\0442'
     WHEN bool_or(item_status = 'approval') THEN U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435'
     ELSE CASE
       WHEN current_status_name = U&'\0416\0434\0435\043c \043c\0430\043a\0435\0442'
@@ -2659,7 +2659,7 @@ BEGIN
      AND NEW.office_status IS NOT DISTINCT FROM OLD.office_status
      AND NEW.item_status IS DISTINCT FROM previous_item_status THEN
     item_transition_allowed := CASE
-      WHEN previous_item_status IN ('new', 'approval') THEN NEW.item_status IN ('new', 'approval', 'sent_to_work', 'in_work')
+      WHEN previous_item_status IN ('new', 'waiting_layout', 'approval') THEN NEW.item_status IN ('new', 'waiting_layout', 'approval', 'sent_to_work', 'in_work')
       WHEN previous_item_status = 'layout_revision' THEN NEW.item_status IN ('layout_revision', 'sent_to_work', 'in_work')
       WHEN previous_item_status IN ('sent_to_work', 'in_work') THEN NEW.item_status IN ('sent_to_work', 'in_work', 'cancellation_requested', 'ready', 'delivered')
       WHEN previous_item_status = 'cancellation_requested' THEN NEW.item_status IN ('cancellation_requested', 'cancelled')
@@ -2673,7 +2673,7 @@ BEGIN
     END IF;
 
     IF NEW.item_status IN ('sent_to_work', 'in_work')
-       AND previous_item_status IN ('new', 'approval', 'layout_revision') THEN
+       AND previous_item_status IN ('new', 'waiting_layout', 'approval', 'layout_revision') THEN
       IF NULLIF(BTRIM(COALESCE(NEW.product_name, '')), '') IS NULL THEN
         RAISE EXCEPTION 'Позицию нельзя запустить в работу: заполните наименование';
       END IF;
@@ -2741,7 +2741,7 @@ BEGIN
 
   next_item_status := CASE status_name
     WHEN U&'\041d\043e\0432\044b\0439' THEN 'new'
-    WHEN U&'\0416\0434\0435\043c \043c\0430\043a\0435\0442' THEN 'new'
+    WHEN U&'\0416\0434\0435\043c \043c\0430\043a\0435\0442' THEN 'waiting_layout'
     WHEN U&'\0421\043e\0433\043b\0430\0441\043e\0432\0430\043d\0438\0435' THEN 'approval'
     WHEN U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430' THEN 'layout_revision'
     WHEN U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443' THEN 'sent_to_work'
@@ -12454,6 +12454,7 @@ BEGIN
       count(oi.id) AS item_count,
       string_agg(DISTINCT CASE symbolika_normalize_item_status(oi.item_status)
         WHEN 'new' THEN 'Новый'
+        WHEN 'waiting_layout' THEN 'Ждем макет'
         WHEN 'approval' THEN 'Согласование'
         WHEN 'layout_revision' THEN 'Доработка макета'
         WHEN 'sent_to_work' THEN 'Отправлен в работу'
@@ -12471,6 +12472,7 @@ BEGIN
         WHEN bool_or(symbolika_normalize_item_status(oi.item_status) = 'cancellation_requested') THEN 'В работе'
         WHEN bool_or(symbolika_normalize_item_status(oi.item_status) = 'in_work') THEN 'В работе'
         WHEN bool_or(symbolika_normalize_item_status(oi.item_status) = 'sent_to_work') THEN 'Отправлен в работу'
+        WHEN bool_or(symbolika_normalize_item_status(oi.item_status) = 'waiting_layout') THEN 'Ждем макет'
         WHEN bool_or(symbolika_normalize_item_status(oi.item_status) = 'approval') THEN 'Согласование'
         ELSE 'Новый'
       END AS expected_status

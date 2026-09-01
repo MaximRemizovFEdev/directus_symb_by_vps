@@ -4,6 +4,19 @@ import test from 'node:test';
 
 const sqlPath = new URL('../../../setup/create-work-views.sql', import.meta.url);
 const sql = await readFile(sqlPath, 'utf8');
+const waitingLayoutMigrationPath = new URL(
+  '../../../setup/migrations/20260901_order_item_waiting_layout_status.sql',
+  import.meta.url,
+);
+const waitingLayoutMigration = await readFile(waitingLayoutMigrationPath, 'utf8');
+
+const extractFunction = (source, name) => source.match(
+  new RegExp(`CREATE OR REPLACE FUNCTION ${name.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b[\\s\\S]*?\\n\\$\\$;`, 'i'),
+)?.[0].replaceAll('\r\n', '\n').trim() || '';
+const normalizeSqlDefinition = (definition) => definition
+  .replace(/^\s*--.*$/gm, '')
+  .replace(/\s+/g, ' ')
+  .trim();
 
 const functionDefinitions = [...sql.matchAll(
   /^CREATE\s+OR\s+REPLACE\s+FUNCTION\s+([a-zA-Z0-9_."]+)/gim,
@@ -107,4 +120,41 @@ test('refreshes contractor costing only for source fields used by the projection
   assert.doesNotMatch(itemTrigger, /\burl\b|office_status/i);
   assert.match(orderTrigger, /UPDATE OF[\s\S]*order_number[\s\S]*manager_employee/i);
   assert.doesNotMatch(orderTrigger, /order_sum|office_status|paid_amount/i);
+});
+
+test('keeps waiting for layout as a real item workflow status', () => {
+  const normalizer = sql.match(
+    /CREATE OR REPLACE FUNCTION symbolika_normalize_item_status\(status_value character varying\)[\s\S]*?\n\$\$;/i,
+  )?.[0] || '';
+  const itemTransition = sql.match(
+    /CREATE OR REPLACE FUNCTION symbolika_apply_item_status_from_production_trigger\(\)[\s\S]*?\n\$\$;/i,
+  )?.[0] || '';
+  const orderProjection = sql.match(
+    /CREATE OR REPLACE FUNCTION symbolika_recalc_order_status_from_items\(order_id integer\)[\s\S]*?\n\$\$;/i,
+  )?.[0] || '';
+
+  assert.doesNotMatch(normalizer, /WHEN 'waiting_layout' THEN 'new'/i);
+  assert.match(itemTransition, /previous_item_status IN \('new', 'waiting_layout', 'approval'\)/i);
+  assert.match(orderProjection, /item_status = 'waiting_layout'/i);
+});
+
+test('keeps the waiting-layout migration aligned with canonical workflow functions', () => {
+  const functions = [
+    'symbolika_normalize_item_status',
+    'symbolika_recalc_order_status_from_items',
+    'symbolika_apply_item_status_from_production_trigger',
+    'symbolika_apply_order_status_to_items_trigger',
+  ];
+
+  for (const name of functions) {
+    const canonicalDefinition = extractFunction(sql, name);
+    const migrationDefinition = extractFunction(waitingLayoutMigration, name);
+    assert.ok(canonicalDefinition, `${name} is missing from the canonical SQL`);
+    assert.ok(migrationDefinition, `${name} is missing from the migration`);
+    assert.equal(
+      normalizeSqlDefinition(migrationDefinition),
+      normalizeSqlDefinition(canonicalDefinition),
+      `${name} differs between migration and canonical SQL`,
+    );
+  }
 });

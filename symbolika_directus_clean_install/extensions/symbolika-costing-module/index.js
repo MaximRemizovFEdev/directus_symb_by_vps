@@ -1120,6 +1120,7 @@ const officeStatusChoices = [
 
 const itemStatusChoices = [
   { text: 'Новый', value: 'new' },
+  { text: 'Ждем макет', value: 'waiting_layout' },
   { text: 'Согласование', value: 'approval' },
   { text: 'Доработка макета', value: 'layout_revision' },
   { text: 'Отправлен в работу', value: 'sent_to_work' },
@@ -14623,7 +14624,7 @@ export const CostingModule = {
       const current = this.normalizedWorkflowStatus(row?.item_status || 'new');
       let allowed;
 
-      if (['new', 'approval'].includes(current)) allowed = ['new', 'approval'];
+      if (['new', 'waiting_layout', 'approval'].includes(current)) allowed = ['new', 'waiting_layout', 'approval'];
       else if (current === 'layout_revision') allowed = ['layout_revision'];
       else if (['sent_to_work', 'in_work'].includes(current)) allowed = [current, 'cancellation_requested', 'ready', 'delivered'];
       else if (current === 'cancellation_requested') allowed = ['cancellation_requested'];
