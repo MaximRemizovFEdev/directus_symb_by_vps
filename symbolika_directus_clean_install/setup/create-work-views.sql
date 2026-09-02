@@ -10,6 +10,7 @@ DROP TRIGGER IF EXISTS office_issue_push_update ON office_issue;
 DROP TRIGGER IF EXISTS office_issue_archive_push_update ON office_issue_archive;
 DROP TRIGGER IF EXISTS production_work_push_update ON production_work;
 DROP TRIGGER IF EXISTS screen_printing_work_push_update ON screen_printing_work;
+DROP TRIGGER IF EXISTS screen_printing_work_cost_push_update ON screen_printing_work;
 DROP TRIGGER IF EXISTS contractor_work_push_update ON contractor_work;
 DROP TRIGGER IF EXISTS symbolika_sync_office_issue ON orders;
 DROP TRIGGER IF EXISTS symbolika_sync_work_order ON orders;
@@ -1688,6 +1689,9 @@ CREATE TABLE IF NOT EXISTS screen_printing_work (
   application_method integer,
   contractor_1 integer,
   contractor_1_cost numeric(14,2),
+  application_contractor_slot smallint,
+  application_cost_per_unit numeric(14,2),
+  application_cost_total numeric(14,2),
   technical_task_text text,
   production_comment text,
   url character varying(255),
@@ -1752,6 +1756,9 @@ ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS product_subcategory in
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS application_method integer;
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS contractor_1 integer;
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS contractor_1_cost numeric(14,2);
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS application_contractor_slot smallint;
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS application_cost_per_unit numeric(14,2);
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS application_cost_total numeric(14,2);
 ALTER TABLE contractor_work ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE contractor_work ADD COLUMN IF NOT EXISTS production_comment text;
 
@@ -3029,12 +3036,28 @@ BEGIN
     id, "order", order_number, customer, customer_name, customer_company, customer_company_name, manager_employee,
     product_name, quantity, price_per_unit, order_sum, blank_source, blank_ordered,
     product_category, product_subcategory, application_method, contractor_1, contractor_1_cost,
+    application_contractor_slot, application_cost_per_unit, application_cost_total,
     technical_task_text, production_comment, url, item_status, office_status, production_status, date, deadline
   )
   SELECT
     oi.id, oi."order", o.order_number, o.customer, c.name, o.customer_company, cc.name, o.manager_employee,
     oi.product_name, oi.quantity, oi.price_per_unit, oi.order_sum, oi.blank_source, oi.blank_ordered,
     oi.product_category, oi.product_subcategory, oi.application_method, oi.contractor_1, oi.contractor_1_cost,
+    CASE
+      WHEN c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%' THEN 2
+      ELSE 1
+    END,
+    CASE
+      WHEN c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%' THEN oi.contractor_2_cost
+      ELSE oi.contractor_1_cost
+    END,
+    COALESCE(oi.quantity, 0) * COALESCE(
+      CASE
+        WHEN c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%' THEN oi.contractor_2_cost
+        ELSE oi.contractor_1_cost
+      END,
+      0
+    ),
     oi.technical_task_text, oi.production_comment, oi.url, oi.item_status, oi.office_status, oi.production_status, o.date, oi.deadline
   FROM orders_items oi
   JOIN orders o ON o.id = oi."order"
@@ -3172,6 +3195,34 @@ BEGIN
 END;
 $$;
 
+-- The screen-printing monthly summary edits the same executor cost that is
+-- used by the order item card and costing screens. Updating the work row
+-- therefore remains bidirectional instead of creating a second ledger.
+CREATE OR REPLACE FUNCTION push_screen_application_cost_update()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.application_cost_per_unit IS NOT DISTINCT FROM OLD.application_cost_per_unit THEN
+    RETURN NEW;
+  END IF;
+
+  IF COALESCE(NEW.application_contractor_slot, 1) = 2 THEN
+    UPDATE orders_items
+       SET contractor_2_cost = NEW.application_cost_per_unit
+     WHERE id = NEW.id
+       AND contractor_2_cost IS DISTINCT FROM NEW.application_cost_per_unit;
+  ELSE
+    UPDATE orders_items
+       SET contractor_1_cost = NEW.application_cost_per_unit
+     WHERE id = NEW.id
+       AND contractor_1_cost IS DISTINCT FROM NEW.application_cost_per_unit;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION sync_order_payment_access(payment_id integer)
 RETURNS void
 LANGUAGE plpgsql
@@ -3255,6 +3306,11 @@ CREATE TRIGGER screen_printing_work_push_update
 AFTER UPDATE OF production_status, production_comment ON screen_printing_work
 FOR EACH ROW
 EXECUTE FUNCTION push_work_status_update();
+
+CREATE TRIGGER screen_printing_work_cost_push_update
+AFTER UPDATE OF application_cost_per_unit ON screen_printing_work
+FOR EACH ROW
+EXECUTE FUNCTION push_screen_application_cost_update();
 
 CREATE TRIGGER symbolika_sync_office_issue
 AFTER INSERT OR UPDATE OR DELETE ON orders
@@ -3890,12 +3946,28 @@ INSERT INTO screen_printing_work (
   id, "order", order_number, customer, customer_name, customer_company, customer_company_name, manager_employee,
   product_name, quantity, price_per_unit, order_sum, blank_source, blank_ordered,
   product_category, product_subcategory, application_method, contractor_1, contractor_1_cost,
+  application_contractor_slot, application_cost_per_unit, application_cost_total,
   technical_task_text, production_comment, url, item_status, office_status, production_status, date, deadline
 )
 SELECT
   oi.id, oi."order", o.order_number, o.customer, c.name, o.customer_company, cc.name, o.manager_employee,
   oi.product_name, oi.quantity, oi.price_per_unit, oi.order_sum, oi.blank_source, oi.blank_ordered,
   oi.product_category, oi.product_subcategory, oi.application_method, oi.contractor_1, oi.contractor_1_cost,
+  CASE
+    WHEN c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%' THEN 2
+    ELSE 1
+  END,
+  CASE
+    WHEN c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%' THEN oi.contractor_2_cost
+    ELSE oi.contractor_1_cost
+  END,
+  COALESCE(oi.quantity, 0) * COALESCE(
+    CASE
+      WHEN c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%' THEN oi.contractor_2_cost
+      ELSE oi.contractor_1_cost
+    END,
+    0
+  ),
   oi.technical_task_text, oi.production_comment, oi.url, oi.item_status, oi.office_status, oi.production_status, o.date, oi.deadline
 FROM orders_items oi
 JOIN orders o ON o.id = oi."order"
@@ -4863,8 +4935,8 @@ VALUES
 
   ('screen_printing_work', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
   ('screen_printing_work', 'update', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
-  ('screen_printing_work', 'read', '{}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,contractor_1,contractor_1_cost,date,deadline,item_status,office_status,technical_task_text,production_comment,url,production_status', '00000000-0000-4000-8000-000000000206'),
-  ('screen_printing_work', 'update', '{}'::json, NULL, NULL, 'production_status,production_comment', '00000000-0000-4000-8000-000000000206'),
+  ('screen_printing_work', 'read', '{}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,contractor_1,contractor_1_cost,application_contractor_slot,application_cost_per_unit,application_cost_total,date,deadline,item_status,office_status,technical_task_text,production_comment,url,production_status', '00000000-0000-4000-8000-000000000206'),
+  ('screen_printing_work', 'update', '{}'::json, NULL, NULL, 'production_status,production_comment,application_cost_per_unit', '00000000-0000-4000-8000-000000000206'),
 
   ('contractor_work', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
   ('contractor_work', 'update', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
@@ -14653,10 +14725,10 @@ INSERT INTO directus_permissions (collection, action, permissions, validation, p
     'production_status,production_comment',
     '00000000-0000-4000-8000-000000000204'),
   ('screen_printing_work', 'read', '{}'::json, NULL, NULL,
-    'id,order,order_number,order_link,customer_name,customer_company_name,manager_employee,product_name,quantity,date,deadline,item_status,office_status,technical_task_text,production_comment,url,production_status',
+    'id,order,order_number,order_link,customer_name,customer_company_name,manager_employee,product_name,quantity,date,deadline,item_status,office_status,technical_task_text,production_comment,url,production_status,application_contractor_slot,application_cost_per_unit,application_cost_total',
     '00000000-0000-4000-8000-000000000206'),
   ('screen_printing_work', 'update', '{}'::json, NULL, NULL,
-    'production_status,production_comment',
+    'production_status,production_comment,application_cost_per_unit',
     '00000000-0000-4000-8000-000000000206');
 
 -- Counterparty proposals. Operational users may submit a compact counterparty

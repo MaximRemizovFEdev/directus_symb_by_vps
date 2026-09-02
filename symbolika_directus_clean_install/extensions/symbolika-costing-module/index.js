@@ -170,6 +170,12 @@ const limitedWorkFields = [
   'production_comment',
 ];
 
+const screenCostFields = [
+  'application_contractor_slot',
+  'application_cost_per_unit',
+  'application_cost_total',
+];
+
 const contractorWorkFields = [
   'id',
   'order',
@@ -1184,6 +1190,8 @@ export const CostingModule = {
       tableSortOptions,
       productionRows: [],
       screenRows: [],
+      screenViewMode: 'tasks',
+      screenCostMonth: '',
       contractorWorkRows: [],
       officeRows: [],
       officeIssueRows: [],
@@ -2467,6 +2475,53 @@ export const CostingModule = {
 
     visibleScreenRows() {
       return this.sortRows(this.filterRowsByArchiveMode(this.screenRows), 'screen');
+    },
+
+    screenCostMonthOptions() {
+      const months = new Set((this.screenRows || [])
+        .map((row) => this.screenCostMonthKey(row))
+        .filter(Boolean));
+      return [...months]
+        .sort((left, right) => right.localeCompare(left))
+        .map((id) => ({ id, title: this.screenCostMonthLabel(id) }));
+    },
+
+    screenCostSelectedMonth() {
+      return this.screenCostMonth || this.screenCostMonthOptions[0]?.id || '';
+    },
+
+    visibleScreenCostRows() {
+      const month = this.screenCostSelectedMonth;
+      const query = String(this.search || '').trim().toLowerCase();
+      return (this.screenRows || [])
+        .filter((row) => !month || this.screenCostMonthKey(row) === month)
+        .filter((row) => !query || [
+          row.order_number,
+          row.product_name,
+          row.customer_name,
+          row.customer_company_name,
+          this.relatedName(row.manager_employee, 'full_name'),
+        ].join(' ').toLowerCase().includes(query))
+        .slice()
+        .sort((left, right) => (
+          (this.sortDateValue(left.deadline) || Number.MAX_SAFE_INTEGER)
+          - (this.sortDateValue(right.deadline) || Number.MAX_SAFE_INTEGER)
+          || String(this.orderNumber(left) || '').localeCompare(String(this.orderNumber(right) || ''), 'ru', { numeric: true })
+          || Number(left.id) - Number(right.id)
+        ));
+    },
+
+    screenCostSummary() {
+      const orders = new Set();
+      return this.visibleScreenCostRows.reduce((summary, row) => {
+        const orderId = this.entityId(this.orderId(row));
+        if (orderId) orders.add(String(orderId));
+        summary.orders = orders.size;
+        summary.positions += 1;
+        summary.quantity += this.parseMoney(row.quantity);
+        summary.total += this.screenApplicationTotal(row);
+        return summary;
+      }, { orders: 0, positions: 0, quantity: 0, total: 0 });
     },
 
     visibleContractorWorkRows() {
@@ -3772,6 +3827,16 @@ export const CostingModule = {
         ...this.pagedCollections,
         [key]: { ...(this.pagedCollections[key] || {}), ...patch },
       };
+    },
+
+    invalidatePagedCollection(key) {
+      if (!this._pagedLoadConfigs?.[key]) return;
+      const generation = Number(this._pagedLoadConfigs[key]?.generation || 0) + 1;
+      this._pagedLoadConfigs[key] = {
+        ...this._pagedLoadConfigs[key],
+        generation,
+      };
+      this.setPagedState(key, { loading: false, generation });
     },
 
     mergePagedRows(current, incoming) {
@@ -8773,7 +8838,9 @@ export const CostingModule = {
     async loadWorkRows(collection) {
       try {
         const params = new URLSearchParams();
-        params.set('fields', (this.isProductionWorkerRole() ? limitedWorkFields : workFields).join(','));
+        const fields = [...(this.isProductionWorkerRole() ? limitedWorkFields : workFields)];
+        if (collection === 'screen_printing_work') fields.push(...screenCostFields);
+        params.set('fields', fields.join(','));
         params.set('sort', 'deadline,date,order,product_name,id');
         await this.loadPagedCollection(collection, `/items/${collection}`, params, (rows, append) => {
           if (collection === 'production_work') this.productionRows = append ? this.mergePagedRows(this.productionRows, rows) : rows;
@@ -11782,6 +11849,64 @@ export const CostingModule = {
       }
     },
 
+    screenCostMonthKey(row) {
+      const raw = String(row?.deadline || row?.date || '').trim();
+      const match = raw.match(/^(\d{4})-(\d{2})/);
+      return match ? `${match[1]}-${match[2]}` : '';
+    },
+
+    screenCostMonthLabel(value) {
+      const match = String(value || '').match(/^(\d{4})-(\d{2})$/);
+      if (!match) return value || 'Без месяца';
+      const date = new Date(Number(match[1]), Number(match[2]) - 1, 1);
+      const label = new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(date);
+      return label.charAt(0).toUpperCase() + label.slice(1);
+    },
+
+    screenApplicationTotal(row) {
+      return Math.round(
+        this.parseMoney(row?.quantity) * this.parseMoney(row?.application_cost_per_unit) * 100,
+      ) / 100;
+    },
+
+    async saveScreenApplicationCost(row, rawValue) {
+      const key = `screen_printing_work:${row.id}:application_cost_per_unit`;
+      const source = String(rawValue ?? '').trim().replace(/\s/g, '').replace(',', '.');
+      const value = source === '' ? null : Number(source);
+      if (value !== null && (!Number.isFinite(value) || value < 0)) {
+        this.error = 'Укажите корректную себестоимость нанесения';
+        return false;
+      }
+
+      this.saving = { ...this.saving, [key]: true };
+      this.error = '';
+      try {
+        await this.request(`/items/screen_printing_work/${row.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ application_cost_per_unit: value }),
+        });
+        const total = Math.round(this.parseMoney(row.quantity) * this.parseMoney(value) * 100) / 100;
+        Object.assign(row, {
+          application_cost_per_unit: value,
+          application_cost_total: total,
+        });
+        const costField = Number(row.application_contractor_slot) === 2
+          ? 'contractor_2_cost'
+          : 'contractor_1_cost';
+        this.updateOrderItemCaches(row.id, { [costField]: value });
+        this.scheduleBackgroundAreaRefresh();
+        return true;
+      } catch (error) {
+        this.error = error.message;
+        this.scheduleBackgroundAreaRefresh(0);
+        return false;
+      } finally {
+        const next = { ...this.saving };
+        delete next[key];
+        this.saving = next;
+      }
+    },
+
     async saveWorkField(collection, row, field, value) {
       const key = `${collection}:${row.id}:${field}`;
       this.saving = { ...this.saving, [key]: true };
@@ -11979,6 +12104,17 @@ export const CostingModule = {
           [field]: normalized,
           ...(additionalPatch && typeof additionalPatch === 'object' ? additionalPatch : {}),
         };
+        const affectsCosting = ['contractor_1', 'contractor_2', 'contractor_1_cost', 'contractor_2_cost'].includes(field);
+
+        // A costing page refresh may already be in flight when the user edits a
+        // contractor or its unit cost. Its response contains the value that was
+        // read before this PATCH and used to replace the whole table, making a
+        // successfully saved value appear to jump back. Invalidate that response
+        // before applying the optimistic change; the post-save refresh below will
+        // start a new generation with the actual database value.
+        if (affectsCosting) {
+          this.invalidatePagedCollection('costing');
+        }
 
         if (field === 'blank_source' && ['customer', 'warehouse', 'contractor', 'none'].includes(normalized)) {
           patch.contractor_1 = null;
@@ -12003,6 +12139,10 @@ export const CostingModule = {
           body: JSON.stringify(patch),
         });
 
+        // Also discard a refresh that may have started while the PATCH was in
+        // flight. Any load started after this point can only read the committed
+        // value, so it is safe to become the next visible table generation.
+        if (affectsCosting) this.invalidatePagedCollection('costing');
         this.updateOrderItemCaches(itemId, patch);
 
         // Database triggers can change the item and production statuses together
@@ -22949,6 +23089,151 @@ export const CostingModule = {
           width: 25% !important;
         }
 
+        .symbolika-screen-summary-toolbar {
+          display: flex;
+          align-items: end;
+          justify-content: space-between;
+          gap: 16px;
+          margin-block-end: 14px;
+          flex-wrap: wrap;
+        }
+
+        .symbolika-screen-summary-switch {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 4px;
+          border: 1px solid var(--theme--border-color-subdued);
+          border-radius: 14px;
+          background: var(--theme--background-accent);
+        }
+
+        .symbolika-screen-summary-switch .symbolika-costing-button {
+          min-block-size: 38px;
+          padding-inline: 16px;
+          border-color: transparent;
+          box-shadow: none;
+        }
+
+        .symbolika-screen-summary-switch .symbolika-costing-button.is-active {
+          border-color: color-mix(in srgb, var(--theme--primary) 55%, transparent);
+          background: color-mix(in srgb, var(--theme--primary) 14%, var(--theme--background-normal));
+          color: var(--theme--primary);
+        }
+
+        .symbolika-screen-cost-month {
+          display: grid;
+          gap: 6px;
+          min-inline-size: 250px;
+          color: var(--theme--foreground-subdued);
+          font-size: 12px;
+          font-weight: 700;
+        }
+
+        .symbolika-screen-costing {
+          display: grid;
+          gap: 14px;
+        }
+
+        .symbolika-screen-costing-stats {
+          display: grid;
+          grid-template-columns: minmax(260px, 1.6fr) repeat(3, minmax(135px, 1fr));
+          gap: 10px;
+        }
+
+        .symbolika-screen-costing-stat {
+          display: grid;
+          align-content: center;
+          gap: 7px;
+          min-block-size: 82px;
+          padding: 14px 16px;
+          border: 1px solid var(--theme--border-color-subdued);
+          border-radius: 14px;
+          background: var(--theme--background-accent);
+        }
+
+        .symbolika-screen-costing-stat span {
+          color: var(--theme--foreground-subdued);
+          font-size: 11px;
+          font-weight: 800;
+          letter-spacing: .035em;
+          text-transform: uppercase;
+        }
+
+        .symbolika-screen-costing-stat strong {
+          color: var(--theme--foreground);
+          font-size: 23px;
+          line-height: 1.05;
+          font-variant-numeric: tabular-nums;
+        }
+
+        .symbolika-screen-costing-stat.is-total {
+          border-color: color-mix(in srgb, var(--theme--primary) 48%, var(--theme--border-color-subdued));
+          background: color-mix(in srgb, var(--theme--primary) 9%, var(--theme--background-accent));
+        }
+
+        .symbolika-screen-costing-stat.is-total strong {
+          color: var(--theme--primary);
+          font-size: clamp(24px, 2vw, 31px);
+        }
+
+        .symbolika-screen-costing-table th:nth-child(1) { width: 12%; }
+        .symbolika-screen-costing-table th:nth-child(2) { width: 19%; }
+        .symbolika-screen-costing-table th:nth-child(3) { width: 23%; }
+        .symbolika-screen-costing-table th:nth-child(4) { width: 9%; }
+        .symbolika-screen-costing-table th:nth-child(5) { width: 14%; }
+        .symbolika-screen-costing-table th:nth-child(6) { width: 12%; }
+        .symbolika-screen-costing-table th:nth-child(7) { width: 11%; }
+
+        .symbolika-screen-costing-customer {
+          margin-block-start: 4px;
+          color: var(--theme--foreground);
+          font-weight: 700;
+        }
+
+        .symbolika-screen-costing-number,
+        .symbolika-screen-costing-total {
+          white-space: nowrap;
+          font-variant-numeric: tabular-nums;
+        }
+
+        .symbolika-screen-costing-total {
+          color: var(--theme--success);
+          font-size: 16px;
+          font-weight: 800;
+          text-align: right;
+        }
+
+        .symbolika-screen-cost-input {
+          inline-size: 100%;
+          min-inline-size: 105px;
+          text-align: right;
+          font-weight: 750;
+          font-variant-numeric: tabular-nums;
+        }
+
+        .symbolika-screen-costing-footer {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 18px;
+          padding: 14px 18px;
+          border: 1px solid color-mix(in srgb, var(--theme--primary) 42%, var(--theme--border-color-subdued));
+          border-radius: 14px;
+          background: color-mix(in srgb, var(--theme--primary) 8%, var(--theme--background-accent));
+        }
+
+        .symbolika-screen-costing-footer span {
+          color: var(--theme--foreground-subdued);
+          font-weight: 700;
+        }
+
+        .symbolika-screen-costing-footer strong {
+          color: var(--theme--primary);
+          font-size: 24px;
+          font-variant-numeric: tabular-nums;
+        }
+
         .symbolika-contractor-overview {
           display: grid;
           gap: 14px;
@@ -23039,6 +23324,33 @@ export const CostingModule = {
         }
 
         @media (max-width: 760px) {
+          .symbolika-screen-summary-toolbar,
+          .symbolika-screen-cost-month {
+            inline-size: 100%;
+          }
+
+          .symbolika-screen-summary-switch {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            inline-size: 100%;
+          }
+
+          .symbolika-screen-costing-stats {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .symbolika-screen-costing-stat.is-total {
+            grid-column: 1 / -1;
+          }
+
+          .symbolika-screen-costing-table {
+            min-inline-size: 930px;
+          }
+
+          .symbolika-screen-costing-footer {
+            justify-content: space-between;
+          }
+
           .symbolika-contractor-overview-stats {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
@@ -32828,7 +33140,41 @@ export const CostingModule = {
           <div v-if="!visibleLabelRows.length" class="symbolika-costing-empty">Нет позиций для этикеток</div>
         </div>
 
-        <div v-if="activeTab === 'production' || activeTab === 'screen'" class="symbolika-costing-table-wrap">
+        <div v-if="activeTab === 'screen'" class="symbolika-screen-summary-toolbar">
+          <div class="symbolika-screen-summary-switch" role="group" aria-label="Представление шелкографии">
+            <button
+              type="button"
+              class="symbolika-costing-button symbolika-costing-button-secondary"
+              :class="{ 'is-active': screenViewMode === 'tasks' }"
+              @click="screenViewMode = 'tasks'"
+            >
+              Задания
+            </button>
+            <button
+              type="button"
+              class="symbolika-costing-button symbolika-costing-button-secondary"
+              :class="{ 'is-active': screenViewMode === 'costs' }"
+              @click="screenViewMode = 'costs'"
+            >
+              Свод себестоимости
+            </button>
+          </div>
+          <label v-if="screenViewMode === 'costs'" class="symbolika-screen-cost-month">
+            <span>Месяц производства</span>
+            <select
+              class="symbolika-costing-select"
+              :value="screenCostSelectedMonth"
+              @change="screenCostMonth = $event.target.value"
+            >
+              <option v-if="!screenCostMonthOptions.length" value="">Нет данных</option>
+              <option v-for="month in screenCostMonthOptions" :key="month.id" :value="month.id">
+                {{ month.title }}
+              </option>
+            </select>
+          </label>
+        </div>
+
+        <div v-if="activeTab === 'production' || (activeTab === 'screen' && screenViewMode === 'tasks')" class="symbolika-costing-table-wrap">
           <div
             v-if="selectedFor(activeTab).length"
             class="symbolika-costing-bulk"
@@ -32933,6 +33279,96 @@ export const CostingModule = {
             class="symbolika-costing-empty"
           >
             Нет позиций
+          </div>
+        </div>
+
+        <div v-if="activeTab === 'screen' && screenViewMode === 'costs'" class="symbolika-screen-costing">
+          <div class="symbolika-screen-costing-stats">
+            <div class="symbolika-screen-costing-stat is-total">
+              <span>Себестоимость нанесения за месяц</span>
+              <strong>{{ formatMoney(screenCostSummary.total) }} ₽</strong>
+            </div>
+            <div class="symbolika-screen-costing-stat">
+              <span>Заказов</span>
+              <strong>{{ screenCostSummary.orders }}</strong>
+            </div>
+            <div class="symbolika-screen-costing-stat">
+              <span>Позиций</span>
+              <strong>{{ screenCostSummary.positions }}</strong>
+            </div>
+            <div class="symbolika-screen-costing-stat">
+              <span>Общий тираж</span>
+              <strong>{{ formatQuantity(screenCostSummary.quantity) }} шт.</strong>
+            </div>
+          </div>
+
+          <div class="symbolika-costing-table-wrap">
+            <table class="symbolika-costing-table symbolika-screen-costing-table">
+              <thead>
+                <tr>
+                  <th>Срок</th>
+                  <th>Заказ / заказчик</th>
+                  <th>Позиция</th>
+                  <th>Тираж</th>
+                  <th>Нанесение за ед.</th>
+                  <th>Всего</th>
+                  <th>Статус</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in visibleScreenCostRows"
+                  :key="row.id"
+                  :class="[rowStateClass(row), 'symbolika-costing-row-clickable']"
+                  @click="openRowDetail('screen', row, $event)"
+                >
+                  <td>
+                    <span class="symbolika-costing-date" :class="deadlineClass(row.deadline)">
+                      <v-icon :name="deadlineIcon(row.deadline)" small />
+                      {{ formatDate(row.deadline) }}
+                    </span>
+                  </td>
+                  <td>
+                    <span class="symbolika-costing-order">{{ orderNumber(row) }}</span>
+                    <div class="symbolika-screen-costing-customer">
+                      {{ row.customer_company_name || row.customer_name || relatedName(row.customer_company) || relatedName(row.customer) || '-' }}
+                    </div>
+                  </td>
+                  <td>
+                    <div class="symbolika-costing-product">{{ row.product_name }}</div>
+                    <div class="symbolika-costing-subtle">
+                      {{ relatedName(row.manager_employee, 'full_name') || '-' }}
+                    </div>
+                  </td>
+                  <td class="symbolika-screen-costing-number">{{ formatQuantity(row.quantity) }} шт.</td>
+                  <td>
+                    <input
+                      class="symbolika-costing-input symbolika-screen-cost-input"
+                      :class="savingWorkClass('screen_printing_work', row, 'application_cost_per_unit')"
+                      inputmode="decimal"
+                      :value="moneyInput(row.application_cost_per_unit)"
+                      placeholder="0,00"
+                      @click.stop
+                      @change.stop="saveScreenApplicationCost(row, $event.target.value)"
+                    />
+                  </td>
+                  <td class="symbolika-screen-costing-total">{{ formatMoney(screenApplicationTotal(row)) }} ₽</td>
+                  <td>
+                    <span class="symbolika-costing-pill" :class="statusToneClass(row.production_status)">
+                      {{ relatedName(row.production_status) || 'Не выбран' }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-if="!visibleScreenCostRows.length" class="symbolika-costing-empty">
+              За выбранный месяц позиций нет
+            </div>
+          </div>
+
+          <div class="symbolika-screen-costing-footer">
+            <span>Итого за {{ screenCostMonthLabel(screenCostSelectedMonth) }}</span>
+            <strong>{{ formatMoney(screenCostSummary.total) }} ₽</strong>
           </div>
         </div>
 
