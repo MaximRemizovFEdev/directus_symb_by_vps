@@ -431,6 +431,7 @@ const orderSummaryFields = [
   'order_status',
   'order_status_name',
   'office_status',
+  'delivery_status',
   'shipping_method',
   'shipping_method_name',
   'shipping_comment',
@@ -462,6 +463,7 @@ const overviewFields = [
   'order_status',
   'order_status_name',
   'office_status',
+  'delivery_status',
   'shipping_method',
   'shipping_method_name',
   'order_sum',
@@ -1124,6 +1126,12 @@ const officeStatusChoices = [
   { text: 'Выдан', value: 'issued' },
 ];
 
+const deliveryStatusChoices = [
+  { text: 'Ожидает доставки', value: 'pending' },
+  { text: 'В доставке', value: 'in_delivery' },
+  { text: 'Доставлен', value: 'delivered' },
+];
+
 const itemStatusChoices = [
   { text: 'Новый', value: 'new' },
   { text: 'Ждем макет', value: 'waiting_layout' },
@@ -1179,6 +1187,7 @@ export const CostingModule = {
       currentRoleName: '',
       tabs,
       officeStatusChoices,
+      deliveryStatusChoices,
       itemStatusChoices,
       shippingMethodChoices,
       customerNotificationChannelChoices,
@@ -6563,7 +6572,8 @@ export const CostingModule = {
 
     canIssueOrder(row) {
       if (!row || !this.hasManagerWorkflowAccess) return false;
-      return String(this.detailOrderStatus(row) || '').trim().toLowerCase() === 'готов';
+      return this.isOfficePickupOrder(row)
+        && String(this.detailOrderStatus(row) || '').trim().toLowerCase() === 'готов';
     },
 
     canIssueWorkspaceOrder(entry) {
@@ -6601,11 +6611,15 @@ export const CostingModule = {
     },
 
     async fetchOrderIssueData(row) {
-      const orderId = Number(this.entityId(this.orderId(row)) || 0);
+      const context = this.detailOrderContext(row);
+      const orderId = Number(this.entityId(this.orderId(row))
+        || this.entityId(this.orderId(context))
+        || (this.detailIsOrder(context) ? this.entityId(context?.id) : '')
+        || 0);
       if (!orderId) throw new Error('Не удалось определить заказ.');
       const orderFields = [
         'id', 'order_number', 'date', 'deadline', 'order_sum', 'paid_amount', 'payment_due',
-        'payment_on_receipt', 'shipping_method', 'shipping_comment', 'comment', 'office_status',
+        'payment_on_receipt', 'shipping_method', 'shipping_comment', 'comment', 'office_status', 'delivery_status',
         'order_status.id', 'order_status.name', 'payment_type.id', 'payment_type.name',
         'customer.id', 'customer.name', 'customer.phone', 'customer.email',
         'customer_company.id', 'customer_company.name', 'customer_company.phone', 'customer_company.email',
@@ -14330,6 +14344,14 @@ export const CostingModule = {
       return officeStatusChoices.find((choice) => choice.value === value)?.text || 'Не выбран';
     },
 
+    deliveryStatusName(value) {
+      return deliveryStatusChoices.find((choice) => choice.value === value)?.text || 'Ожидает доставки';
+    },
+
+    deliverySelectClass(value) {
+      return this.officeSelectClass({ pending: 'not_in_office', in_delivery: 'in_office', delivered: 'issued' }[value] || 'not_in_office');
+    },
+
     tabIcon(tabId) {
       return {
         dashboard: 'dashboard',
@@ -15347,6 +15369,16 @@ export const CostingModule = {
     detailOfficeStatus(row) {
       const context = this.detailOrderContext(row);
       return row?.office_status || context?.office_status || '';
+    },
+
+    isOfficePickupOrder(row) {
+      const context = this.detailOrderContext(row);
+      return String(row?.shipping_method || context?.shipping_method || 'office_pickup') === 'office_pickup';
+    },
+
+    detailDeliveryStatus(row) {
+      const context = this.detailOrderContext(row);
+      return row?.delivery_status || context?.delivery_status || 'pending';
     },
 
     orderItemsForRows(orderRows) {
@@ -30033,6 +30065,7 @@ export const CostingModule = {
                       </option>
                     </select>
                     <select
+                      v-if="isOfficePickupOrder(row)"
                       class="symbolika-costing-table-select"
                       :class="[savingWorkClass('orders', row, 'office_status'), officeSelectClass(row.office_status)]"
                       :value="row.office_status"
@@ -30041,6 +30074,17 @@ export const CostingModule = {
                       <option v-for="status in officeStatusChoices" :key="status.value" :value="status.value">
                         {{ status.text }}
                       </option>
+                    </select>
+                    <select
+                      v-else
+                      class="symbolika-costing-table-select"
+                      :class="[savingWorkClass('orders', row, 'delivery_status'), deliverySelectClass(row.delivery_status)]"
+                      :value="row.delivery_status || 'pending'"
+                      title="Статус доставки"
+                      @click.stop
+                      @change.stop="saveOrderField(row, 'delivery_status', $event.target.value)"
+                    >
+                      <option v-for="status in deliveryStatusChoices" :key="'my-delivery-' + status.value" :value="status.value">{{ status.text }}</option>
                     </select>
                     <button v-if="canIssueOrder(row)" type="button" class="symbolika-costing-issue-button" @click.stop="openOrderIssueDialog(row)">
                       <v-icon name="how_to_reg" small />Выдать клиенту
@@ -30226,6 +30270,7 @@ export const CostingModule = {
                       </option>
                     </select>
                     <select
+                      v-if="isOfficePickupOrder(row)"
                       class="symbolika-costing-table-select"
                       :class="[savingWorkClass('orders', row, 'office_status'), officeSelectClass(row.office_status)]"
                       :value="row.office_status"
@@ -30234,6 +30279,17 @@ export const CostingModule = {
                       <option v-for="status in officeStatusChoices" :key="status.value" :value="status.value">
                         {{ status.text }}
                       </option>
+                    </select>
+                    <select
+                      v-else
+                      class="symbolika-costing-table-select"
+                      :class="[savingWorkClass('orders', row, 'delivery_status'), deliverySelectClass(row.delivery_status)]"
+                      :value="row.delivery_status || 'pending'"
+                      title="Статус доставки"
+                      @click.stop
+                      @change.stop="saveOrderField(row, 'delivery_status', $event.target.value)"
+                    >
+                      <option v-for="status in deliveryStatusChoices" :key="'my-delivery-' + status.value" :value="status.value">{{ status.text }}</option>
                     </select>
                     <button v-if="canIssueOrder(row)" type="button" class="symbolika-costing-issue-button" @click.stop="openOrderIssueDialog(row)">
                       <v-icon name="how_to_reg" small />Выдать клиенту
@@ -30377,6 +30433,7 @@ export const CostingModule = {
                       <option v-for="status in orderWorkflowStatusOptions(row)" :key="'archive-order-status-' + status.id" :value="status.id">{{ status.name }}</option>
                     </select>
                     <select
+                      v-if="isOfficePickupOrder(row)"
                       class="symbolika-costing-table-select"
                       :class="[savingWorkClass('orders', row, 'office_status'), officeSelectClass(row.office_status)]"
                       :value="row.office_status"
@@ -30384,6 +30441,17 @@ export const CostingModule = {
                       @change.stop="saveOrderField(row, 'office_status', $event.target.value)"
                     >
                       <option v-for="status in officeStatusChoices" :key="'archive-order-office-' + status.value" :value="status.value">{{ status.text }}</option>
+                    </select>
+                    <select
+                      v-else
+                      class="symbolika-costing-table-select"
+                      :class="[savingWorkClass('orders', row, 'delivery_status'), deliverySelectClass(row.delivery_status)]"
+                      :value="row.delivery_status || 'pending'"
+                      title="Статус доставки"
+                      @click.stop
+                      @change.stop="saveOrderField(row, 'delivery_status', $event.target.value)"
+                    >
+                      <option v-for="status in deliveryStatusChoices" :key="'archive-delivery-' + status.value" :value="status.value">{{ status.text }}</option>
                     </select>
                     <button v-if="canIssueOrder(row)" type="button" class="symbolika-costing-issue-button" @click.stop="openOrderIssueDialog(row)">
                       <v-icon name="how_to_reg" small />Выдать клиенту
@@ -36074,7 +36142,7 @@ export const CostingModule = {
                 </select>
               </div>
             </div>
-            <div class="symbolika-costing-detail-field is-primary">
+            <div v-if="isOfficePickupOrder(detail.row)" class="symbolika-costing-detail-field is-primary">
               <div class="symbolika-costing-detail-label">Статус офиса</div>
               <div class="symbolika-costing-detail-value">
                 <select
@@ -36087,6 +36155,21 @@ export const CostingModule = {
                     {{ status.text }}
                   </option>
                 </select>
+              </div>
+            </div>
+            <div v-else class="symbolika-costing-detail-field is-primary">
+              <div class="symbolika-costing-detail-label">Статус доставки</div>
+              <div class="symbolika-costing-detail-value">
+                <select
+                  v-if="canEditOrderShipping(detail.row)"
+                  class="symbolika-costing-table-select"
+                  :class="[savingWorkClass('orders', detail.row, 'delivery_status'), deliverySelectClass(detailDeliveryStatus(detail.row))]"
+                  :value="detailDeliveryStatus(detail.row)"
+                  @change="saveOrderField(detail.row, 'delivery_status', $event.target.value)"
+                >
+                  <option v-for="status in deliveryStatusChoices" :key="'detail-delivery-' + status.value" :value="status.value">{{ status.text }}</option>
+                </select>
+                <span v-else class="symbolika-costing-pill" :class="deliverySelectClass(detailDeliveryStatus(detail.row))">{{ deliveryStatusName(detailDeliveryStatus(detail.row)) }}</span>
               </div>
             </div>
             <div class="symbolika-costing-detail-field is-muted symbolika-mobile-secondary">

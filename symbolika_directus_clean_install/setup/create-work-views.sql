@@ -40,6 +40,8 @@ DROP TRIGGER IF EXISTS symbolika_apply_item_status_from_production ON orders_ite
 DROP TRIGGER IF EXISTS symbolika_recalc_order_status_from_items ON orders_items;
 DROP TRIGGER IF EXISTS symbolika_apply_order_status_to_items ON orders;
 DROP TRIGGER IF EXISTS symbolika_validate_order_workflow_transition ON orders;
+DROP TRIGGER IF EXISTS symbolika_normalize_order_delivery ON orders;
+DROP TRIGGER IF EXISTS symbolika_apply_delivery_status_to_items ON orders;
 DROP TRIGGER IF EXISTS symbolika_keep_order_commission_manager ON orders;
 DROP TRIGGER IF EXISTS symbolika_set_item_manager ON orders_items;
 DROP TRIGGER IF EXISTS symbolika_set_item_commission_manager ON orders_items;
@@ -227,6 +229,7 @@ ALTER TABLE office_items_in_office ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS phone character varying(255);
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS birthday date;
 ALTER TABLE directus_users ADD COLUMN IF NOT EXISTS phone character varying(255);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_status character varying(32);
 
 CREATE TABLE IF NOT EXISTS symbolika_birthday_notification_log (
   id bigserial PRIMARY KEY,
@@ -2265,6 +2268,15 @@ DECLARE
   has_not_in_office boolean;
   next_status character varying(255);
 BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM orders o
+    WHERE o.id = order_id
+      AND o.shipping_method = 'office_pickup'
+  ) THEN
+    RETURN;
+  END IF;
+
   SELECT COUNT(*) INTO items_count
   FROM orders_items oi
   LEFT JOIN product_categories pc ON pc.id = oi.product_category
@@ -2493,6 +2505,7 @@ AS $$
 DECLARE
   items_count integer;
   current_status_name text;
+  current_shipping_method text;
   next_status_name text;
   next_status_id integer;
 BEGIN
@@ -2508,7 +2521,7 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT os.name INTO current_status_name
+  SELECT os.name, o.shipping_method INTO current_status_name, current_shipping_method
   FROM orders o
   LEFT JOIN order_statuses os ON os.id = o.order_status
   WHERE o.id = order_id;
@@ -2543,24 +2556,45 @@ BEGIN
     UPDATE orders
        SET order_status = next_status_id,
            office_status = CASE
-             WHEN next_status_name = U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d' THEN 'issued'
+             WHEN next_status_name = U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d'
+                  AND current_shipping_method = 'office_pickup' THEN 'issued'
              ELSE office_status
+           END,
+           delivery_status = CASE
+             WHEN next_status_name = U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d'
+                  AND current_shipping_method IS DISTINCT FROM 'office_pickup' THEN 'delivered'
+             ELSE delivery_status
            END
      WHERE id = order_id
        AND (
          order_status IS DISTINCT FROM next_status_id
          OR (
            next_status_name = U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d'
+           AND current_shipping_method = 'office_pickup'
            AND office_status IS DISTINCT FROM 'issued'
+         )
+         OR (
+           next_status_name = U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d'
+           AND current_shipping_method IS DISTINCT FROM 'office_pickup'
+           AND delivery_status IS DISTINCT FROM 'delivered'
          )
        );
 
     IF next_status_name = U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d' THEN
       UPDATE orders_items
-         SET office_status = 'issued',
-             shipping_method = 'office_pickup'
+         SET office_status = CASE
+               WHEN current_shipping_method = 'office_pickup' THEN 'issued'
+               ELSE 'not_in_office'
+             END,
+             shipping_method = current_shipping_method
        WHERE "order" = order_id
-         AND office_status IS DISTINCT FROM 'issued';
+         AND (
+           shipping_method IS DISTINCT FROM current_shipping_method
+           OR office_status IS DISTINCT FROM CASE
+             WHEN current_shipping_method = 'office_pickup' THEN 'issued'
+             ELSE 'not_in_office'
+           END
+         );
     END IF;
   END IF;
 END;
@@ -2576,6 +2610,7 @@ DECLARE
   item_transition_allowed boolean;
   ready_production_status integer;
   parent_order_delivered boolean := false;
+  parent_shipping_method text;
 BEGIN
   -- A position added to an already ready/delivered order starts its own
   -- workflow and must never inherit the final state of the parent order.
@@ -2602,6 +2637,11 @@ BEGIN
     ELSE symbolika_normalize_item_status(OLD.item_status)
   END;
 
+  SELECT o.shipping_method
+    INTO parent_shipping_method
+    FROM orders o
+   WHERE o.id = NEW."order";
+
   IF NEW.item_status = 'layout_revision'
      AND previous_item_status IS DISTINCT FROM 'layout_revision' THEN
     NEW.layout_revision_url_snapshot := NEW.url;
@@ -2619,8 +2659,11 @@ BEGIN
     END IF;
   ELSIF NEW.item_status IS DISTINCT FROM previous_item_status THEN
     IF NEW.item_status = 'delivered' THEN
-      NEW.office_status := 'issued';
-      NEW.shipping_method := 'office_pickup';
+      NEW.office_status := CASE
+        WHEN parent_shipping_method = 'office_pickup' THEN 'issued'
+        ELSE 'not_in_office'
+      END;
+      NEW.shipping_method := parent_shipping_method;
     ELSIF previous_item_status = 'delivered' AND OLD.office_status = 'issued' THEN
       NEW.office_status := CASE WHEN NEW.item_status = 'ready' THEN 'in_office' ELSE 'not_in_office' END;
       NEW.shipping_method := CASE WHEN NEW.item_status = 'ready' THEN 'office_pickup' ELSE NULL END;
@@ -2637,7 +2680,11 @@ BEGIN
 
   -- A delivered order cannot contain an item that is merely waiting in the office.
   IF parent_order_delivered AND TG_OP <> 'INSERT' THEN
-    NEW.office_status := 'issued';
+    NEW.office_status := CASE
+      WHEN parent_shipping_method = 'office_pickup' THEN 'issued'
+      ELSE 'not_in_office'
+    END;
+    NEW.shipping_method := parent_shipping_method;
   END IF;
 
   -- A position physically accepted by the office has completed production,
@@ -2771,22 +2818,106 @@ BEGIN
       UPDATE orders_items
          SET item_status = next_item_status,
              layout_revision_url_snapshot = CASE WHEN next_item_status = 'in_work' THEN NULL ELSE layout_revision_url_snapshot END,
-             office_status = CASE WHEN next_item_status = 'delivered' THEN 'issued' ELSE office_status END,
-             shipping_method = CASE WHEN next_item_status = 'delivered' THEN 'office_pickup' ELSE shipping_method END
+             office_status = CASE
+               WHEN next_item_status = 'delivered' AND NEW.shipping_method = 'office_pickup' THEN 'issued'
+               WHEN next_item_status = 'delivered' THEN 'not_in_office'
+               ELSE office_status
+             END,
+             shipping_method = CASE WHEN next_item_status = 'delivered' THEN NEW.shipping_method ELSE shipping_method END
        WHERE "order" = NEW.id
          AND (
            symbolika_normalize_item_status(item_status) IS DISTINCT FROM next_item_status
-           OR (next_item_status = 'delivered' AND office_status IS DISTINCT FROM 'issued')
+           OR (
+             next_item_status = 'delivered'
+             AND office_status IS DISTINCT FROM CASE
+               WHEN NEW.shipping_method = 'office_pickup' THEN 'issued'
+               ELSE 'not_in_office'
+             END
+           )
          );
     END IF;
 
     IF next_item_status = 'delivered' THEN
       UPDATE orders
-         SET office_status = 'issued'
+         SET office_status = CASE WHEN NEW.shipping_method = 'office_pickup' THEN 'issued' ELSE 'not_in_office' END,
+             delivery_status = CASE WHEN NEW.shipping_method = 'office_pickup' THEN NULL ELSE 'delivered' END
        WHERE id = NEW.id
-         AND office_status IS DISTINCT FROM 'issued';
+         AND (
+           office_status IS DISTINCT FROM CASE WHEN NEW.shipping_method = 'office_pickup' THEN 'issued' ELSE 'not_in_office' END
+           OR delivery_status IS DISTINCT FROM CASE WHEN NEW.shipping_method = 'office_pickup' THEN NULL ELSE 'delivered' END
+         );
     END IF;
   END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- Delivery is a separate workflow from office issue. Keep its state on the
+-- order and never turn a courier/transport-company delivery into office pickup.
+CREATE OR REPLACE FUNCTION symbolika_normalize_order_delivery_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  delivered_status_id integer;
+BEGIN
+  IF NEW.shipping_method = 'office_pickup' THEN
+    NEW.delivery_status := NULL;
+  ELSE
+    NEW.office_status := 'not_in_office';
+
+    IF TG_OP = 'INSERT'
+       OR NEW.shipping_method IS DISTINCT FROM OLD.shipping_method THEN
+      NEW.delivery_status := COALESCE(NULLIF(NEW.delivery_status, ''), 'pending');
+    ELSE
+      NEW.delivery_status := COALESCE(NULLIF(NEW.delivery_status, ''), OLD.delivery_status, 'pending');
+    END IF;
+
+    IF NEW.delivery_status = 'delivered' THEN
+      delivered_status_id := symbolika_order_status_id(U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d');
+      IF delivered_status_id IS NOT NULL THEN
+        NEW.order_status := delivered_status_id;
+      END IF;
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION symbolika_apply_delivery_status_to_items_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  ready_production_status integer;
+BEGIN
+  IF NEW.shipping_method = 'office_pickup'
+     OR NEW.delivery_status IS DISTINCT FROM 'delivered'
+     OR NEW.delivery_status IS NOT DISTINCT FROM OLD.delivery_status THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT ps.id INTO ready_production_status
+  FROM production_statuses ps
+  WHERE ps.name = U&'\0413\043e\0442\043e\0432'
+  ORDER BY ps.id
+  LIMIT 1;
+
+  UPDATE orders_items
+     SET item_status = 'delivered',
+         office_status = 'not_in_office',
+         shipping_method = NEW.shipping_method,
+         production_status = COALESCE(ready_production_status, production_status)
+   WHERE "order" = NEW.id
+     AND symbolika_normalize_item_status(item_status) <> 'cancelled'
+     AND (
+       symbolika_normalize_item_status(item_status) IS DISTINCT FROM 'delivered'
+       OR office_status IS DISTINCT FROM 'not_in_office'
+       OR shipping_method IS DISTINCT FROM NEW.shipping_method
+       OR (ready_production_status IS NOT NULL AND production_status IS DISTINCT FROM ready_production_status)
+     );
 
   RETURN NEW;
 END;
@@ -3354,10 +3485,20 @@ BEFORE UPDATE OF order_status ON orders
 FOR EACH ROW
 EXECUTE FUNCTION symbolika_validate_order_workflow_transition_trigger();
 
+CREATE TRIGGER symbolika_normalize_order_delivery
+BEFORE INSERT OR UPDATE OF shipping_method, delivery_status ON orders
+FOR EACH ROW
+EXECUTE FUNCTION symbolika_normalize_order_delivery_trigger();
+
 CREATE TRIGGER symbolika_apply_order_status_to_items
 AFTER INSERT OR UPDATE OF order_status ON orders
 FOR EACH ROW
 EXECUTE FUNCTION symbolika_apply_order_status_to_items_trigger();
+
+CREATE TRIGGER symbolika_apply_delivery_status_to_items
+AFTER UPDATE OF delivery_status ON orders
+FOR EACH ROW
+EXECUTE FUNCTION symbolika_apply_delivery_status_to_items_trigger();
 
 UPDATE orders
    SET order_status = symbolika_order_status_id(U&'\0412 \0440\0430\0431\043e\0442\0435')
@@ -6334,6 +6475,7 @@ CREATE TABLE IF NOT EXISTS orders_overview (
   manager_name character varying(255),
   shipping_method character varying(255),
   shipping_method_name character varying(255),
+  delivery_status character varying(32),
   order_sum numeric(10,2),
   paid_amount numeric(10,2),
   payment_due numeric(10,2)
@@ -6504,6 +6646,7 @@ ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS customer_company integer;
 ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS order_status integer;
 ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS order_status_name character varying(255);
 ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS office_status character varying(255);
+ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS delivery_status character varying(32);
 ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS completion_percent integer NOT NULL DEFAULT 0;
 ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS completion_missing_count integer NOT NULL DEFAULT 0;
 ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS completion_missing text;
@@ -7371,7 +7514,7 @@ BEGIN
 
   INSERT INTO orders_overview (
     id, order_number, date, deadline, customer, customer_company, customer_display, manager_name,
-    order_status, order_status_name, office_status,
+    order_status, order_status_name, office_status, delivery_status,
     shipping_method, shipping_method_name, order_sum, paid_amount, payment_due,
     completion_percent, completion_missing_count, completion_missing,
     work_completion_percent, work_completion_missing_count, work_completion_missing
@@ -7388,6 +7531,7 @@ BEGIN
     o.order_status,
     os.name,
     o.office_status,
+    o.delivery_status,
     o.shipping_method,
     CASE o.shipping_method
       WHEN 'office_pickup' THEN U&'\0412\044b\0434\0430\0447\0430 \0432 \043e\0444\0438\0441\0435'
@@ -7547,7 +7691,7 @@ DELETE FROM orders_overview_items;
 DELETE FROM orders_overview;
 INSERT INTO orders_overview (
   id, order_number, date, deadline, customer, customer_company, customer_display, manager_name,
-  order_status, order_status_name, office_status,
+  order_status, order_status_name, office_status, delivery_status,
   shipping_method, shipping_method_name, order_sum, paid_amount, payment_due,
   completion_percent, completion_missing_count, completion_missing,
   work_completion_percent, work_completion_missing_count, work_completion_missing
@@ -7564,6 +7708,7 @@ SELECT
   o.order_status,
   os.name,
   o.office_status,
+  o.delivery_status,
   o.shipping_method,
   CASE o.shipping_method
     WHEN 'office_pickup' THEN U&'\0412\044b\0434\0430\0447\0430 \0432 \043e\0444\0438\0441\0435'
@@ -15746,6 +15891,84 @@ END;
 $$;
 
 SELECT refresh_orders_due_tables();
+
+-- Existing delivery orders receive an explicit delivery state. Office pickup
+-- continues to use office_status and therefore keeps delivery_status empty.
+UPDATE orders o
+   SET delivery_status = CASE
+     WHEN o.shipping_method = 'office_pickup' THEN NULL
+     WHEN os.name = U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d' THEN 'delivered'
+     ELSE COALESCE(NULLIF(o.delivery_status, ''), 'pending')
+   END,
+       office_status = CASE
+         WHEN o.shipping_method = 'office_pickup' THEN o.office_status
+         ELSE 'not_in_office'
+       END
+  FROM order_statuses os
+ WHERE os.id = o.order_status
+   AND (
+     o.delivery_status IS DISTINCT FROM CASE
+       WHEN o.shipping_method = 'office_pickup' THEN NULL
+       WHEN os.name = U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d' THEN 'delivered'
+       ELSE COALESCE(NULLIF(o.delivery_status, ''), 'pending')
+     END
+     OR (
+       o.shipping_method IS DISTINCT FROM 'office_pickup'
+       AND o.office_status IS DISTINCT FROM 'not_in_office'
+     )
+   );
+
+INSERT INTO directus_fields (
+  collection, field, special, interface, options, display, display_options,
+  readonly, hidden, sort, width, translations, required, searchable
+)
+SELECT
+  'orders', 'delivery_status', NULL, 'select-dropdown',
+  '{"choices":[{"text":"Ожидает доставки","value":"pending"},{"text":"В доставке","value":"in_delivery"},{"text":"Доставлен","value":"delivered"}]}'::json,
+  'labels',
+  '{"choices":[{"text":"Ожидает доставки","value":"pending","foreground":"#ef9b3f","background":"#ef9b3f22"},{"text":"В доставке","value":"in_delivery","foreground":"#5b9cff","background":"#5b9cff22"},{"text":"Доставлен","value":"delivered","foreground":"#35c98b","background":"#35c98b22"}]}'::json,
+  false, false, 8, 'half',
+  json_build_array(json_build_object('language','ru-RU','translation','Статус доставки'))::json,
+  false, true
+WHERE NOT EXISTS (
+  SELECT 1 FROM directus_fields WHERE collection = 'orders' AND field = 'delivery_status'
+);
+
+UPDATE directus_fields
+   SET interface = 'select-dropdown',
+       options = '{"choices":[{"text":"Ожидает доставки","value":"pending"},{"text":"В доставке","value":"in_delivery"},{"text":"Доставлен","value":"delivered"}]}'::json,
+       display = 'labels',
+       display_options = '{"choices":[{"text":"Ожидает доставки","value":"pending","foreground":"#ef9b3f","background":"#ef9b3f22"},{"text":"В доставке","value":"in_delivery","foreground":"#5b9cff","background":"#5b9cff22"},{"text":"Доставлен","value":"delivered","foreground":"#35c98b","background":"#35c98b22"}]}'::json,
+       readonly = false,
+       hidden = false,
+       width = 'half',
+       translations = json_build_array(json_build_object('language','ru-RU','translation','Статус доставки'))::json
+ WHERE collection = 'orders'
+   AND field = 'delivery_status';
+
+INSERT INTO directus_fields (
+  collection, field, special, interface, options, display, display_options,
+  readonly, hidden, sort, width, translations, required, searchable
+)
+SELECT
+  'orders_overview', 'delivery_status', NULL, 'select-dropdown',
+  '{"choices":[{"text":"Ожидает доставки","value":"pending"},{"text":"В доставке","value":"in_delivery"},{"text":"Доставлен","value":"delivered"}]}'::json,
+  'labels', NULL, true, false, 12, 'half',
+  json_build_array(json_build_object('language','ru-RU','translation','Статус доставки'))::json,
+  false, true
+WHERE NOT EXISTS (
+  SELECT 1 FROM directus_fields WHERE collection = 'orders_overview' AND field = 'delivery_status'
+);
+
+UPDATE directus_permissions
+   SET fields = fields || ',delivery_status'
+ WHERE collection IN ('orders', 'orders_overview')
+   AND action IN ('create', 'read', 'update')
+   AND fields IS NOT NULL
+   AND fields <> '*'
+   AND NOT ('delivery_status' = ANY(string_to_array(fields, ',')));
+
+SELECT sync_orders_overview(id) FROM orders;
 
 -- Managing supervises the manager workflow. Besides unrestricted business
 -- collections defined above, keep the two auxiliary manager permissions in

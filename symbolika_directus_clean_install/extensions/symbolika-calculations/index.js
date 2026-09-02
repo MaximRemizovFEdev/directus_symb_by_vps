@@ -15,6 +15,8 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
   const NOT_IN_OFFICE = 'not_in_office';
   const IN_OFFICE = 'in_office';
   const ISSUED = 'issued';
+  const DELIVERY_PENDING = 'pending';
+  const DELIVERY_DELIVERED = 'delivered';
   const DEFAULT_NOTIFICATION_TOPICS = {
     order_status: true,
     item_status: true,
@@ -1948,6 +1950,13 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
         office_status: officeApplicable ? NOT_IN_OFFICE : null,
       });
     }
+
+    await database('orders').where({ id: orderId }).update({
+      office_status: NOT_IN_OFFICE,
+      delivery_status: order.shipping_method && order.shipping_method !== OFFICE_PICKUP
+        ? DELIVERY_PENDING
+        : null,
+    });
   }
 
   async function isItemOfficeApplicable(item) {
@@ -2022,6 +2031,9 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
   async function recalcOfficeStatus(orderId) {
     if (!orderId) return;
 
+    const order = await database('orders').where({ id: orderId }).first();
+    if (!order || order.shipping_method !== OFFICE_PICKUP) return;
+
     const items = await officeApplicableItemsQuery(orderId);
     if (!items.length) return;
 
@@ -2044,12 +2056,41 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       update.office_status = NOT_IN_OFFICE;
     }
 
-    const order = await database('orders').where({ id: orderId }).first();
     const deliveredId = await getDeliveredStatusId();
 
     if (update.office_status !== ISSUED && deliveredId && order?.order_status === deliveredId) {
       const readyId = await getReadyStatusId();
       if (readyId) update.order_status = readyId;
+    }
+
+    await database('orders').where({ id: orderId }).update(update);
+  }
+
+  async function setOrderDeliveryStatus(orderId, deliveryStatus) {
+    if (!orderId || !deliveryStatus) return;
+
+    const order = await database('orders').where({ id: orderId }).first();
+    if (!order || order.shipping_method === OFFICE_PICKUP) return;
+
+    const update = {
+      delivery_status: deliveryStatus,
+      office_status: NOT_IN_OFFICE,
+    };
+
+    if (deliveryStatus === DELIVERY_DELIVERED) {
+      const deliveredId = await getDeliveredStatusId();
+      const readyProductionStatus = await getReadyProductionStatusId();
+      if (deliveredId) update.order_status = deliveredId;
+
+      await database('orders_items')
+        .where({ order: orderId })
+        .whereNot('item_status', 'cancelled')
+        .update({
+          item_status: 'delivered',
+          office_status: NOT_IN_OFFICE,
+          shipping_method: order.shipping_method,
+          ...(readyProductionStatus ? { production_status: readyProductionStatus } : {}),
+        });
     }
 
     await database('orders').where({ id: orderId }).update(update);
@@ -2228,9 +2269,10 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       }
     }
 
-    if (!next.office_status) {
-      next.office_status = NOT_IN_OFFICE;
-    }
+    next.office_status = next.office_status || NOT_IN_OFFICE;
+    next.delivery_status = next.shipping_method && next.shipping_method !== OFFICE_PICKUP
+      ? (next.delivery_status || DELIVERY_PENDING)
+      : null;
 
     return next;
   });
@@ -2389,6 +2431,9 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       if (!order.office_status) {
         update.office_status = NOT_IN_OFFICE;
       }
+      if (order.shipping_method && order.shipping_method !== OFFICE_PICKUP && !order.delivery_status) {
+        update.delivery_status = DELIVERY_PENDING;
+      }
 
       if (Object.keys(update).length) {
         await database('orders').where({ id: key }).update(update);
@@ -2438,11 +2483,18 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
           await syncItemsShippingFromOrder(orderId);
         }
 
+        if (Object.prototype.hasOwnProperty.call(payload || {}, 'delivery_status')) {
+          await setOrderDeliveryStatus(orderId, payload.delivery_status);
+        }
+
         if (Object.prototype.hasOwnProperty.call(payload || {}, 'deadline')) {
           await syncItemDeadlinesFromOrder(orderId, prevOrder?.deadline, order?.deadline);
         }
 
         if (Object.prototype.hasOwnProperty.call(payload || {}, 'office_status')) {
+          if (order.shipping_method !== OFFICE_PICKUP) {
+            await database('orders').where({ id: orderId }).update({ office_status: NOT_IN_OFFICE });
+          } else {
           if (payload.office_status === IN_OFFICE) {
             await setAllItemsOfficeStatus(orderId, IN_OFFICE);
           }
@@ -2461,16 +2513,19 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
           if (payload.office_status === NOT_IN_OFFICE) {
             await setAllItemsOfficeStatus(orderId, NOT_IN_OFFICE);
           }
+          }
         }
 
         if (Object.prototype.hasOwnProperty.call(payload || {}, 'order_status')) {
           const deliveredId = await getDeliveredStatusId();
 
           if (deliveredId && Number(payload.order_status) === Number(deliveredId)) {
-            await setAllItemsOfficeStatus(orderId, ISSUED);
-            await database('orders').where({ id: orderId }).update({
-              office_status: ISSUED,
-            });
+            if (order.shipping_method === OFFICE_PICKUP) {
+              await setAllItemsOfficeStatus(orderId, ISSUED);
+              await database('orders').where({ id: orderId }).update({ office_status: ISSUED, delivery_status: null });
+            } else {
+              await setOrderDeliveryStatus(orderId, DELIVERY_DELIVERED);
+            }
           }
         }
 

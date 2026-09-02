@@ -39,16 +39,22 @@ export function detailIsOrder(row) {
 }
 
 export function orderId(row) {
+  if (!row) return '';
+  if (row?.order_id) return row.order_id;
   if (row?.order_link) return row.order_link;
   if (row?.order_number && !row?.product_name && row?.id) return row.id;
-  if (!row?.order) return '';
-  return typeof row.order === 'object' ? (row.order.id || '') : row.order;
+  if (row?.order) return typeof row.order === 'object' ? (row.order.id || '') : row.order;
+  if (row?.order_context && row.order_context !== row) return orderId(row.order_context);
+  if (!row?.product_name && row?.id && detailEntityType('', row) === 'order') return row.id;
+  return '';
 }
 
 export function orderNumber(row) {
   if (row?.order_number) return row.order_number;
   if (typeof row?.order === 'object') return row.order.order_number || `#${row.order.id}`;
-  return row?.order ? `#${row.order}` : '-';
+  if (row?.order) return `#${row.order}`;
+  if (row?.order_context && row.order_context !== row) return orderNumber(row.order_context);
+  return '-';
 }
 
 export function orderRowKey(row) {

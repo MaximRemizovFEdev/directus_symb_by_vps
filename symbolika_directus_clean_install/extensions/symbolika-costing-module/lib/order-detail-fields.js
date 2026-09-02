@@ -11,6 +11,7 @@ export const orderDetailFields = Object.freeze([
   'manager_employee.full_name',
   'order_status',
   'office_status',
+  'delivery_status',
   'shipping_method',
   'shipping_comment',
   'payment_type.id',
