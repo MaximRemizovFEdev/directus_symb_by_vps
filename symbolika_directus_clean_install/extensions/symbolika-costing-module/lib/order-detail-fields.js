@@ -47,6 +47,7 @@ export const orderItemManagerFields = Object.freeze([
   'contractor_2.id',
   'contractor_2.name',
   'contractor_2_cost',
+  'screen_printing_cost_per_unit',
   'technical_task_text',
   'url',
   'layout_revision_url_snapshot',
@@ -141,6 +142,7 @@ export const orderItemSafeFields = Object.freeze([
   'contractor_1_cost',
   'contractor_2',
   'contractor_2_cost',
+  'screen_printing_cost_per_unit',
   'technical_task_text',
   'url',
   'needs_designer_help',
@@ -150,7 +152,7 @@ export const orderItemSafeFields = Object.freeze([
   'production_comment',
 ]);
 
-const costFields = new Set(['contractor_1_cost', 'contractor_2_cost']);
+const costFields = new Set(['contractor_1_cost', 'contractor_2_cost', 'screen_printing_cost_per_unit']);
 
 export function managerOrderItemFields(canEditItemCosts) {
   return canEditItemCosts

@@ -5668,6 +5668,13 @@ export const CostingModule = {
       return !this.contractorIsInternal(value) || this.contractorIsScreenPrinting(value);
     },
 
+    orderItemCostValue(row, field) {
+      const contractorField = field === 'contractor_2_cost' ? 'contractor_2' : 'contractor_1';
+      return this.contractorIsScreenPrinting(row?.[contractorField])
+        ? row?.screen_printing_cost_per_unit
+        : row?.[field];
+    },
+
     costingSideComplete(contractor, cost) {
       return !this.contractorId(contractor)
         || (this.contractorIsInternal(contractor) && !this.contractorIsScreenPrinting(contractor))
@@ -11926,13 +11933,15 @@ export const CostingModule = {
           body: JSON.stringify({ application_cost_per_unit: value }),
         });
         const total = Math.round(this.parseMoney(row.quantity) * this.parseMoney(value) * 100) / 100;
-        Object.assign(row, {
-          application_cost_per_unit: value,
-          application_cost_total: total,
-        });
         const costField = Number(row.application_contractor_slot) === 2
           ? 'contractor_2_cost'
           : 'contractor_1_cost';
+        Object.assign(row, {
+          application_cost_per_unit: value,
+          application_cost_total: total,
+          screen_printing_cost_per_unit: value,
+          [costField]: value,
+        });
         this.updateOrderItemCaches(row.id, { [costField]: value });
         this.scheduleBackgroundAreaRefresh();
         return true;
@@ -12223,6 +12232,16 @@ export const CostingModule = {
         delete next[key];
         this.saving = next;
       }
+    },
+
+    async saveOrderItemCost(row, field, value) {
+      const contractorField = field === 'contractor_2_cost' ? 'contractor_2' : 'contractor_1';
+      if (this.contractorIsScreenPrinting(row?.[contractorField])) {
+        row.application_contractor_slot = field === 'contractor_2_cost' ? 2 : 1;
+        await this.saveScreenApplicationCost(row, value);
+        return;
+      }
+      await this.saveOrderItemField(row, field, value);
     },
 
     async saveOrderItemContractor(row, field, value) {
@@ -36905,10 +36924,10 @@ export const CostingModule = {
                   class="symbolika-costing-input symbolika-costing-num"
                   :class="savingWorkClass('orders_items', detail.row, 'contractor_1_cost')"
                   inputmode="decimal"
-                  :value="detail.row.contractor_1_cost"
-                  :disabled="contractorIsInternal(detail.row.contractor_1) || isOrderItemFieldSaving(detail.row, 'contractor_1')"
+                  :value="orderItemCostValue(detail.row, 'contractor_1_cost')"
+                  :disabled="!costingContractorCostEditable(detail.row.contractor_1) || isOrderItemFieldSaving(detail.row, 'contractor_1')"
                   @focus="clearZeroInput(detail.row, 'contractor_1_cost')"
-                  @change="saveOrderItemField(detail.row, 'contractor_1_cost', $event.target.value)"
+                  @change="saveOrderItemCost(detail.row, 'contractor_1_cost', $event.target.value)"
                 />
               </div>
             </div>
@@ -36941,10 +36960,10 @@ export const CostingModule = {
                   class="symbolika-costing-input symbolika-costing-num"
                   :class="savingWorkClass('orders_items', detail.row, executorCostField(detail.row))"
                   inputmode="decimal"
-                  :value="detail.row[executorCostField(detail.row)]"
-                  :disabled="contractorIsInternal(detail.row[executorField(detail.row)]) || isOrderItemFieldSaving(detail.row, executorField(detail.row))"
+                  :value="orderItemCostValue(detail.row, executorCostField(detail.row))"
+                  :disabled="!costingContractorCostEditable(detail.row[executorField(detail.row)]) || isOrderItemFieldSaving(detail.row, executorField(detail.row))"
                   @focus="clearZeroInput(detail.row, executorCostField(detail.row))"
-                  @change="saveOrderItemField(detail.row, executorCostField(detail.row), $event.target.value)"
+                  @change="saveOrderItemCost(detail.row, executorCostField(detail.row), $event.target.value)"
                 />
               </div>
             </div>
