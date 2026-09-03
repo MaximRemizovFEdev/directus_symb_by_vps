@@ -9849,19 +9849,46 @@ BEGIN
     COALESCE(oi.blank_ordered, false),
     oi.contractor_1,
     oi.contractor_2,
-    oi.contractor_1_cost,
-    oi.contractor_2_cost,
-    oi.unit_cost,
-    oi.total_cost,
+    CASE WHEN COALESCE(c1.name, '') ILIKE '%шелкограф%'
+      THEN COALESCE(oi.screen_printing_cost_per_unit, 0) ELSE oi.contractor_1_cost END,
+    CASE WHEN COALESCE(c2.name, '') ILIKE '%шелкограф%'
+      THEN COALESCE(oi.screen_printing_cost_per_unit, 0) ELSE oi.contractor_2_cost END,
+    costs.effective_unit_cost,
+    costs.effective_total_cost,
     oi.manager_commission_sum,
     oi.tax_sum,
-    oi.profit_sum,
-    oi.margin_percent,
+    ROUND(COALESCE(oi.profit_sum, 0) + COALESCE(oi.total_cost, 0) - costs.effective_total_cost, 2),
+    CASE WHEN COALESCE(oi.order_sum, 0) > 0 THEN ROUND(
+      (COALESCE(oi.profit_sum, 0) + COALESCE(oi.total_cost, 0) - costs.effective_total_cost)
+        / oi.order_sum * 100,
+      2
+    ) ELSE 0 END,
     oi.item_status,
     oi.production_status,
     oi.deadline
   FROM orders_items oi
   LEFT JOIN orders o ON o.id = oi."order"
+  LEFT JOIN contractors c1 ON c1.id = oi.contractor_1
+  LEFT JOIN contractors c2 ON c2.id = oi.contractor_2
+  CROSS JOIN LATERAL (
+    SELECT
+      ROUND(
+        (CASE WHEN COALESCE(c1.name, '') ILIKE '%шелкограф%'
+          THEN COALESCE(oi.screen_printing_cost_per_unit, 0) ELSE COALESCE(oi.contractor_1_cost, 0) END)
+        + (CASE WHEN COALESCE(c2.name, '') ILIKE '%шелкограф%'
+          THEN COALESCE(oi.screen_printing_cost_per_unit, 0) ELSE COALESCE(oi.contractor_2_cost, 0) END),
+        2
+      ) AS effective_unit_cost,
+      ROUND(
+        COALESCE(oi.quantity, 0) * (
+          (CASE WHEN COALESCE(c1.name, '') ILIKE '%шелкограф%'
+            THEN COALESCE(oi.screen_printing_cost_per_unit, 0) ELSE COALESCE(oi.contractor_1_cost, 0) END)
+          + (CASE WHEN COALESCE(c2.name, '') ILIKE '%шелкограф%'
+            THEN COALESCE(oi.screen_printing_cost_per_unit, 0) ELSE COALESCE(oi.contractor_2_cost, 0) END)
+        ),
+        2
+      ) AS effective_total_cost
+  ) costs
   WHERE oi.id = item_id
   ON CONFLICT (id) DO UPDATE SET
     "order" = EXCLUDED."order",
@@ -9936,10 +9963,22 @@ CREATE OR REPLACE FUNCTION push_contractor_costing_update()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  contractor_1_is_screen boolean;
+  contractor_2_is_screen boolean;
 BEGIN
   IF pg_trigger_depth() > 1 THEN
     RETURN NEW;
   END IF;
+
+  SELECT COALESCE(name ILIKE '%шелкограф%', false)
+    INTO contractor_1_is_screen
+    FROM contractors
+   WHERE id = NEW.contractor_1;
+  SELECT COALESCE(name ILIKE '%шелкограф%', false)
+    INTO contractor_2_is_screen
+    FROM contractors
+   WHERE id = NEW.contractor_2;
 
   UPDATE orders_items
   SET
@@ -9947,16 +9986,29 @@ BEGIN
     contractor_2 = NEW.contractor_2,
     blank_source = COALESCE(NEW.blank_source, 'none'),
     blank_ordered = COALESCE(NEW.blank_ordered, false),
-    contractor_1_cost = COALESCE(NEW.contractor_1_cost, 0),
-    contractor_2_cost = COALESCE(NEW.contractor_2_cost, 0)
+    contractor_1_cost = CASE WHEN COALESCE(contractor_1_is_screen, false)
+      THEN contractor_1_cost ELSE COALESCE(NEW.contractor_1_cost, 0) END,
+    contractor_2_cost = CASE WHEN COALESCE(contractor_2_is_screen, false)
+      THEN contractor_2_cost ELSE COALESCE(NEW.contractor_2_cost, 0) END,
+    screen_printing_cost_per_unit = CASE
+      WHEN COALESCE(contractor_1_is_screen, false) THEN NEW.contractor_1_cost
+      WHEN COALESCE(contractor_2_is_screen, false) THEN NEW.contractor_2_cost
+      ELSE screen_printing_cost_per_unit
+    END
   WHERE id = NEW.id
     AND (
       contractor_1 IS DISTINCT FROM NEW.contractor_1
       OR contractor_2 IS DISTINCT FROM NEW.contractor_2
       OR blank_source IS DISTINCT FROM COALESCE(NEW.blank_source, 'none')
       OR blank_ordered IS DISTINCT FROM COALESCE(NEW.blank_ordered, false)
-      OR contractor_1_cost IS DISTINCT FROM COALESCE(NEW.contractor_1_cost, 0)
-      OR contractor_2_cost IS DISTINCT FROM COALESCE(NEW.contractor_2_cost, 0)
+      OR (NOT COALESCE(contractor_1_is_screen, false)
+        AND contractor_1_cost IS DISTINCT FROM COALESCE(NEW.contractor_1_cost, 0))
+      OR (NOT COALESCE(contractor_2_is_screen, false)
+        AND contractor_2_cost IS DISTINCT FROM COALESCE(NEW.contractor_2_cost, 0))
+      OR (COALESCE(contractor_1_is_screen, false)
+        AND screen_printing_cost_per_unit IS DISTINCT FROM NEW.contractor_1_cost)
+      OR (COALESCE(contractor_2_is_screen, false)
+        AND screen_printing_cost_per_unit IS DISTINCT FROM NEW.contractor_2_cost)
     );
 
   RETURN NEW;
@@ -9969,7 +10021,7 @@ AFTER INSERT OR DELETE OR UPDATE OF
   "order", order_link, product_name, quantity, price_per_unit, order_sum,
   product_category, product_subcategory, application_method,
   blank_source, blank_ordered, contractor_1, contractor_2,
-  contractor_1_cost, contractor_2_cost, unit_cost, total_cost,
+  contractor_1_cost, contractor_2_cost, screen_printing_cost_per_unit, unit_cost, total_cost,
   manager_commission_sum, tax_sum, profit_sum, margin_percent,
   item_status, production_status, deadline
 ON orders_items

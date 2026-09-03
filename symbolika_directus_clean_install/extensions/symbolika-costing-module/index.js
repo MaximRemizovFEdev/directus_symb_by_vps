@@ -5657,9 +5657,20 @@ export const CostingModule = {
         || this.normalizeStatus(contractor?.name) === 'собственное производство';
     },
 
+    contractorIsScreenPrinting(value) {
+      const directName = typeof value === 'object' && value ? value.name : '';
+      const id = this.contractorId(value);
+      const contractor = this.contractors.find((item) => String(item.id) === String(id));
+      return this.normalizeStatus(directName || contractor?.name || '').includes('шелкограф');
+    },
+
+    costingContractorCostEditable(value) {
+      return !this.contractorIsInternal(value) || this.contractorIsScreenPrinting(value);
+    },
+
     costingSideComplete(contractor, cost) {
       return !this.contractorId(contractor)
-        || this.contractorIsInternal(contractor)
+        || (this.contractorIsInternal(contractor) && !this.contractorIsScreenPrinting(contractor))
         || this.parseMoney(cost) > 0;
     },
 
@@ -11759,6 +11770,14 @@ export const CostingModule = {
       // contractor fields through it caused numeric costs to be overwritten by
       // the following orders_items -> contractor_costing synchronization. The
       // order item is the source of truth, so write those fields there directly.
+      if (['contractor_1_cost', 'contractor_2_cost'].includes(field)) {
+        const contractorField = field === 'contractor_2_cost' ? 'contractor_2' : 'contractor_1';
+        if (this.contractorIsScreenPrinting(row?.[contractorField])) {
+          row.application_contractor_slot = field === 'contractor_2_cost' ? 2 : 1;
+          await this.saveScreenApplicationCost(row, value);
+          return;
+        }
+      }
       if (['contractor_1', 'contractor_2', 'contractor_1_cost', 'contractor_2_cost'].includes(field)) {
         await this.saveOrderItemField(row, field, value);
         return;
@@ -11793,10 +11812,11 @@ export const CostingModule = {
       if (!contractorId || this.costingBulkSaving) return;
 
       const contractor = this.selectedCostingContractor;
-      const normalizedCost = this.contractorIsInternal(contractor)
+      const isScreenPrinting = this.contractorIsScreenPrinting(contractor);
+      const normalizedCost = this.contractorIsInternal(contractor) && !isScreenPrinting
         ? 0
         : this.parseMoney(this.costingBulkCost);
-      if (!this.contractorIsInternal(contractor) && normalizedCost <= 0) {
+      if ((!this.contractorIsInternal(contractor) || isScreenPrinting) && normalizedCost <= 0) {
         this.error = 'Укажите себестоимость за единицу больше нуля.';
         return;
       }
@@ -11826,9 +11846,15 @@ export const CostingModule = {
         for (let offset = 0; offset < targets.length; offset += 12) {
           const batch = targets.slice(offset, offset + 12);
           await Promise.all(batch.map(async ({ row, itemId, patch }) => {
-            await this.request(`/items/orders_items/${itemId}`, {
+            const requestPath = isScreenPrinting
+              ? `/items/screen_printing_work/${itemId}`
+              : `/items/orders_items/${itemId}`;
+            const requestPatch = isScreenPrinting
+              ? { application_cost_per_unit: normalizedCost }
+              : patch;
+            await this.request(requestPath, {
               method: 'PATCH',
-              body: JSON.stringify(patch),
+              body: JSON.stringify(requestPatch),
             });
             Object.assign(row, patch);
             this.updateOrderItemCaches(itemId, patch);
@@ -30973,7 +30999,7 @@ export const CostingModule = {
               <strong>{{ selectedCostingContractor?.name || 'Контрагент' }}</strong>
               <span class="symbolika-costing-subtle">Отфильтровано позиций: {{ costingBulkTargetRows.length }}</span>
             </div>
-            <template v-if="!contractorIsInternal(selectedCostingContractor)">
+            <template v-if="costingContractorCostEditable(selectedCostingContractor)">
               <label class="symbolika-costing-label symbolika-costing-cost-bulk-field">
                 Себестоимость за единицу
                 <input
@@ -31070,8 +31096,8 @@ export const CostingModule = {
                       :class="savingClass(row, 'contractor_1_cost')"
                       inputmode="decimal"
                       :value="row.contractor_1_cost"
-                      :disabled="contractorIsInternal(row.contractor_1) || isOrderItemFieldSaving(row, 'contractor_1')"
-                      :title="contractorIsInternal(row.contractor_1) ? 'Для собственного производства себестоимость равна нулю' : 'Себестоимость заготовки за единицу'"
+                      :disabled="!costingContractorCostEditable(row.contractor_1) || isOrderItemFieldSaving(row, 'contractor_1')"
+                      :title="!costingContractorCostEditable(row.contractor_1) ? 'Для собственного производства себестоимость равна нулю' : 'Себестоимость заготовки за единицу'"
                       placeholder="Себестоимость за единицу"
                       @change="saveField(row, 'contractor_1_cost', $event.target.value)"
                     />
@@ -31100,8 +31126,8 @@ export const CostingModule = {
                     :class="savingClass(row, executorCostField(row))"
                     inputmode="decimal"
                     :value="row[executorCostField(row)]"
-                    :disabled="contractorIsInternal(row[executorField(row)]) || isOrderItemFieldSaving(row, executorField(row))"
-                    :title="contractorIsInternal(row[executorField(row)]) ? 'Для собственного производства себестоимость равна нулю' : 'Себестоимость работ за единицу'"
+                    :disabled="!costingContractorCostEditable(row[executorField(row)]) || isOrderItemFieldSaving(row, executorField(row))"
+                    :title="!costingContractorCostEditable(row[executorField(row)]) ? 'Для собственного производства себестоимость равна нулю' : 'Себестоимость работ за единицу'"
                     placeholder="Себестоимость за единицу"
                     @change="saveField(row, executorCostField(row), $event.target.value)"
                   />
