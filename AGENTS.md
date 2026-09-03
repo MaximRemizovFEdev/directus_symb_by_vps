@@ -6,6 +6,7 @@
 
 ```text
 symbolika_directus_clean_install/CODEX_WORKFLOW.md
+symbolika_directus_clean_install/CURRENT_HANDOFF.md
 ```
 
 Если нужен более широкий контекст по бизнес-логике, дополнительно читать:
@@ -45,6 +46,7 @@ symbolika-db
 
 - `symbolika_directus_clean_install/docker-compose.yml` — запуск Directus и PostgreSQL. В файле могут быть живые токены и ключи, не цитировать их в ответах.
 - `symbolika_directus_clean_install/setup/create-work-views.sql` — основной SQL-слой: таблицы, представления, триггеры, права, роли, статусы, маршрутизация и metadata Directus.
+- `symbolika_directus_clean_install/CURRENT_HANDOFF.md` — актуальное состояние ветки, последнего релиза и безопасный порядок продолжения работы в новом чате.
 - `symbolika_directus_clean_install/setup/symbolika-admin-ui.js` — клиентские правки стандартной админки Directus.
 - `symbolika_directus_clean_install/setup/symbolika-admin-ui.css` — визуальные правки стандартной админки Directus.
 - `symbolika_directus_clean_install/extensions/symbolika-costing-module/` — основной рабочий интерфейс системы.
