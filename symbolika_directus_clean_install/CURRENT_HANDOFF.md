@@ -7,8 +7,8 @@
 ## Состояние репозитория и окружений
 
 - Рабочая ветка: `dev-v1`.
-- Последний примененный функциональный коммит: `6e43ec1` (`Fix managing screen printing cost saves`).
-- Предыдущий функциональный коммит: `a449b26` (`Fix management costing and order views`).
+- Последний примененный функциональный коммит: `f0d07b5` (`Fix screen printing cost in item card`).
+- Предыдущий функциональный коммит: `6e43ec1` (`Fix managing screen printing cost saves`).
 - Локальная система: `http://localhost:8057/admin/`.
 - Рабочий сервер: `82.146.53.84`.
 - Публичный адрес: `https://symbcorp.ru`.
@@ -16,6 +16,15 @@
 - На момент обновления этого файла локальная ветка, GitHub и VPS синхронизированы; база и пользовательские файлы VPS сохранены.
 
 ## Последнее реализованное изменение
+
+3 сентября исправлена карточка позиции для внутренней шелкографии:
+
+- карточка загружает и показывает `screen_printing_cost_per_unit`;
+- поле стоимости шелкографии больше не блокируется как обычное внутреннее производство;
+- сохранение из карточки направляется через `screen_printing_work.application_cost_per_unit`, а не в обнуляемую стоимость внутреннего подрядчика;
+- проверка на футболке заказа `SO-00052`, позиция `103`, подтвердила запись значения в отдельное поле и свод; тестовое значение откатили.
+
+### Предыдущее изменение — свод себестоимости шелкографии
 
 3 сентября исправлено сохранение себестоимости шелкографии управляющим в своде себестоимости:
 
@@ -81,6 +90,8 @@ setup/migrations/20260902_delivery_workflow.sql
 Последние резервные копии:
 
 ```text
+/opt/symbolika/backups/symbolika-before-card-cost-fix-20260903-173106.dump
+/opt/symbolika/backups/uploads-before-card-cost-fix-20260903-173106.tar.gz
 /opt/symbolika/backups/symbolika-before-screen-cost-fix-20260903-162415.dump
 /opt/symbolika/backups/uploads-before-screen-cost-fix-20260903-162415.tar.gz
 /opt/symbolika/backups/symbolika-before-update-20260903-111540.dump
