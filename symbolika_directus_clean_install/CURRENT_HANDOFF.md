@@ -7,8 +7,8 @@
 ## Состояние репозитория и окружений
 
 - Рабочая ветка: `dev-v1`.
-- Последний примененный коммит: `02fdd1e` (`Add targeted delivery workflow migration`).
-- Предыдущий функциональный коммит: `d798af3` (`Add delivery workflow and fix order issue context`).
+- Последний примененный функциональный коммит: `a449b26` (`Fix management costing and order views`).
+- Предыдущий коммит: `1b21b96` (`Update Codex handoff instructions`).
 - Локальная система: `http://localhost:8057/admin/`.
 - Рабочий сервер: `82.146.53.84`.
 - Публичный адрес: `https://symbcorp.ru`.
@@ -16,6 +16,24 @@
 - На момент обновления этого файла локальная ветка, GitHub и VPS синхронизированы; база и пользовательские файлы VPS сохранены.
 
 ## Последнее реализованное изменение
+
+3 сентября на VPS перенесен комплект исправлений:
+
+- управляющий видит полную себестоимость, может редактировать поля себестоимости и получил рабочие разделы админки, кроме управления пользователями;
+- себестоимость шелкографии хранится в отдельном `orders_items.screen_printing_cost_per_unit` и больше не обнуляется нормализацией внутреннего подрядчика;
+- в витрины `my_orders_in_work`, `my_orders_completed` и `my_orders_unpaid` добавлен `delivery_status`, из-за отсутствия которого API возвращал `403`, а «Мои заказы» показывали пустой список.
+
+Применены точечные миграции:
+
+```text
+setup/migrations/20260903_fix_my_orders_delivery_status.sql
+setup/migrations/20260903_managing_full_costing_and_admin.sql
+setup/migrations/20260903_persist_screen_printing_cost.sql
+```
+
+После деплоя оба health-check ответили `ok`; в базе сохранены 34 заказа администратора (17 активных и 17 завершённых). Откатываемый тест подтвердил синхронизацию себестоимости шелкографии.
+
+### Предыдущее изменение — доставка
 
 Добавлен отдельный процесс доставки для заказов не с выдачей в офисе:
 
@@ -52,6 +70,8 @@ setup/migrations/20260902_delivery_workflow.sql
 Последние резервные копии перед доставкой:
 
 ```text
+/opt/symbolika/backups/symbolika-before-update-20260903-111540.dump
+/opt/symbolika/backups/uploads-before-update-20260903-111540.tar.gz
 /opt/symbolika/backups/symbolika-before-delivery-20260902-235856.dump
 /opt/symbolika/backups/symbolika-before-update-20260902-234034-0e773ba5.dump
 /opt/symbolika/backups/uploads-before-update-20260902-234034-0e773ba5.tar.gz
