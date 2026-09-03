@@ -685,7 +685,7 @@ const moduleSections = {
   admin: {
     title: 'Админка',
     tabs: [...adminWorkspaceTabs],
-    roles: ['Administrator'],
+    roles: ['Administrator', 'Управляющий'],
   },
 };
 
@@ -1520,7 +1520,7 @@ export const CostingModule = {
       const withWorkTabs = (ids) => tabs.filter((tab) => workTabs.includes(tab.id) || ids.includes(tab.id));
       let roleTabs = [];
       if (this.currentRoleName === 'Administrator') roleTabs = tabs;
-      else if (this.currentRoleName === 'Управляющий') roleTabs = tabs.filter((tab) => tab.id !== 'order_economics');
+      else if (this.currentRoleName === 'Управляющий') roleTabs = tabs.filter((tab) => !['order_economics', 'admin_users'].includes(tab.id));
       else if (this.currentRoleName === 'Производство') roleTabs = withWorkTabs(['my_orders', 'production', 'labels', 'admin_inventory', 'admin_procurement']);
       else if (this.currentRoleName === 'Шелкография') roleTabs = withWorkTabs(['my_orders', 'screen', 'labels', 'admin_inventory', 'admin_procurement']);
       else if (this.currentRoleName === 'Контрагент') roleTabs = tabs.filter((tab) => tab.id === 'contractor_work');
@@ -1735,7 +1735,7 @@ export const CostingModule = {
     },
 
     canSeeCostingTotals() {
-      return this.currentRoleName === 'Administrator';
+      return this.hasManagerOverrideAccess;
     },
 
     hasManagerWorkflowAccess() {

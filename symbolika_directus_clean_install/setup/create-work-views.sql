@@ -11,6 +11,7 @@ DROP TRIGGER IF EXISTS office_issue_archive_push_update ON office_issue_archive;
 DROP TRIGGER IF EXISTS production_work_push_update ON production_work;
 DROP TRIGGER IF EXISTS screen_printing_work_push_update ON screen_printing_work;
 DROP TRIGGER IF EXISTS screen_printing_work_cost_push_update ON screen_printing_work;
+DROP TRIGGER IF EXISTS zz_symbolika_sync_screen_application_cost ON orders_items;
 DROP TRIGGER IF EXISTS contractor_work_push_update ON contractor_work;
 DROP TRIGGER IF EXISTS symbolika_sync_office_issue ON orders;
 DROP TRIGGER IF EXISTS symbolika_sync_work_order ON orders;
@@ -1762,6 +1763,7 @@ ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS contractor_1_cost nume
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS application_contractor_slot smallint;
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS application_cost_per_unit numeric(14,2);
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS application_cost_total numeric(14,2);
+ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS screen_printing_cost_per_unit numeric(14,2);
 ALTER TABLE contractor_work ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE contractor_work ADD COLUMN IF NOT EXISTS production_comment text;
 
@@ -3178,17 +3180,8 @@ BEGIN
       WHEN c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%' THEN 2
       ELSE 1
     END,
-    CASE
-      WHEN c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%' THEN oi.contractor_2_cost
-      ELSE oi.contractor_1_cost
-    END,
-    COALESCE(oi.quantity, 0) * COALESCE(
-      CASE
-        WHEN c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%' THEN oi.contractor_2_cost
-        ELSE oi.contractor_1_cost
-      END,
-      0
-    ),
+    oi.screen_printing_cost_per_unit,
+    COALESCE(oi.quantity, 0) * COALESCE(oi.screen_printing_cost_per_unit, 0),
     oi.technical_task_text, oi.production_comment, oi.url, oi.item_status, oi.office_status, oi.production_status, o.date, oi.deadline
   FROM orders_items oi
   JOIN orders o ON o.id = oi."order"
@@ -3326,9 +3319,33 @@ BEGIN
 END;
 $$;
 
--- The screen-printing monthly summary edits the same executor cost that is
--- used by the order item card and costing screens. Updating the work row
--- therefore remains bidirectional instead of creating a second ledger.
+-- Internal workshop contractor costs are intentionally zero. Store the
+-- operational screen-printing cost separately so normalization cannot clear it.
+CREATE OR REPLACE FUNCTION symbolika_refresh_screen_application_cost(item_id integer)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  UPDATE screen_printing_work spw
+     SET application_cost_per_unit = oi.screen_printing_cost_per_unit,
+         application_cost_total = COALESCE(oi.quantity, 0)
+           * COALESCE(oi.screen_printing_cost_per_unit, 0)
+    FROM orders_items oi
+   WHERE spw.id = oi.id
+     AND oi.id = item_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION symbolika_refresh_screen_application_cost_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  PERFORM symbolika_refresh_screen_application_cost(NEW.id);
+  RETURN NEW;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION push_screen_application_cost_update()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -3338,21 +3355,21 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF COALESCE(NEW.application_contractor_slot, 1) = 2 THEN
-    UPDATE orders_items
-       SET contractor_2_cost = NEW.application_cost_per_unit
-     WHERE id = NEW.id
-       AND contractor_2_cost IS DISTINCT FROM NEW.application_cost_per_unit;
-  ELSE
-    UPDATE orders_items
-       SET contractor_1_cost = NEW.application_cost_per_unit
-     WHERE id = NEW.id
-       AND contractor_1_cost IS DISTINCT FROM NEW.application_cost_per_unit;
-  END IF;
+  UPDATE orders_items
+     SET screen_printing_cost_per_unit = NEW.application_cost_per_unit
+   WHERE id = NEW.id
+     AND screen_printing_cost_per_unit IS DISTINCT FROM NEW.application_cost_per_unit;
 
   RETURN NEW;
 END;
 $$;
+
+CREATE TRIGGER zz_symbolika_sync_screen_application_cost
+AFTER INSERT OR UPDATE OF quantity, contractor_1, contractor_2,
+  contractor_1_cost, contractor_2_cost, screen_printing_cost_per_unit
+ON orders_items
+FOR EACH ROW
+EXECUTE FUNCTION symbolika_refresh_screen_application_cost_trigger();
 
 CREATE OR REPLACE FUNCTION sync_order_payment_access(payment_id integer)
 RETURNS void
@@ -4098,17 +4115,8 @@ SELECT
     WHEN c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%' THEN 2
     ELSE 1
   END,
-  CASE
-    WHEN c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%' THEN oi.contractor_2_cost
-    ELSE oi.contractor_1_cost
-  END,
-  COALESCE(oi.quantity, 0) * COALESCE(
-    CASE
-      WHEN c2.name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%' THEN oi.contractor_2_cost
-      ELSE oi.contractor_1_cost
-    END,
-    0
-  ),
+  oi.screen_printing_cost_per_unit,
+  COALESCE(oi.quantity, 0) * COALESCE(oi.screen_printing_cost_per_unit, 0),
   oi.technical_task_text, oi.production_comment, oi.url, oi.item_status, oi.office_status, oi.production_status, o.date, oi.deadline
 FROM orders_items oi
 JOIN orders o ON o.id = oi."order"
@@ -6584,6 +6592,7 @@ CREATE TABLE IF NOT EXISTS my_orders_in_work (
   order_status integer,
   order_status_name character varying(255),
   office_status character varying(255),
+  delivery_status character varying(32),
   shipping_method character varying(255),
   shipping_method_name character varying(255),
   shipping_comment text,
@@ -6598,6 +6607,9 @@ CREATE TABLE IF NOT EXISTS my_orders_unpaid (LIKE my_orders_in_work INCLUDING AL
 ALTER TABLE my_orders_in_work ADD COLUMN IF NOT EXISTS shipping_comment text;
 ALTER TABLE my_orders_completed ADD COLUMN IF NOT EXISTS shipping_comment text;
 ALTER TABLE my_orders_unpaid ADD COLUMN IF NOT EXISTS shipping_comment text;
+ALTER TABLE my_orders_in_work ADD COLUMN IF NOT EXISTS delivery_status character varying(32);
+ALTER TABLE my_orders_completed ADD COLUMN IF NOT EXISTS delivery_status character varying(32);
+ALTER TABLE my_orders_unpaid ADD COLUMN IF NOT EXISTS delivery_status character varying(32);
 
 CREATE TABLE IF NOT EXISTS my_orders_in_work_items (
   id integer PRIMARY KEY,
@@ -7253,7 +7265,7 @@ BEGIN
   IF is_completed THEN
     INSERT INTO my_orders_completed (
       id, order_number, date, deadline, customer, customer_company, customer_display, manager_employee, manager_name,
-      order_status, order_status_name, office_status, shipping_method, shipping_method_name, shipping_comment,
+      order_status, order_status_name, office_status, delivery_status, shipping_method, shipping_method_name, shipping_comment,
       order_sum, paid_amount, payment_due, completion_percent, completion_missing_count, completion_missing,
       work_completion_percent, work_completion_missing_count, work_completion_missing
     )
@@ -7261,7 +7273,7 @@ BEGIN
       order_row.id, order_row.order_number, order_row.date, order_row.deadline,
       order_row.customer, order_row.customer_company,
       order_row.customer_display, order_row.manager_employee, order_row.manager_name,
-      order_row.order_status, order_row.order_status_name, order_row.office_status,
+      order_row.order_status, order_row.order_status_name, order_row.office_status, order_row.delivery_status,
       order_row.shipping_method, order_row.shipping_method_name, order_row.shipping_comment,
       order_row.order_sum, order_row.paid_amount, order_row.payment_due,
       order_row.completion_percent, order_row.completion_missing_count, order_row.completion_missing,
@@ -7270,7 +7282,7 @@ BEGIN
   ELSE
     INSERT INTO my_orders_in_work (
       id, order_number, date, deadline, customer, customer_company, customer_display, manager_employee, manager_name,
-      order_status, order_status_name, office_status, shipping_method, shipping_method_name, shipping_comment,
+      order_status, order_status_name, office_status, delivery_status, shipping_method, shipping_method_name, shipping_comment,
       order_sum, paid_amount, payment_due, completion_percent, completion_missing_count, completion_missing,
       work_completion_percent, work_completion_missing_count, work_completion_missing
     )
@@ -7278,7 +7290,7 @@ BEGIN
       order_row.id, order_row.order_number, order_row.date, order_row.deadline,
       order_row.customer, order_row.customer_company,
       order_row.customer_display, order_row.manager_employee, order_row.manager_name,
-      order_row.order_status, order_row.order_status_name, order_row.office_status,
+      order_row.order_status, order_row.order_status_name, order_row.office_status, order_row.delivery_status,
       order_row.shipping_method, order_row.shipping_method_name, order_row.shipping_comment,
       order_row.order_sum, order_row.paid_amount, order_row.payment_due,
       order_row.completion_percent, order_row.completion_missing_count, order_row.completion_missing,
@@ -7289,7 +7301,7 @@ BEGIN
   IF is_unpaid THEN
     INSERT INTO my_orders_unpaid (
       id, order_number, date, deadline, customer, customer_company, customer_display, manager_employee, manager_name,
-      order_status, order_status_name, office_status, shipping_method, shipping_method_name, shipping_comment,
+      order_status, order_status_name, office_status, delivery_status, shipping_method, shipping_method_name, shipping_comment,
       order_sum, paid_amount, payment_due, completion_percent, completion_missing_count, completion_missing,
       work_completion_percent, work_completion_missing_count, work_completion_missing
     )
@@ -7297,7 +7309,7 @@ BEGIN
       order_row.id, order_row.order_number, order_row.date, order_row.deadline,
       order_row.customer, order_row.customer_company,
       order_row.customer_display, order_row.manager_employee, order_row.manager_name,
-      order_row.order_status, order_row.order_status_name, order_row.office_status,
+      order_row.order_status, order_row.order_status_name, order_row.office_status, order_row.delivery_status,
       order_row.shipping_method, order_row.shipping_method_name, order_row.shipping_comment,
       order_row.order_sum, order_row.paid_amount, order_row.payment_due,
       order_row.completion_percent, order_row.completion_missing_count, order_row.completion_missing,
@@ -8102,6 +8114,7 @@ my_fields(field_name, interface_name, sort_order, width_value, label, hidden_val
   ('order_status', 'select-dropdown', 9, 'half', U&'\0421\0442\0430\0442\0443\0441 \0437\0430\043a\0430\0437\0430', false, NULL, 'labels', NULL::json),
   ('order_status_name', 'input', 10, 'half', U&'\0421\0442\0430\0442\0443\0441 \0437\0430\043a\0430\0437\0430', true, NULL, NULL, NULL::json),
   ('office_status', 'select-dropdown', 11, 'half', U&'\0421\0442\0430\0442\0443\0441 \043e\0444\0438\0441\0430', false, NULL, 'labels', NULL::json),
+  ('delivery_status', 'select-dropdown', 12, 'half', U&'\0421\0442\0430\0442\0443\0441 \0434\043e\0441\0442\0430\0432\043a\0438', false, NULL, 'labels', NULL::json),
   ('shipping_method', 'select-dropdown', 12, 'half', U&'\0421\043f\043e\0441\043e\0431 \043e\0442\0433\0440\0443\0437\043a\0438', true, NULL, NULL, NULL::json),
   ('shipping_method_name', 'input', 13, 'half', U&'\0421\043f\043e\0441\043e\0431 \043e\0442\0433\0440\0443\0437\043a\0438', false, NULL, NULL, NULL::json),
   ('order_items', 'list-o2m', 14, 'full', U&'\041f\043e\0437\0438\0446\0438\0438', false, 'o2m', NULL, NULL::json),
@@ -15960,9 +15973,20 @@ WHERE NOT EXISTS (
   SELECT 1 FROM directus_fields WHERE collection = 'orders_overview' AND field = 'delivery_status'
 );
 
+UPDATE directus_fields
+   SET interface = 'select-dropdown',
+       options = '{"choices":[{"text":"Ожидает доставки","value":"pending"},{"text":"В доставке","value":"in_delivery"},{"text":"Доставлен","value":"delivered"}]}'::json,
+       display = 'labels',
+       display_options = '{"choices":[{"text":"Ожидает доставки","value":"pending","foreground":"#ef9b3f","background":"#ef9b3f22"},{"text":"В доставке","value":"in_delivery","foreground":"#5b9cff","background":"#5b9cff22"},{"text":"Доставлен","value":"delivered","foreground":"#35c98b","background":"#35c98b22"}]}'::json,
+       readonly = true,
+       hidden = false,
+       width = 'half'
+ WHERE collection IN ('my_orders_in_work', 'my_orders_completed', 'my_orders_unpaid')
+   AND field = 'delivery_status';
+
 UPDATE directus_permissions
    SET fields = fields || ',delivery_status'
- WHERE collection IN ('orders', 'orders_overview')
+ WHERE collection IN ('orders', 'orders_overview', 'my_orders_in_work', 'my_orders_completed', 'my_orders_unpaid')
    AND action IN ('create', 'read', 'update')
    AND fields IS NOT NULL
    AND fields <> '*'
