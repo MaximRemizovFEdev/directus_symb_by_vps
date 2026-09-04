@@ -1,5 +1,15 @@
 # Текущее состояние проекта для нового чата
 
+## Исправление запуска заказа менеджером — 4 сентября 2026
+
+- Функциональный коммит: `b55c9b9` (`Fix manager order launch permissions`).
+- В права менеджера на собственные `orders_items` добавлено поле `screen_printing_cost_per_unit` для `create/read/update`; существующий построчный фильтр по текущему менеджеру не расширен.
+- Миграция: `setup/migrations/20260904_manager_screen_printing_cost_permission.sql`.
+- Исправление применено на VPS и записано в `symbolika_schema_migrations` с checksum `0171ba72db0507fc383a2e52925260f793b894f47b5ea7b4a96169294548f3fe`.
+- Заказ `SO-00066` (id `75`, позиции `164` и `165`) после запуска находится в статусе «В работе»; ошибка возникала на повторной загрузке уже после успешных PATCH позиций.
+- Бэкапы перед релизом: `/opt/symbolika/backups/symbolika-before-manager-launch-permission-20260904-114300.dump` и `/opt/symbolika/backups/uploads-before-manager-launch-permission-20260904-114300.tar.gz`.
+- `update-server.sh` в этом запуске остановился на установке зависимостей после остановки Directus. Поскольку релиз был SQL-only, миграция применена точечно, checksum внесён в журнал, Directus пересоздан и публичный health подтверждён.
+
 Обновлено: 3 сентября 2026 года.
 
 Это короткая оперативная передача контекста. Перед работой также обязательно прочитать `CODEX_WORKFLOW.md`; за подробной бизнес-логикой обращаться к `PROJECT_CONTEXT.md`. Конструктор ТЗ не трогать без прямого запроса пользователя.
