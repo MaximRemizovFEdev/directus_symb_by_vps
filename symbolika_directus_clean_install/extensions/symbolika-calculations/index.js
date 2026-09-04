@@ -2012,7 +2012,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       .whereIn('id', applicableItemIds)
       .update({
         office_status: officeStatus,
-        shipping_method: officeStatus === NOT_IN_OFFICE ? null : OFFICE_PICKUP,
+        ...(officeStatus === NOT_IN_OFFICE ? {} : { shipping_method: OFFICE_PICKUP }),
         ...(readyProductionStatus ? { production_status: readyProductionStatus } : {}),
         ...(officeStatus === ISSUED ? { item_status: 'delivered' } : {}),
         ...(officeStatus === IN_OFFICE ? { item_status: 'ready' } : {}),

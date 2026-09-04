@@ -2602,11 +2602,24 @@ BEGIN
 END;
 $$;
 
+CREATE TABLE IF NOT EXISTS symbolika_office_item_status_snapshots (
+  item_id integer PRIMARY KEY REFERENCES orders_items(id) ON DELETE CASCADE,
+  order_id integer NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  item_status character varying,
+  production_status integer,
+  shipping_method character varying,
+  captured_at timestamp with time zone NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS symbolika_office_item_status_snapshots_order_idx
+  ON symbolika_office_item_status_snapshots(order_id);
+
 CREATE OR REPLACE FUNCTION symbolika_apply_item_status_from_production_trigger()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
+  office_snapshot record;
   next_item_status character varying;
   previous_item_status character varying;
   item_transition_allowed boolean;
@@ -2619,6 +2632,38 @@ BEGIN
   IF TG_OP = 'INSERT' THEN
     NEW.item_status := 'new';
     NEW.office_status := 'not_in_office';
+  END IF;
+
+  -- Entering the office is a reversible presentation state. Preserve the
+  -- workflow fields before forcing the item to Ready/Delivered, then restore
+  -- them exactly when the item is returned to Not in office.
+  IF TG_OP = 'UPDATE'
+     AND NEW.office_status IS DISTINCT FROM OLD.office_status THEN
+    IF NEW.office_status IN ('in_office', 'issued')
+       AND COALESCE(OLD.office_status, 'not_in_office') = 'not_in_office' THEN
+      INSERT INTO symbolika_office_item_status_snapshots (
+        item_id, order_id, item_status, production_status, shipping_method
+      ) VALUES (
+        OLD.id, OLD."order", OLD.item_status, OLD.production_status, OLD.shipping_method
+      )
+      ON CONFLICT (item_id) DO NOTHING;
+    ELSIF NEW.office_status = 'not_in_office'
+          AND OLD.office_status IN ('in_office', 'issued') THEN
+      SELECT * INTO office_snapshot
+      FROM symbolika_office_item_status_snapshots
+      WHERE item_id = OLD.id;
+
+      IF FOUND THEN
+        NEW.item_status := office_snapshot.item_status;
+        NEW.production_status := office_snapshot.production_status;
+        NEW.shipping_method := office_snapshot.shipping_method;
+
+        DELETE FROM symbolika_office_item_status_snapshots
+        WHERE item_id = OLD.id;
+
+        RETURN NEW;
+      END IF;
+    END IF;
   END IF;
 
   IF TG_OP = 'UPDATE'
