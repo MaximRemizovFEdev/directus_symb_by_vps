@@ -1,5 +1,13 @@
 # Текущее состояние проекта для нового чата
 
+## Исправление отображаемой суммы нового заказа — 4 сентября 2026
+
+- Функциональный коммит: `4e8143d` (`Refresh displayed order totals from items`).
+- После создания заказа и после загрузки полного списка его позиций клиентская строка немедленно пересчитывает `order_sum` и `payment_due`; отменённые позиции исключаются.
+- В `SO-00069` (id `78`) база, `orders_overview`, `my_orders_in_work` и `my_orders_unpaid` подтверждают сумму и остаток `1000.00` по позиции «Разработка дизайна».
+- Бэкапы перед релизом: `/opt/symbolika/backups/symbolika-before-order-total-ui-20260904-120000.dump` и `/opt/symbolika/backups/uploads-before-order-total-ui-20260904-120000.tar.gz`.
+- VPS обновлён, Directus пересоздан, публичный health отвечает `ok`.
+
 ## Исправление запуска заказа менеджером — 4 сентября 2026
 
 - Функциональный коммит: `b55c9b9` (`Fix manager order launch permissions`).
