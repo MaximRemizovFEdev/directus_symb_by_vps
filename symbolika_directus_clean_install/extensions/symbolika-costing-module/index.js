@@ -11858,18 +11858,23 @@ export const CostingModule = {
         for (let offset = 0; offset < targets.length; offset += 12) {
           const batch = targets.slice(offset, offset + 12);
           await Promise.all(batch.map(async ({ row, itemId, patch }) => {
-            const requestPath = isScreenPrinting
-              ? `/items/screen_printing_work/${itemId}`
-              : `/items/orders_items/${itemId}`;
+            const requestPath = `/items/orders_items/${itemId}`;
             const requestPatch = isScreenPrinting
-              ? { application_cost_per_unit: normalizedCost }
+              ? { screen_printing_cost_per_unit: normalizedCost }
               : patch;
             await this.request(requestPath, {
               method: 'PATCH',
               body: JSON.stringify(requestPatch),
             });
-            Object.assign(row, patch);
-            this.updateOrderItemCaches(itemId, patch);
+            const cachePatch = isScreenPrinting
+              ? {
+                ...patch,
+                screen_printing_cost_per_unit: normalizedCost,
+                application_cost_per_unit: normalizedCost,
+              }
+              : patch;
+            Object.assign(row, cachePatch);
+            this.updateOrderItemCaches(itemId, cachePatch);
           }));
         }
 
@@ -11922,7 +11927,18 @@ export const CostingModule = {
     },
 
     async saveScreenApplicationCost(row, rawValue) {
-      const key = `screen_printing_work:${row.id}:application_cost_per_unit`;
+      const itemId = this.entityId(row?.order_item) || row?.id;
+      if (!itemId) return false;
+
+      // The screen-printing work table intentionally contains only positions
+      // that have entered the production workflow. Costing, however, is often
+      // filled before launch. In the costing table and item card write to the
+      // durable order-item source; reserve the work-table endpoint for the
+      // screen-printing cost summary where its role has scoped write access.
+      const useWorkView = this.activeTab === 'screen' && this.screenViewMode === 'costs';
+      const key = useWorkView
+        ? `screen_printing_work:${row.id}:application_cost_per_unit`
+        : `orders_items:${itemId}:screen_printing_cost_per_unit`;
       const source = String(rawValue ?? '').trim().replace(/\s/g, '').replace(',', '.');
       const value = source === '' ? null : Number(source);
       if (value !== null && (!Number.isFinite(value) || value < 0)) {
@@ -11933,9 +11949,13 @@ export const CostingModule = {
       this.saving = { ...this.saving, [key]: true };
       this.error = '';
       try {
-        await this.request(`/items/screen_printing_work/${row.id}`, {
+        await this.request(useWorkView
+          ? `/items/screen_printing_work/${row.id}`
+          : `/items/orders_items/${itemId}`, {
           method: 'PATCH',
-          body: JSON.stringify({ application_cost_per_unit: value }),
+          body: JSON.stringify(useWorkView
+            ? { application_cost_per_unit: value }
+            : { screen_printing_cost_per_unit: value }),
         });
         const total = Math.round(this.parseMoney(row.quantity) * this.parseMoney(value) * 100) / 100;
         const costField = Number(row.application_contractor_slot) === 2
@@ -11947,7 +11967,10 @@ export const CostingModule = {
           screen_printing_cost_per_unit: value,
           [costField]: value,
         });
-        this.updateOrderItemCaches(row.id, { [costField]: value });
+        this.updateOrderItemCaches(itemId, {
+          screen_printing_cost_per_unit: value,
+          [costField]: value,
+        });
         this.scheduleBackgroundAreaRefresh();
         return true;
       } catch (error) {
