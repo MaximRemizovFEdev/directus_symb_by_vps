@@ -14,10 +14,21 @@ logs/
 
 symbolika_directus_clean_install/database/
 symbolika_directus_clean_install/uploads/
+symbolika_directus_clean_install/extensions/**/node_modules/
+symbolika_directus_clean_install/qa/playwright/node_modules/
+symbolika_directus_clean_install/qa/playwright/qa-results/
 
 database_before_pg_resetwal/
 db_backups/
+backups/
+exports/
+
+tmp-*
+*.tmp
 
 *.sql
-!full_directus_backup.sql
+!symbolika_directus_clean_install/setup/create-work-views.sql
+!symbolika_directus_clean_install/setup/create-tz-constructor.sql
+!symbolika_directus_clean_install/setup/migrations/
+!symbolika_directus_clean_install/setup/migrations/*.sql
 !.gitignore

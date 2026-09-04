@@ -1,0 +1,23 @@
+{
+  "name": "symbolika-playwright-qa",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node run.js",
+    "test:responsive": "node responsive.js",
+    "test:themes": "node themes.js",
+    "test:textile-tz": "node textile-tz.js",
+    "test:opening-balances": "node opening-balances.js",
+    "test:pilot-safety": "node pilot-safety.js",
+    "test:headed": "node run.js --headed",
+    "test:contractor-website": "node contractor-website.js"
+    ,"test:final-regression": "node final-regression.js",
+    "test:notifications": "node notifications.js"
+    ,"test:error-toast": "node error-toast.js"
+    ,"test:layout-upload-progress": "node layout-upload-progress.js"
+    ,"test:layout-external-link": "node layout-external-link.js"
+  },
+  "dependencies": {
+    "playwright": "1.61.1"
+  }
+}

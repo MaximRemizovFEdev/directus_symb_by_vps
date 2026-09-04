@@ -1,0 +1,1135 @@
+:root {
+  --symbolika-form-column-min: 170px;
+  --symbolika-form-column-gap: 24px;
+  --symbolika-form-row-gap: 26px;
+  --symbolika-section-bg: #151a21;
+  --symbolika-section-border: #2a313b;
+  --symbolika-section-text: #f3f6fb;
+  --symbolika-readonly-bg: #161b22;
+  --symbolika-readonly-text: #8f98a6;
+  --symbolika-readonly-border: #252c36;
+  --symbolika-editable-text: #f3f6fb;
+  --symbolika-date-accent: #ff8a3d;
+}
+
+html[data-symbolika-theme] body,
+html[data-symbolika-theme] #app,
+html[data-symbolika-theme] .v-application {
+  --theme--primary: #ff8736;
+  --symbolika-date-accent: #ff8736;
+  --symbolika-section-bg: var(--symbolika-panel);
+  --symbolika-section-border: var(--symbolika-line-strong);
+  --symbolika-section-text: var(--symbolika-text);
+  --symbolika-readonly-bg: var(--symbolika-bg-soft);
+  --symbolika-readonly-text: var(--symbolika-muted);
+  --symbolika-readonly-border: var(--symbolika-line);
+  --symbolika-editable-text: var(--symbolika-text);
+  background: var(--symbolika-bg) !important;
+  color: var(--symbolika-text) !important;
+}
+
+html[data-symbolika-theme="graphite"] body,
+html[data-symbolika-theme="graphite"] #app,
+html[data-symbolika-theme="graphite"] .v-application {
+  --symbolika-bg: #0b0f14;
+  --symbolika-bg-soft: #10151b;
+  --symbolika-panel: #171d24;
+  --symbolika-panel-strong: #20262e;
+  --symbolika-panel-hover: #1c232b;
+  --symbolika-line: rgb(255 255 255 / 9%);
+  --symbolika-line-strong: rgb(255 255 255 / 14%);
+  --symbolika-text: #eef3fb;
+  --symbolika-text-soft: #c9d1dc;
+  --symbolika-muted: #838b99;
+  --symbolika-orange: #ff8a3d;
+  --symbolika-orange-2: #ffb36b;
+  --theme--background: #0b0f14;
+  --theme--background-normal: #10151b;
+  --theme--background-subdued: #171d24;
+  --theme--background-accent: #20262e;
+  --theme--foreground: #eef3fb;
+  --theme--foreground-subdued: #929baa;
+  --theme--border-color: #303844;
+  --theme--border-color-subdued: #252c35;
+}
+
+html[data-symbolika-theme="espresso"] body,
+html[data-symbolika-theme="espresso"] #app,
+html[data-symbolika-theme="espresso"] .v-application {
+  --symbolika-bg: #15110f;
+  --symbolika-bg-soft: #1b1613;
+  --symbolika-panel: #241d19;
+  --symbolika-panel-strong: #30251f;
+  --symbolika-panel-hover: #2a211c;
+  --symbolika-line: rgb(255 231 214 / 10%);
+  --symbolika-line-strong: rgb(255 231 214 / 17%);
+  --symbolika-text: #f8eee7;
+  --symbolika-text-soft: #dbc9bd;
+  --symbolika-muted: #a28f83;
+  --symbolika-orange: #f59e42;
+  --symbolika-orange-2: #ffc477;
+  --theme--primary: #f59e42;
+  --theme--background: #15110f;
+  --theme--background-normal: #1b1613;
+  --theme--background-subdued: #241d19;
+  --theme--background-accent: #30251f;
+  --theme--foreground: #f8eee7;
+  --theme--foreground-subdued: #ac988b;
+  --theme--border-color: #47372e;
+  --theme--border-color-subdued: #342921;
+}
+
+html[data-symbolika-theme="pearl"] body,
+html[data-symbolika-theme="pearl"] #app,
+html[data-symbolika-theme="pearl"] .v-application {
+  --symbolika-bg: #e9e7e3;
+  --symbolika-bg-soft: #f5f3ef;
+  --symbolika-panel: #ffffff;
+  --symbolika-panel-strong: #d9d4cd;
+  --symbolika-panel-hover: #eeeae4;
+  --symbolika-line: rgb(31 35 39 / 20%);
+  --symbolika-line-strong: rgb(31 35 39 / 36%);
+  --symbolika-text: #16191d;
+  --symbolika-text-soft: #30353a;
+  --symbolika-muted: #50575e;
+  --symbolika-orange: #d85f13;
+  --symbolika-orange-2: #a94308;
+  --theme--primary: #d85f13;
+  --theme--background: #e9e7e3;
+  --theme--background-normal: #ffffff;
+  --theme--background-subdued: #f5f3ef;
+  --theme--background-accent: #d9d4cd;
+  --theme--foreground: #16191d;
+  --theme--foreground-subdued: #50575e;
+  --theme--border-color: #aaa39a;
+  --theme--border-color-subdued: #d0cbc4;
+}
+
+html[data-symbolika-theme="frost"] body,
+html[data-symbolika-theme="frost"] #app,
+html[data-symbolika-theme="frost"] .v-application {
+  --symbolika-bg: #e2e8ed;
+  --symbolika-bg-soft: #f1f4f6;
+  --symbolika-panel: #ffffff;
+  --symbolika-panel-strong: #d4dee5;
+  --symbolika-panel-hover: #e7edf1;
+  --symbolika-line: rgb(17 36 49 / 21%);
+  --symbolika-line-strong: rgb(17 36 49 / 38%);
+  --symbolika-text: #0d1820;
+  --symbolika-text-soft: #263944;
+  --symbolika-muted: #435560;
+  --symbolika-orange: #d45b11;
+  --symbolika-orange-2: #9f3f08;
+  --theme--primary: #d45b11;
+  --theme--background: #e2e8ed;
+  --theme--background-normal: #ffffff;
+  --theme--background-subdued: #f1f4f6;
+  --theme--background-accent: #d4dee5;
+  --theme--foreground: #0d1820;
+  --theme--foreground-subdued: #435560;
+  --theme--border-color: #91a3ae;
+  --theme--border-color-subdued: #c4d0d7;
+}
+
+html[data-symbolika-theme] :is(.module-bar, .navigation, .private-view, .module-page, .main-container, .content-wrapper) {
+  background-color: var(--symbolika-bg) !important;
+  color: var(--symbolika-text) !important;
+}
+
+html[data-symbolika-theme] :is(.navigation, .private-view-sidebar, .content-sidebar, .sidebar) {
+  border-color: var(--symbolika-line) !important;
+  background-color: var(--symbolika-bg-soft) !important;
+}
+
+html[data-symbolika-theme] :is(input, textarea, select, .v-input, .v-field, .v-card, .v-menu-content, .v-overlay__content) {
+  color: var(--symbolika-text);
+}
+
+html[data-symbolika-theme] body:has(.symbolika-costing-page),
+html[data-symbolika-theme] .symbolika-costing-page {
+  --symbolika-red: #e85770;
+  --symbolika-green: #1e9b78;
+  --symbolika-blue: #337bc2;
+  --symbolika-purple: #8a5db2;
+  --symbolika-yellow: #b57b11;
+  background: var(--symbolika-bg) !important;
+  color: var(--symbolika-text) !important;
+}
+
+html[data-symbolika-theme="graphite"] body:has(.symbolika-costing-page),
+html[data-symbolika-theme="graphite"] .symbolika-costing-page,
+html[data-symbolika-theme="espresso"] body:has(.symbolika-costing-page),
+html[data-symbolika-theme="espresso"] .symbolika-costing-page {
+  --symbolika-red: #ff6b82;
+  --symbolika-green: #55d6aa;
+  --symbolika-blue: #7ab3ff;
+  --symbolika-purple: #c79bff;
+  --symbolika-yellow: #ffd166;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.symbolika-costing-search, .symbolika-costing-input, .symbolika-costing-select, .symbolika-costing-table-select, .symbolika-costing-table-date, .symbolika-costing-comment) {
+  border-color: var(--symbolika-line-strong) !important;
+  background: var(--symbolika-panel) !important;
+  color: var(--symbolika-text) !important;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 72%) !important;
+  color-scheme: light !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.symbolika-costing-search, .symbolika-costing-input, .symbolika-costing-select, .symbolika-costing-table-select) option {
+  background: var(--symbolika-panel) !important;
+  color: var(--symbolika-text) !important;
+}
+
+input[type="date"],
+input[type="datetime-local"],
+input[type="month"],
+input[type="week"],
+.v-date-picker,
+[class*="date-picker"] {
+  accent-color: var(--symbolika-date-accent) !important;
+}
+
+input[type="date"]:focus,
+input[type="datetime-local"]:focus,
+input[type="month"]:focus,
+input[type="week"]:focus {
+  border-color: var(--symbolika-date-accent) !important;
+  box-shadow: 0 0 0 2px rgb(255 138 61 / 22%) !important;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="month"]::-webkit-calendar-picker-indicator,
+input[type="week"]::-webkit-calendar-picker-indicator {
+  filter: sepia(1) saturate(5) hue-rotate(335deg) brightness(1.18);
+  cursor: pointer;
+}
+
+.v-date-picker,
+[class*="date-picker"] {
+  --v-theme-primary: 255, 138, 61;
+  --theme--primary: var(--symbolika-date-accent);
+}
+
+:is(.v-date-picker, [class*="date-picker"])
+  :is(.v-date-picker-month__day--selected, .is-selected, .selected, [aria-selected="true"])
+  :is(button, .v-btn),
+:is(.v-date-picker, [class*="date-picker"])
+  :is(button, .v-btn):is(.v-btn--active, .is-selected, .selected)[aria-label] {
+  border-color: var(--symbolika-date-accent) !important;
+  background: var(--symbolika-date-accent) !important;
+  color: #16191f !important;
+}
+
+:is(.v-date-picker, [class*="date-picker"])
+  :is(.v-date-picker-month__day--today, .is-today, .today, [aria-current="date"])
+  :is(button, .v-btn),
+:is(.v-date-picker, [class*="date-picker"])
+  :is(button, .v-btn):is(.v-date-picker-month__day--today, .is-today, .today, [aria-current="date"]) {
+  outline: 2px solid var(--symbolika-date-accent) !important;
+  outline-offset: -2px;
+  border-radius: 50% !important;
+}
+
+.module-bar a[href*="/admin/insights"],
+.module-bar a[href*="/admin/docs"],
+.module-bar a[href*="/admin/documentation"],
+.module-bar a[href*="/admin/help"],
+.module-bar a[href*="/admin/users"],
+.module-bar a[href*="/admin/user-directory"],
+.module-bar :is(a, button):has([data-icon="help"]),
+.module-bar :is(a, button):has([data-icon="help_outline"]),
+.module-bar :is(a, button):has([data-icon="question_mark"]),
+.module-bar :is(a, button):has([data-icon="contact_support"]),
+.module-bar :is(a, button):has([data-icon="live_help"]),
+[data-symbolika-system-navigation="hidden"] {
+  display: none !important;
+}
+
+[data-symbolika-role-module="hidden"],
+[data-symbolika-standard-content-navigation="hidden"],
+[data-symbolika-service-navigation="hidden"] {
+  display: none !important;
+}
+
+/* Independent project branding: the protected Directus project asset may be
+   unavailable before authentication, while this public brand image is stable. */
+.module-bar-logo {
+  display: grid !important;
+  place-items: center;
+  background: #171c22 !important;
+}
+
+.module-bar-logo .custom-logo {
+  display: none !important;
+}
+
+.module-bar-logo::before {
+  content: "";
+  display: block;
+  width: 30px;
+  height: 32px;
+  background-image: url("/symbolika-mail/brand-logo.png");
+  background-repeat: no-repeat;
+  background-position: 50% top;
+  background-size: 107px auto;
+}
+
+@media (min-width: 1180px) {
+  .content-split .group-raw.full > .v-form.grid.with-fill,
+  .content-split .sp-start > .v-form.grid.with-fill:not(:has(.v-item-group.group-accordion, .v-item-group.group-detail)) {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    column-gap: var(--symbolika-form-column-gap) !important;
+    row-gap: var(--symbolika-form-row-gap) !important;
+    align-items: start;
+  }
+
+  .content-split .v-item-group.group-accordion.full,
+  .content-split .v-item-group.group-detail.full,
+  .content-split .v-detail.group-detail.full,
+  .content-split .group-raw.full,
+  .content-split .field.full,
+  .content-split .field.fill,
+  .content-split .v-divider.full {
+    grid-column: 1 / -1 !important;
+    inline-size: auto !important;
+    width: auto !important;
+  }
+
+  .content-split .v-form.grid.fields {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    column-gap: var(--symbolika-form-column-gap) !important;
+    row-gap: var(--symbolika-form-row-gap) !important;
+  }
+
+  .content-split .field.half,
+  .content-split .field.half-right {
+    grid-column: auto !important;
+    inline-size: auto !important;
+    width: auto !important;
+  }
+
+  .content-split [data-collection="office_issue"][data-field="order_link"] {
+    grid-column: -2 / -1 !important;
+  }
+
+  .content-split [data-collection="office_issue"][data-field="add_payment"] {
+    grid-column: 1 / 2 !important;
+    grid-row: 3 !important;
+  }
+
+  .content-split [data-collection="office_issue"][data-field="payment_type"] {
+    grid-column: 2 / 3 !important;
+    grid-row: 3 !important;
+  }
+
+  .content-split [data-collection="office_issue"][data-field="order_link"] {
+    grid-row: 3 !important;
+  }
+
+  .content-split [data-collection="orders"][data-field="payment_on_receipt"] {
+    grid-column: 1 / 2 !important;
+  }
+
+  .content-split [data-collection="orders"][data-field="payment_type"] {
+    grid-column: 2 / 3 !important;
+  }
+
+  .content-split [data-collection="orders"][data-field="payments"] {
+    grid-column: 3 / -1 !important;
+    inline-size: auto !important;
+    width: auto !important;
+  }
+
+  .content-split [data-collection="orders"][data-field="shipping_comment"] {
+    grid-column: 3 / 5 !important;
+    grid-column-start: 3 !important;
+    grid-column-end: 5 !important;
+    inline-size: auto !important;
+    width: auto !important;
+  }
+
+  .content-split .group-raw.full > .v-form.grid.with-fill > .field.half-right[data-collection="orders"][data-field="shipping_comment"] {
+    grid-column: 3 / 5 !important;
+    grid-column-start: 3 !important;
+    grid-column-end: 5 !important;
+    inline-size: auto !important;
+    width: auto !important;
+  }
+
+  .content-split [data-collection="orders"][data-field="comment"] {
+    grid-column: 3 / 5 !important;
+    grid-column-start: 3 !important;
+    grid-column-end: 5 !important;
+    inline-size: auto !important;
+    width: auto !important;
+  }
+
+  .content-split .v-detail.group-detail:has([data-collection="orders"][data-field="payments"])
+    > .content
+    > .v-form.grid.with-fill {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}
+
+/* High-contrast, overflow-safe foundation for both light themes. */
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) {
+  --symbolika-light-shadow: 0 12px 32px rgb(31 42 50 / 12%);
+  --symbolika-light-shadow-strong: 0 22px 58px rgb(31 42 50 / 20%);
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.private-view, .module-page, .main-container, .content-wrapper, .content, .page-container) {
+  min-inline-size: 0 !important;
+  max-inline-size: 100% !important;
+  color: var(--symbolika-text) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.module-bar, .navigation, .private-view-sidebar, .content-sidebar, .sidebar, .module-nav, .module-nav-content) {
+  border-color: var(--symbolika-line-strong) !important;
+  background-color: var(--symbolika-bg-soft) !important;
+  color: var(--symbolika-text) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.v-card, .v-sheet, .v-dialog, .drawer, .content-split, .v-overlay__content) {
+  border-color: var(--symbolika-line-strong) !important;
+  color: var(--symbolika-text) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.v-dialog, .drawer, .content-split, .v-overlay__content) {
+  max-inline-size: min(100%, 100vw) !important;
+  max-block-size: 100dvh !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.v-card, .v-dialog, .drawer, .v-overlay__content, [role="dialog"]) {
+  box-shadow: var(--symbolika-light-shadow-strong) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(input, textarea, select, button, .v-field, .v-input, .input, .interface) {
+  box-sizing: border-box;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(input, textarea, select, .v-field) {
+  border-color: var(--symbolika-line-strong) !important;
+  background-color: var(--symbolika-panel) !important;
+  color: var(--symbolika-text) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(input, textarea, select, .v-field):focus-within {
+  border-color: var(--theme--primary) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--theme--primary) 20%, transparent) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.v-list, [role="listbox"], [role="menu"], .v-menu-content) {
+  border: 1px solid var(--symbolika-line-strong) !important;
+  background: var(--symbolika-panel) !important;
+  color: var(--symbolika-text) !important;
+  box-shadow: var(--symbolika-light-shadow) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.v-list-item, [role="option"], [role="menuitem"]):is(:hover, :focus-visible, .is-selected, .v-list-item--active) {
+  background: var(--symbolika-panel-hover) !important;
+  color: var(--symbolika-text) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(table, img, svg, iframe, video, canvas) {
+  max-inline-size: 100%;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.field-name, .type-label, label, th, legend, .v-label) {
+  color: var(--symbolika-text-soft) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.subdued, .secondary, .description) {
+  color: var(--symbolika-muted);
+}
+
+/* Complete light-theme coverage for Directus fields and teleported overlays. */
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"]) {
+  color-scheme: light;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(input, textarea, select) {
+  border-color: var(--symbolika-line-strong);
+  background-color: var(--symbolika-panel);
+  color: var(--symbolika-text);
+  caret-color: var(--theme--primary);
+  color-scheme: light;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(input, textarea)::placeholder {
+  color: var(--symbolika-muted);
+  opacity: .82;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  select :is(option, optgroup) {
+  background: var(--symbolika-panel);
+  color: var(--symbolika-text);
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.v-overlay-container, .v-menu-content, .v-overlay__content)
+  :is(.v-list, .v-card, .v-sheet, [role="listbox"], [role="menu"]) {
+  border-color: var(--symbolika-line-strong) !important;
+  background: var(--symbolika-panel) !important;
+  color: var(--symbolika-text) !important;
+  color-scheme: light;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.v-list-item, [role="option"], [role="menuitem"]) {
+  color: var(--symbolika-text) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.v-list-item:hover, [role="option"]:hover, [role="menuitem"]:hover) {
+  background: var(--symbolika-panel-hover) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.v-field, .v-input, .input, .interface) {
+  --v-theme-surface: var(--symbolika-panel);
+  --v-theme-on-surface: var(--symbolika-text);
+  color: var(--symbolika-text);
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  .content-split .field-label :is(.field-name, .type-label),
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  .content-split .field-label.type-label {
+  color: var(--symbolika-text) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.v-date-picker, [class*="date-picker"]) {
+  border-color: var(--symbolika-line-strong) !important;
+  background: var(--symbolika-panel) !important;
+  color: var(--symbolika-text) !important;
+  color-scheme: light;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.v-date-picker, [class*="date-picker"])
+  :is(button, .v-btn):not(.v-btn--active, .is-selected, .selected) {
+  color: var(--symbolika-text) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  input:is([type="date"], [type="datetime-local"], [type="month"], [type="week"])::-webkit-calendar-picker-indicator {
+  filter: sepia(1) saturate(4) hue-rotate(335deg) brightness(.82);
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  .symbolika-push-toggle {
+  border-color: var(--symbolika-line-strong);
+  background: var(--symbolika-panel);
+  color: var(--symbolika-text);
+  box-shadow: 0 10px 28px rgb(35 44 52 / 12%);
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.module-nav, .module-nav-content, .project-info) {
+  border-color: var(--symbolika-line) !important;
+  background: var(--symbolika-bg-soft) !important;
+  color: var(--symbolika-text) !important;
+}
+
+@media (min-width: 760px) and (max-width: 1179px) {
+  .content-split .group-raw.full > .v-form.grid.with-fill,
+  .content-split .sp-start > .v-form.grid.with-fill:not(:has(.v-item-group.group-accordion, .v-item-group.group-detail)),
+  .content-split .v-form.grid.fields {
+    grid-template-columns: repeat(2, minmax(220px, 1fr)) !important;
+    column-gap: 24px !important;
+    row-gap: 26px !important;
+  }
+
+  .content-split .field.half,
+  .content-split .field.half-right {
+    grid-column: auto !important;
+    inline-size: auto !important;
+    width: auto !important;
+  }
+
+  .content-split .v-item-group.group-accordion.full,
+  .content-split .v-item-group.group-detail.full,
+  .content-split .v-detail.group-detail.full,
+  .content-split .group-raw.full,
+  .content-split .field.full,
+  .content-split .field.fill,
+  .content-split .v-divider.full {
+    grid-column: 1 / -1 !important;
+    inline-size: auto !important;
+    width: auto !important;
+  }
+}
+
+.content-split .field-label.type-label {
+  margin-block-end: 8px;
+}
+
+.content-split .field-name {
+  letter-spacing: 0;
+}
+
+.content-split .field :is(input, textarea, select, .input, .v-input, .v-select, .v-textarea) {
+  transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.content-split .field:not(.readonly):not(.disabled):not([data-field="production_status"]) :is(.v-select, .v-input, .v-textarea) {
+  color: var(--symbolika-editable-text) !important;
+  -webkit-text-fill-color: var(--symbolika-editable-text) !important;
+  opacity: 1 !important;
+}
+
+.content-split .field:not(.readonly):not(.disabled):not([data-field="production_status"]) .v-select .v-input > :is(.input, .append, .prepend) {
+  background-color: inherit !important;
+  color: inherit !important;
+  -webkit-text-fill-color: inherit !important;
+  opacity: 1 !important;
+}
+
+.content-split .field:not(.readonly):not(.disabled):not([data-field="production_status"]) .v-select input[readonly] {
+  color: var(--symbolika-editable-text) !important;
+  -webkit-text-fill-color: var(--symbolika-editable-text) !important;
+  opacity: 1 !important;
+}
+
+.content-split .field:not(.readonly):not(.disabled):not([data-field="production_status"]) .v-select .v-input > :is(.append, .prepend) {
+  border-color: var(--theme--form--field--input--border-color, var(--theme--border-color)) !important;
+}
+
+.content-split .field :is(input, textarea, select):focus,
+.content-split .field :is(.v-input, .v-select, .v-textarea):focus-within {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--theme--primary) 70%, transparent) inset;
+}
+
+.content-split .field.readonly > .interface :is(.v-input, .v-select, .v-textarea),
+.content-split .field.disabled > .interface :is(.v-input, .v-select, .v-textarea),
+.content-split .field > .interface :is(.v-input.disabled, .v-select.disabled, .v-textarea.disabled),
+.content-split .field :is(input, textarea, select):disabled,
+.content-split .field textarea[readonly],
+.content-split .field select[readonly],
+.content-split [data-collection="orders_items"][data-field="production_status"] > .interface :is(.v-input, .v-select, .v-textarea) {
+  background-color: var(--symbolika-readonly-bg) !important;
+  border-color: var(--symbolika-readonly-border) !important;
+  color: var(--symbolika-readonly-text) !important;
+  -webkit-text-fill-color: var(--symbolika-readonly-text) !important;
+  opacity: 1 !important;
+}
+
+.content-split .field.readonly > .interface :is(.v-input, .v-select, .v-textarea) > :is(.input, .append, .prepend),
+.content-split .field.disabled > .interface :is(.v-input, .v-select, .v-textarea) > :is(.input, .append, .prepend),
+.content-split .field > .interface :is(.v-input.disabled, .v-select.disabled, .v-textarea.disabled) > :is(.input, .append, .prepend),
+.content-split .field > .interface :is(.input.disabled, .input.non-editable),
+.content-split .field > .interface :is(.input.disabled, .input.non-editable) > :is(input, textarea),
+.content-split .field.readonly > .interface :is(input, textarea, button, .value, .v-text-overflow),
+.content-split .field.disabled > .interface :is(input, textarea, button, .value, .v-text-overflow),
+.content-split [data-collection="orders_items"][data-field="production_status"] > .interface
+  :is(.v-input, .v-select, .v-textarea) > :is(.input, .append, .prepend) {
+  background-color: var(--symbolika-readonly-bg) !important;
+  border-color: var(--symbolika-readonly-border) !important;
+  color: var(--symbolika-readonly-text) !important;
+  -webkit-text-fill-color: var(--symbolika-readonly-text) !important;
+  opacity: 1 !important;
+  box-shadow: none !important;
+}
+
+.content-split [data-collection="orders_items"][data-field="production_status"] > .interface
+  :is(.input, .append, .prepend, input, textarea, button) {
+  color: var(--symbolika-readonly-text) !important;
+  -webkit-text-fill-color: var(--symbolika-readonly-text) !important;
+  opacity: 1 !important;
+}
+
+.content-split [data-collection="orders_items"][data-field="production_status"] :is(.field-label button, .many-to-one, .v-list-item, button) {
+  pointer-events: none !important;
+  cursor: not-allowed !important;
+}
+
+.content-split [data-collection="orders_items"][data-field="production_status"] .ctx-arrow,
+.content-split [data-collection="orders_items"][data-field="production_status"] .append {
+  display: none !important;
+}
+
+.content-split .field:has(.symbolika-order-link) {
+  align-self: end;
+}
+
+.content-split .symbolika-order-link {
+  inline-size: min(100%, 260px) !important;
+}
+
+.content-split [data-collection="orders"][data-field="shipping_comment"] .interface,
+.content-split [data-collection="orders"][data-field="shipping_comment"] :is(.v-textarea, .input, textarea) {
+  block-size: 76px !important;
+  height: 76px !important;
+  min-block-size: 76px !important;
+  min-height: 76px !important;
+  max-block-size: 76px !important;
+  max-height: 76px !important;
+}
+
+.content-split [data-collection="orders"][data-field="comment"] .interface,
+.content-split [data-collection="orders"][data-field="comment"] :is(.v-textarea, .input, textarea) {
+  block-size: 76px !important;
+  height: 76px !important;
+  min-block-size: 76px !important;
+  min-height: 76px !important;
+  max-block-size: 76px !important;
+  max-height: 76px !important;
+}
+
+.content-split .v-detail.group-detail {
+  border-block-start: 1px solid var(--symbolika-section-border);
+  margin-block-start: 4px;
+  padding-block-start: 16px;
+}
+
+.content-split .v-detail.group-detail > button {
+  min-height: 48px;
+  padding-inline: 14px;
+  border-radius: 6px;
+  background: var(--symbolika-section-bg);
+  border: 1px solid var(--symbolika-section-border);
+  color: var(--symbolika-section-text);
+}
+
+.content-split .v-detail.group-detail > button .field-name {
+  color: var(--symbolika-section-text);
+}
+
+.content-split .v-detail.group-detail + .group-raw {
+  padding-block-start: 4px;
+}
+
+.content-split .field-label .field-name,
+.content-split .field-label.type-label {
+  color: #eef2f7;
+}
+
+.content-split .v-list,
+.content-split .v-table,
+.content-split .interface-list-o2m {
+  border-color: var(--symbolika-section-border);
+}
+
+.symbolika-push-toggle {
+  position: fixed;
+  inset-inline-end: 24px;
+  inset-block-end: 72px;
+  z-index: 9999;
+  min-block-size: 38px;
+  max-inline-size: 260px;
+  padding: 0 16px;
+  border: 1px solid color-mix(in srgb, var(--theme--primary) 54%, #2a303a);
+  border-radius: 6px;
+  background: #171c23;
+  color: #eef2f7;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 26%);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.symbolika-push-toggle:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: var(--theme--primary);
+  background: color-mix(in srgb, var(--theme--primary) 24%, #171c23);
+}
+
+.symbolika-push-toggle[data-state="enabled"] {
+  border-color: #356b50;
+  color: #8fd6ad;
+}
+
+.symbolika-push-toggle[data-state="busy"] {
+  color: #f6b17c;
+}
+
+.symbolika-push-toggle[data-state="error"],
+.symbolika-push-toggle[data-state="denied"] {
+  border-color: color-mix(in srgb, var(--theme--danger) 70%, #2a303a);
+  color: var(--theme--danger);
+  cursor: default;
+}
+
+.symbolika-push-toggle:disabled {
+  opacity: .82;
+}
+
+/* Push permissions and channel preferences live in the notification center. */
+.symbolika-push-toggle {
+  display: none !important;
+}
+
+.symbolika-mobile-app-nav {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .symbolika-mobile-app-nav {
+    position: fixed;
+    inset: 0;
+    z-index: 1280;
+    display: block;
+    pointer-events: none;
+  }
+
+  .symbolika-mobile-app-nav-dock {
+    position: fixed;
+    inset-inline: max(8px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-right));
+    inset-block-end: max(8px, env(safe-area-inset-bottom));
+    z-index: 2;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    align-items: stretch;
+    max-inline-size: 520px;
+    min-block-size: 62px;
+    margin-inline: auto;
+    padding: 5px;
+    border: 1px solid color-mix(in srgb, var(--theme--border-color) 82%, transparent);
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--theme--background-normal) 92%, transparent);
+    box-shadow: 0 16px 44px rgb(0 0 0 / 34%), inset 0 1px rgb(255 255 255 / 5%);
+    backdrop-filter: blur(20px) saturate(145%);
+    pointer-events: auto;
+  }
+
+  .symbolika-mobile-app-nav-item {
+    position: relative;
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 2px;
+    min-inline-size: 0;
+    min-block-size: 52px;
+    padding: 3px 5px;
+    border: 0;
+    border-radius: 13px;
+    background: transparent;
+    color: var(--theme--foreground-subdued);
+    font: inherit;
+    font-size: 10px;
+    font-weight: 750;
+    line-height: 1.05;
+    cursor: pointer;
+  }
+
+  .symbolika-mobile-app-nav-item > span:last-child {
+    max-inline-size: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .symbolika-mobile-app-nav-item.is-active {
+    background: color-mix(in srgb, var(--theme--primary) 14%, var(--theme--background-normal));
+    color: var(--theme--primary);
+  }
+
+  .symbolika-mobile-app-nav-item.is-active::before {
+    position: absolute;
+    inset-block-start: 3px;
+    inline-size: 18px;
+    block-size: 3px;
+    border-radius: 99px;
+    background: currentColor;
+    content: '';
+  }
+
+  .symbolika-mobile-app-nav-icon,
+  .symbolika-mobile-app-menu-icon {
+    display: inline-grid;
+    place-items: center;
+  }
+
+  .symbolika-mobile-app-nav-icon svg {
+    inline-size: 23px;
+    block-size: 23px;
+    fill: currentColor;
+  }
+
+  .symbolika-mobile-app-nav-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 3;
+    display: flex;
+    align-items: flex-end;
+    padding: 12px max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+    background: rgb(3 7 12 / 70%);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 180ms ease, visibility 180ms ease;
+    pointer-events: none;
+    backdrop-filter: blur(8px);
+  }
+
+  .symbolika-mobile-app-nav.is-open .symbolika-mobile-app-nav-backdrop {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  .symbolika-mobile-app-menu {
+    inline-size: min(100%, 560px);
+    max-block-size: min(84dvh, 720px);
+    margin-inline: auto;
+    padding: 14px;
+    overflow-y: auto;
+    border: 1px solid var(--theme--border-color);
+    border-radius: 24px;
+    background:
+      radial-gradient(circle at 92% 0%, color-mix(in srgb, var(--theme--primary) 13%, transparent), transparent 36%),
+      var(--theme--background-normal);
+    box-shadow: 0 28px 80px rgb(0 0 0 / 48%);
+    transform: translateY(28px) scale(.985);
+    transition: transform 190ms ease;
+  }
+
+  .symbolika-mobile-app-nav.is-open .symbolika-mobile-app-menu {
+    transform: translateY(0) scale(1);
+  }
+
+  .symbolika-mobile-app-menu > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 2px 2px 12px;
+  }
+
+  .symbolika-mobile-app-menu > header > span {
+    display: grid;
+    gap: 2px;
+  }
+
+  .symbolika-mobile-app-menu > header small,
+  .symbolika-mobile-app-menu-item small,
+  .symbolika-mobile-app-notifications small {
+    color: var(--theme--foreground-subdued);
+    font-size: 10px;
+    font-weight: 650;
+  }
+
+  .symbolika-mobile-app-menu > header strong {
+    color: var(--theme--foreground);
+    font-size: 22px;
+    line-height: 1.1;
+  }
+
+  .symbolika-mobile-app-menu > header button {
+    display: grid;
+    place-items: center;
+    flex: 0 0 42px;
+    inline-size: 42px;
+    block-size: 42px;
+    border: 1px solid var(--theme--border-color);
+    border-radius: 14px;
+    background: var(--theme--background-subdued);
+    color: var(--theme--foreground);
+  }
+
+  .symbolika-mobile-app-menu > header button svg {
+    inline-size: 22px;
+    block-size: 22px;
+    fill: currentColor;
+  }
+
+  .symbolika-mobile-app-notifications {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr);
+    align-items: center;
+    gap: 11px;
+    inline-size: 100%;
+    min-block-size: 62px;
+    margin-block-end: 10px;
+    padding: 9px 11px;
+    border: 1px solid color-mix(in srgb, var(--theme--primary) 42%, var(--theme--border-color));
+    border-radius: 15px;
+    background: color-mix(in srgb, var(--theme--primary) 8%, var(--theme--background-subdued));
+    color: var(--theme--foreground);
+    text-align: start;
+  }
+
+  .symbolika-mobile-app-notifications > svg {
+    inline-size: 25px;
+    block-size: 25px;
+    margin-inline: auto;
+    fill: var(--theme--primary);
+  }
+
+  .symbolika-mobile-app-notifications > span,
+  .symbolika-mobile-app-menu-item > span:last-child {
+    display: grid;
+    min-inline-size: 0;
+    gap: 2px;
+  }
+
+  .symbolika-mobile-app-menu-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .symbolika-mobile-app-menu-item {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr);
+    align-items: center;
+    gap: 9px;
+    min-block-size: 68px;
+    padding: 9px;
+    border: 1px solid var(--theme--border-color-subdued);
+    border-radius: 14px;
+    background: var(--theme--background-subdued);
+    color: var(--theme--foreground);
+    text-align: start;
+  }
+
+  .symbolika-mobile-app-menu-item.is-active {
+    border-color: color-mix(in srgb, var(--theme--primary) 54%, var(--theme--border-color));
+    background: color-mix(in srgb, var(--theme--primary) 12%, var(--theme--background-subdued));
+  }
+
+  .symbolika-mobile-app-menu-icon {
+    inline-size: 38px;
+    block-size: 38px;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--theme--primary) 13%, var(--theme--background-normal));
+    color: var(--theme--primary);
+  }
+
+  .symbolika-mobile-app-menu-icon svg {
+    inline-size: 22px;
+    block-size: 22px;
+    fill: currentColor;
+  }
+
+  html.symbolika-mobile-app-menu-open,
+  html.symbolika-mobile-app-menu-open body {
+    overflow: hidden !important;
+  }
+
+  body:has(.symbolika-mobile-app-nav) :is(.symbolika-costing-page, .symbolika-notifications-page) {
+    padding-block-end: calc(78px + env(safe-area-inset-bottom)) !important;
+  }
+
+  body:has(.symbolika-mobile-app-nav) .symbolika-costing-feedback-button {
+    inset-block-end: calc(82px + env(safe-area-inset-bottom)) !important;
+  }
+
+  html.symbolika-mobile-app-menu-open .symbolika-costing-feedback-button {
+    opacity: 0 !important;
+    pointer-events: none !important;
+    transform: translateY(12px) !important;
+  }
+
+  body:has(.symbolika-mobile-app-nav) .symbolika-mail-shell {
+    block-size: calc(100dvh - 76px - env(safe-area-inset-bottom)) !important;
+  }
+}
+
+@media (max-width: 390px) {
+  .symbolika-mobile-app-nav-dock {
+    inset-inline: 6px;
+    inset-block-end: max(6px, env(safe-area-inset-bottom));
+    min-block-size: 58px;
+    border-radius: 16px;
+  }
+
+  .symbolika-mobile-app-nav-item {
+    min-block-size: 48px;
+    font-size: 9px;
+  }
+
+  .symbolika-mobile-app-menu-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .symbolika-mobile-app-menu-item {
+    min-block-size: 58px;
+  }
+}
+
+@media (min-width: 1180px) {
+  .content-split .v-form.grid.with-fill > .field.half[data-collection="orders"][data-field="comment"] {
+    grid-column: 3 / 5 !important;
+    grid-column-start: 3 !important;
+    grid-column-end: 5 !important;
+    inline-size: auto !important;
+    width: auto !important;
+  }
+}
+
+/* Keep the primary module rail consistently dark in light themes. A mixed
+   light/dark rail makes inactive icons look detached and leaves dark icons
+   almost invisible on the selected module background. */
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.module-bar, .modules, .module-bar-avatar) {
+  border-color: rgb(255 255 255 / 10%) !important;
+  background: #11171d !important;
+  color: #dce4ee !important;
+  color-scheme: dark !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.module-bar, .modules, .module-bar-avatar) :is(a, button) {
+  background: transparent !important;
+  color: #cbd5e1 !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.module-bar, .modules, .module-bar-avatar) :is(a, button)
+  :is(.v-icon, [class*="icon"], svg) {
+  --v-icon-color: #f8fafc !important;
+  color: #f8fafc !important;
+  fill: #f8fafc !important;
+  stroke: #f8fafc !important;
+  opacity: 1 !important;
+  filter: brightness(0) invert(1) !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.module-bar, .modules, .module-bar-avatar) :is(a, button)
+  :is(.v-icon, [class*="icon"], svg) :is(path, line, polyline, polygon, circle, rect) {
+  color: inherit !important;
+  fill: inherit;
+  stroke: inherit;
+  opacity: 1 !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.module-bar, .modules, .module-bar-avatar) :is(a, button):hover {
+  background: rgb(255 255 255 / 8%) !important;
+  color: #ffffff !important;
+}
+
+html:is([data-symbolika-theme="pearl"], [data-symbolika-theme="frost"])
+  :is(.module-bar, .modules, .module-bar-avatar)
+  :is(a, button):is(.router-link-active, .router-link-exact-active, .active, .is-active, [aria-current="page"]) {
+  background: color-mix(in srgb, var(--theme--primary) 20%, #11171d) !important;
+  color: #ffffff !important;
+  box-shadow: inset 3px 0 0 var(--theme--primary) !important;
+}
