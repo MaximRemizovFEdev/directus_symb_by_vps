@@ -6249,6 +6249,7 @@ export const CostingModule = {
           ...this.expandedOrderItems,
           [String(orderId)]: this.detailOrderItems,
         };
+        this.syncOrderFinancialCacheFromItems(row, this.detailOrderItems);
       } catch (error) {
         this.detailOrderItems = [];
         this.detailOrderItemsOrderId = null;
@@ -11149,6 +11150,10 @@ export const CostingModule = {
         this.newOrderDialog = null;
         this.setTab(this.availableTabs.some((tab) => tab.id === 'my_orders') ? 'my_orders' : 'all_orders');
         await this.loadAllowedData();
+        this.syncOrderFinancialCacheFromItems(
+          { id: orderId, _entity_type: 'order' },
+          createdItems.map(({ item }) => item),
+        );
         if (failedLayouts.length) {
           this.error = `Заказ создан, но не удалось загрузить макет: ${failedLayouts.join(', ')}. Повторите загрузку из карточки позиции.`;
         }
@@ -13194,6 +13199,26 @@ export const CostingModule = {
       if (this.detail?.row && this.entityId(this.orderId(this.detail.row)) === id) {
         Object.assign(this.detail.row, patch);
       }
+    },
+
+    syncOrderFinancialCacheFromItems(row, items) {
+      const orderId = this.entityId(this.orderId(row));
+      if (!orderId || !Array.isArray(items)) return;
+
+      const activeItems = items.filter((item) => String(item?.item_status || '') !== 'cancelled');
+      const orderSum = activeItems.reduce((sum, item) => sum + this.positionSum(item), 0);
+      const context = this.detailOrderContext(row);
+      const paidAmount = this.parseMoney(context?.paid_amount ?? row?.paid_amount);
+      const patch = {
+        order_sum: orderSum,
+        paid_amount: paidAmount,
+        payment_due: orderSum - paidAmount,
+      };
+      if (context?.payment_on_receipt || row?.payment_on_receipt) {
+        patch.office_payment_due = patch.payment_due;
+      }
+      this.updateOrderCaches(orderId, patch);
+      Object.assign(row, patch);
     },
 
     updateOrderItemCaches(itemId, patch) {
