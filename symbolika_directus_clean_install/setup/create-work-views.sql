@@ -15799,6 +15799,18 @@ WHERE collection = 'orders_items'
     '00000000-0000-4000-8000-000000000208'
   );
 
+-- Screen-printing cost is persisted separately from contractor costs because
+-- internal workshop normalization clears the contractor slot cost. Managers
+-- still need the field on their own orders: the order launch reload requests
+-- the complete editable item mask before changing workflow statuses.
+UPDATE directus_permissions
+SET fields = concat_ws(',', NULLIF(fields, ''), 'screen_printing_cost_per_unit')
+WHERE collection = 'orders_items'
+  AND action IN ('create', 'read', 'update')
+  AND fields IS NOT NULL AND fields <> '*'
+  AND NOT ('screen_printing_cost_per_unit' = ANY(string_to_array(fields, ',')))
+  AND policy = '00000000-0000-4000-8000-000000000202';
+
 -- The order-level launch check must use the same contractor capability rules
 -- as the position form and the position-level trigger. This final definition
 -- replaces the legacy readiness function declared before the capability table.

@@ -9,6 +9,11 @@ const waitingLayoutMigrationPath = new URL(
   import.meta.url,
 );
 const waitingLayoutMigration = await readFile(waitingLayoutMigrationPath, 'utf8');
+const managerScreenCostPermissionMigrationPath = new URL(
+  '../../../setup/migrations/20260904_manager_screen_printing_cost_permission.sql',
+  import.meta.url,
+);
+const managerScreenCostPermissionMigration = await readFile(managerScreenCostPermissionMigrationPath, 'utf8');
 
 const extractFunction = (source, name) => source.match(
   new RegExp(`CREATE OR REPLACE FUNCTION ${name.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b[\\s\\S]*?\\n\\$\\$;`, 'i'),
@@ -157,4 +162,16 @@ test('keeps the waiting-layout migration aligned with canonical workflow functio
       `${name} differs between migration and canonical SQL`,
     );
   }
+});
+
+test('grants managers the persisted screen-printing cost without widening row access', () => {
+  for (const source of [sql, managerScreenCostPermissionMigration]) {
+    assert.match(source, /screen_printing_cost_per_unit/);
+    assert.match(source, /collection\s*=\s*'orders_items'/i);
+    assert.match(source, /action IN \('create', 'read', 'update'\)/i);
+    assert.match(source, /policy\s*=\s*'00000000-0000-4000-8000-000000000202'/i);
+  }
+
+  assert.doesNotMatch(managerScreenCostPermissionMigration, /SET\s+permissions\s*=/i);
+  assert.doesNotMatch(managerScreenCostPermissionMigration, /fields\s*=\s*'\*'/i);
 });
