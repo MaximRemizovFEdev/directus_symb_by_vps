@@ -10197,9 +10197,30 @@ export const CostingModule = {
       }
     },
 
-    clearZeroInput(model, field) {
-      if (!model || this.parseMoney(model[field]) !== 0) return;
-      model[field] = '';
+    prepareNumericInput(event) {
+      const input = event?.target;
+      if (!input) return;
+      if (this.parseMoney(input.value) === 0) {
+        input.value = '';
+        return;
+      }
+      try {
+        input.select?.();
+      } catch {
+        // Browsers do not support text selection for some numeric input types.
+      }
+    },
+
+    handleNumericFocus(event) {
+      const input = event?.target;
+      if (input?.tagName !== 'INPUT') return;
+      if (input.type !== 'number' && input.inputMode !== 'decimal') return;
+      this.prepareNumericInput(event);
+    },
+
+    clearZeroInput(model, field, event) {
+      if (model && this.parseMoney(model[field]) === 0) model[field] = '';
+      this.prepareNumericInput(event);
     },
 
     syncNewOrderDeadline(value = this.newOrderDialog?.deadline) {
@@ -28450,7 +28471,7 @@ export const CostingModule = {
   },
 
   template: `
-    <private-view :title="moduleTitle">
+    <private-view :title="moduleTitle" @focusin="handleNumericFocus">
       <template #navigation>
         <nav v-if="availableTabs.length && moduleSection !== 'profile'" class="symbolika-costing-side-nav" aria-label="Навигация рабочего центра">
           <div class="symbolika-costing-side-title">{{ moduleTitle }}</div>
@@ -31065,6 +31086,7 @@ export const CostingModule = {
                   class="symbolika-costing-input symbolika-costing-num"
                   inputmode="decimal"
                   placeholder="0,00"
+                  @focus="prepareNumericInput($event)"
                   @keyup.enter="bulkSetFilteredCostingCost"
                 />
               </label>
@@ -31157,6 +31179,7 @@ export const CostingModule = {
                       :disabled="!costingContractorCostEditable(row.contractor_1) || isOrderItemFieldSaving(row, 'contractor_1')"
                       :title="!costingContractorCostEditable(row.contractor_1) ? 'Для собственного производства себестоимость равна нулю' : 'Себестоимость заготовки за единицу'"
                       placeholder="Себестоимость за единицу"
+                      @focus="prepareNumericInput($event)"
                       @change="saveField(row, 'contractor_1_cost', $event.target.value)"
                     />
                   </template>
@@ -31187,6 +31210,7 @@ export const CostingModule = {
                     :disabled="!costingContractorCostEditable(row[executorField(row)]) || isOrderItemFieldSaving(row, executorField(row))"
                     :title="!costingContractorCostEditable(row[executorField(row)]) ? 'Для собственного производства себестоимость равна нулю' : 'Себестоимость работ за единицу'"
                     placeholder="Себестоимость за единицу"
+                    @focus="prepareNumericInput($event)"
                     @change="saveField(row, executorCostField(row), $event.target.value)"
                   />
                 </td>
@@ -31313,6 +31337,7 @@ export const CostingModule = {
                     inputmode="decimal"
                     :value="row.contractor_1_cost"
                     :disabled="isOrderItemFieldSaving(row, 'contractor_1')"
+                    @focus="prepareNumericInput($event)"
                     @change="saveField(row, 'contractor_1_cost', $event.target.value)"
                   />
                 </td>
@@ -31662,10 +31687,10 @@ export const CostingModule = {
             </div>
             <div class="symbolika-costing-modal-grid">
               <label class="symbolika-costing-label">Аренда в месяц
-                <input v-model="financeSettings.monthly_rent" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" />
+                <input v-model="financeSettings.monthly_rent" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" @focus="prepareNumericInput($event)" />
               </label>
               <label class="symbolika-costing-label">Коммунальные услуги за текущий месяц
-                <input v-model="financeSettings.monthly_utilities" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" />
+                <input v-model="financeSettings.monthly_utilities" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" @focus="prepareNumericInput($event)" />
               </label>
               <label class="symbolika-costing-label">Период оплаты помещения
                 <div class="symbolika-costing-field-row">
@@ -33501,6 +33526,7 @@ export const CostingModule = {
                       :value="moneyInput(row.application_cost_per_unit)"
                       placeholder="0,00"
                       @click.stop
+                      @focus="prepareNumericInput($event)"
                       @change.stop="saveScreenApplicationCost(row, $event.target.value)"
                     />
                   </td>
@@ -34075,7 +34101,7 @@ export const CostingModule = {
             </div>
             <label class="symbolika-costing-label">
               Новый баланс
-              <input v-model="contractorBalanceDialog.targetBalance" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" />
+              <input v-model="contractorBalanceDialog.targetBalance" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" @focus="prepareNumericInput($event)" />
               <span class="symbolika-costing-subtle">0 — расчёты закрыты; отрицательное значение — мы должны контрагенту; положительное — переплата или долг контрагента нам.</span>
             </label>
             <label class="symbolika-costing-label">
@@ -34123,7 +34149,7 @@ export const CostingModule = {
               </label>
               <label class="symbolika-costing-label">
                 Сумма
-                <input v-model="expenseDialog.amount" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" />
+                <input v-model="expenseDialog.amount" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" @focus="prepareNumericInput($event)" />
               </label>
               <label v-if="['salary_payment', 'employee_advance', 'employee_bonus'].includes(expenseDialog.expense_type)" class="symbolika-costing-label">
                 Сотрудник
@@ -34347,12 +34373,12 @@ export const CostingModule = {
 
                 <label class="symbolika-costing-label">
                   Кол-во *
-                  <input v-model="item.quantity" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'quantity')" />
+                  <input v-model="item.quantity" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'quantity', $event)" />
                 </label>
 
                 <label class="symbolika-costing-label">
                   Цена
-                  <input v-model="item.price_per_unit" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'price_per_unit')" />
+                  <input v-model="item.price_per_unit" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'price_per_unit', $event)" />
                 </label>
 
                 <div class="symbolika-costing-detail-field">
@@ -34833,12 +34859,12 @@ export const CostingModule = {
 
                 <label class="symbolika-costing-label symbolika-costing-new-order-quantity">
                   Кол-во *
-                  <input v-model="item.quantity" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'quantity')" />
+                  <input v-model="item.quantity" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'quantity', $event)" />
                 </label>
 
                 <label class="symbolika-costing-label symbolika-costing-new-order-price symbolika-mobile-item-extra">
                   Цена
-                  <input v-model="item.price_per_unit" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'price_per_unit')" />
+                  <input v-model="item.price_per_unit" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'price_per_unit', $event)" />
                 </label>
 
                 <label class="symbolika-costing-label symbolika-costing-new-order-deadline">
@@ -34908,7 +34934,7 @@ export const CostingModule = {
 
                 <label v-if="itemNeedsBlank(item) && item.blank_source === 'supplier' && canEditItemCosts" class="symbolika-costing-label symbolika-costing-new-order-cost symbolika-mobile-item-extra">
                   Себестоимость заготовки за ед.
-                  <input v-model="item.contractor_1_cost" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'contractor_1_cost')" />
+                  <input v-model="item.contractor_1_cost" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'contractor_1_cost', $event)" />
                 </label>
 
                 <label v-if="itemCategoryId(item)" class="symbolika-costing-label symbolika-costing-new-order-route symbolika-mobile-item-extra">
@@ -34928,7 +34954,7 @@ export const CostingModule = {
 
                 <label v-if="itemCategoryId(item) && canEditItemCosts" class="symbolika-costing-label symbolika-costing-new-order-cost symbolika-mobile-item-extra">
                   {{ executorCostLabel(item) }}
-                  <input v-model="item[executorCostField(item)]" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, executorCostField(item))" />
+                  <input v-model="item[executorCostField(item)]" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, executorCostField(item), $event)" />
                 </label>
 
                 <div class="symbolika-costing-new-order-brief">
@@ -35634,7 +35660,7 @@ export const CostingModule = {
             <div class="symbolika-costing-modal-grid">
               <label class="symbolika-costing-label">
                 Номинал
-                <input v-model="giftCertificateDialog.nominal_amount" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="5 000,00" />
+                <input v-model="giftCertificateDialog.nominal_amount" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="5 000,00" @focus="prepareNumericInput($event)" />
               </label>
               <label class="symbolika-costing-label">
                 Действует до
@@ -36455,12 +36481,12 @@ export const CostingModule = {
 
                   <label class="symbolika-costing-label">
                     Кол-во *
-                    <input v-model="detailItemForm.quantity" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(detailItemForm, 'quantity')" />
+                    <input v-model="detailItemForm.quantity" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(detailItemForm, 'quantity', $event)" />
                   </label>
 
                   <label class="symbolika-costing-label">
                     Цена
-                    <input v-model="detailItemForm.price_per_unit" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(detailItemForm, 'price_per_unit')" />
+                    <input v-model="detailItemForm.price_per_unit" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(detailItemForm, 'price_per_unit', $event)" />
                   </label>
 
                   <label class="symbolika-costing-label">
@@ -36525,7 +36551,7 @@ export const CostingModule = {
 
                   <label v-if="itemNeedsBlank(detailItemForm) && detailItemForm.blank_source === 'supplier' && canEditItemCosts" class="symbolika-costing-label">
                     Себестоимость заготовки за ед.
-                    <input v-model="detailItemForm.contractor_1_cost" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(detailItemForm, 'contractor_1_cost')" />
+                    <input v-model="detailItemForm.contractor_1_cost" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(detailItemForm, 'contractor_1_cost', $event)" />
                   </label>
 
                   <label v-if="itemCategoryId(detailItemForm)" class="symbolika-costing-label">
@@ -36545,7 +36571,7 @@ export const CostingModule = {
 
                   <label v-if="itemCategoryId(detailItemForm) && canEditItemCosts" class="symbolika-costing-label">
                     {{ executorCostLabel(detailItemForm) }}
-                    <input v-model="detailItemForm[executorCostField(detailItemForm)]" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(detailItemForm, executorCostField(detailItemForm))" />
+                    <input v-model="detailItemForm[executorCostField(detailItemForm)]" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(detailItemForm, executorCostField(detailItemForm), $event)" />
                   </label>
 
                   <label class="symbolika-costing-label symbolika-costing-detail-add-task">
@@ -36738,7 +36764,7 @@ export const CostingModule = {
                   :class="savingWorkClass('orders_items', detail.row, 'quantity')"
                   inputmode="decimal"
                   :value="detail.row.quantity"
-                  @focus="clearZeroInput(detail.row, 'quantity')"
+                  @focus="clearZeroInput(detail.row, 'quantity', $event)"
                   @change="saveOrderItemField(detail.row, 'quantity', $event.target.value)"
                 />
               </div>
@@ -36751,7 +36777,7 @@ export const CostingModule = {
                   :class="savingWorkClass('orders_items', detail.row, 'price_per_unit')"
                   inputmode="decimal"
                   :value="detail.row.price_per_unit"
-                  @focus="clearZeroInput(detail.row, 'price_per_unit')"
+                  @focus="clearZeroInput(detail.row, 'price_per_unit', $event)"
                   @change="saveOrderItemField(detail.row, 'price_per_unit', $event.target.value)"
                 />
               </div>
@@ -36965,7 +36991,7 @@ export const CostingModule = {
                   inputmode="decimal"
                   :value="orderItemCostValue(detail.row, 'contractor_1_cost')"
                   :disabled="!costingContractorCostEditable(detail.row.contractor_1) || isOrderItemFieldSaving(detail.row, 'contractor_1')"
-                  @focus="clearZeroInput(detail.row, 'contractor_1_cost')"
+                  @focus="clearZeroInput(detail.row, 'contractor_1_cost', $event)"
                   @change="saveOrderItemCost(detail.row, 'contractor_1_cost', $event.target.value)"
                 />
               </div>
@@ -37001,7 +37027,7 @@ export const CostingModule = {
                   inputmode="decimal"
                   :value="orderItemCostValue(detail.row, executorCostField(detail.row))"
                   :disabled="!costingContractorCostEditable(detail.row[executorField(detail.row)]) || isOrderItemFieldSaving(detail.row, executorField(detail.row))"
-                  @focus="clearZeroInput(detail.row, executorCostField(detail.row))"
+                  @focus="clearZeroInput(detail.row, executorCostField(detail.row), $event)"
                   @change="saveOrderItemCost(detail.row, executorCostField(detail.row), $event.target.value)"
                 />
               </div>
