@@ -10483,7 +10483,7 @@ export const CostingModule = {
 
     contractorSelectionsEditable(item) {
       if (this.hasManagerOverrideAccess) return true;
-      return ['new', 'approval', 'layout_revision'].includes(this.normalizedWorkflowStatus(item?.item_status || 'new'));
+      return ['new', 'waiting_layout', 'approval', 'layout_revision'].includes(this.normalizedWorkflowStatus(item?.item_status || 'new'));
     },
 
     showSubcategoryField(item) {
@@ -14937,7 +14937,7 @@ export const CostingModule = {
       const itemId = this.entityId(item?.order_item) || this.entityId(item?.id);
       if (!itemId) return false;
       const status = this.normalizedWorkflowStatus(item?.item_status || 'new');
-      if (!['new', 'approval', 'layout_revision'].includes(status)) return false;
+      if (!['new', 'waiting_layout', 'approval', 'layout_revision'].includes(status)) return false;
       return this.itemWorkReadinessMissing(item).length === 0;
     },
 
@@ -15379,7 +15379,7 @@ export const CostingModule = {
         if (this.detailOrderItemsOrderId !== orderId) await this.loadDetailOrderItems(row);
         const items = (this.detailOrderItems || []).filter((item) => {
           const status = this.normalizedWorkflowStatus(item?.item_status || 'new');
-          return ['new', 'approval', 'layout_revision'].includes(status);
+          return ['new', 'waiting_layout', 'approval', 'layout_revision'].includes(status);
         });
         for (const item of items) {
           const itemId = this.entityId(item?.id);
