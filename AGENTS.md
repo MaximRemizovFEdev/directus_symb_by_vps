@@ -53,6 +53,7 @@ symbolika-db
 - `symbolika_directus_clean_install/extensions/symbolika-calculations/` — серверная бизнес-логика: суммы, оплаты, статусы, офис, производство.
 - `symbolika_directus_clean_install/extensions/symbolika-event-rollback/` — endpoint точечного и последовательного отката событий с проверкой прав Directus.
 - `symbolika_directus_clean_install/extensions/symbolika-contact-duplicates/` — админский endpoint поиска и транзакционного объединения дублей клиентов и компаний с переносом связанных данных.
+- `symbolika_directus_clean_install/extensions/symbolika-mail/` — защищённый почтовый endpoint; доступ строится по владельцу и участникам папки, а не по роли сотрудника.
 - `symbolika_directus_clean_install/extensions/symbolika-push/` — push и внешние уведомления, включая VK.
 
 ## Рабочие модули
@@ -69,6 +70,7 @@ symbolika-db
 - `symbolika-contractor-module` — будущий кабинет контрагента.
 - `symbolika-profile-module` — личный кабинет пользователя: аватар, контакты и собственная зарплата.
 - `symbolika-news-module` — внутренняя лента новостей компании с черновиками, визуальным редактором и отметками прочтения.
+- `symbolika-mail-module` — почта всех активных сотрудников; админ и управляющий назначают владельцев и права участников папок на чтение, ответы и отправку.
 
 Защищённый endpoint `symbolika-news` обслуживает публикации и создаёт системные уведомления активным сотрудникам при первой публикации новости. Создавать и редактировать новости могут админ и управляющий, читать — все сотрудники.
 
