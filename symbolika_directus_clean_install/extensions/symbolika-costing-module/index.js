@@ -11930,15 +11930,10 @@ export const CostingModule = {
       const itemId = this.entityId(row?.order_item) || row?.id;
       if (!itemId) return false;
 
-      // The screen-printing work table intentionally contains only positions
-      // that have entered the production workflow. Costing, however, is often
-      // filled before launch. In the costing table and item card write to the
-      // durable order-item source; reserve the work-table endpoint for the
-      // screen-printing cost summary where its role has scoped write access.
-      const useWorkView = this.activeTab === 'screen' && this.screenViewMode === 'costs';
-      const key = useWorkView
-        ? `screen_printing_work:${row.id}:application_cost_per_unit`
-        : `orders_items:${itemId}:screen_printing_cost_per_unit`;
+      // Every editor writes to the durable order item. screen_printing_work is
+      // a synchronized operational view and must never compete as a second
+      // source of truth for the same cost.
+      const key = `orders_items:${itemId}:screen_printing_cost_per_unit`;
       const source = String(rawValue ?? '').trim().replace(/\s/g, '').replace(',', '.');
       const value = source === '' ? null : Number(source);
       if (value !== null && (!Number.isFinite(value) || value < 0)) {
@@ -11949,13 +11944,9 @@ export const CostingModule = {
       this.saving = { ...this.saving, [key]: true };
       this.error = '';
       try {
-        await this.request(useWorkView
-          ? `/items/screen_printing_work/${row.id}`
-          : `/items/orders_items/${itemId}`, {
+        await this.request(`/items/orders_items/${itemId}`, {
           method: 'PATCH',
-          body: JSON.stringify(useWorkView
-            ? { application_cost_per_unit: value }
-            : { screen_printing_cost_per_unit: value }),
+          body: JSON.stringify({ screen_printing_cost_per_unit: value }),
         });
         const total = Math.round(this.parseMoney(row.quantity) * this.parseMoney(value) * 100) / 100;
         const costField = Number(row.application_contractor_slot) === 2
@@ -33505,7 +33496,7 @@ export const CostingModule = {
                   <td>
                     <input
                       class="symbolika-costing-input symbolika-screen-cost-input"
-                      :class="savingWorkClass('screen_printing_work', row, 'application_cost_per_unit')"
+                      :class="savingWorkClass('orders_items', row, 'screen_printing_cost_per_unit')"
                       inputmode="decimal"
                       :value="moneyInput(row.application_cost_per_unit)"
                       placeholder="0,00"

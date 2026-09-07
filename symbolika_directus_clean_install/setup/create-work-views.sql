@@ -14991,6 +14991,45 @@ INSERT INTO directus_permissions (collection, action, permissions, validation, p
     'production_status,production_comment,application_cost_per_unit',
     '00000000-0000-4000-8000-000000000206');
 
+-- All screen-printing cost editors use orders_items as their single source of
+-- truth. The workshop receives a separate field-only permission for routed
+-- positions; it does not broaden its existing order-item editing rights.
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+SELECT
+  'orders_items',
+  'read',
+  '{"_or":[{"contractor_1":{"name":{"_icontains":"шелкограф"}}},{"contractor_2":{"name":{"_icontains":"шелкограф"}}},{"internal_route_screen":{"_eq":true}}]}'::json,
+  NULL,
+  NULL,
+  'id,screen_printing_cost_per_unit',
+  '00000000-0000-4000-8000-000000000206'
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM directus_permissions permission
+  WHERE permission.collection = 'orders_items'
+    AND permission.action = 'read'
+    AND permission.policy = '00000000-0000-4000-8000-000000000206'
+    AND permission.fields = 'id,screen_printing_cost_per_unit'
+);
+
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+SELECT
+  'orders_items',
+  'update',
+  '{"_or":[{"contractor_1":{"name":{"_icontains":"шелкограф"}}},{"contractor_2":{"name":{"_icontains":"шелкограф"}}},{"internal_route_screen":{"_eq":true}}]}'::json,
+  '{"_or":[{"contractor_1":{"name":{"_icontains":"шелкограф"}}},{"contractor_2":{"name":{"_icontains":"шелкограф"}}},{"internal_route_screen":{"_eq":true}}]}'::json,
+  NULL,
+  'screen_printing_cost_per_unit',
+  '00000000-0000-4000-8000-000000000206'
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM directus_permissions permission
+  WHERE permission.collection = 'orders_items'
+    AND permission.action = 'update'
+    AND permission.policy = '00000000-0000-4000-8000-000000000206'
+    AND permission.fields = 'screen_printing_cost_per_unit'
+);
+
 -- Counterparty proposals. Operational users may submit a compact counterparty
 -- card, but only an administrator can approve it for regular dictionaries,
 -- routing and procurement supplier pickers.
