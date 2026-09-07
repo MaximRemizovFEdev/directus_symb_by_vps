@@ -35,6 +35,20 @@ ON CONFLICT (folder_id, employee) DO NOTHING;
 -- Give every active employee with an active Directus account a private local
 -- folder. IMAP folder and sender alias stay empty until an administrator maps
 -- the actual corporate mailbox, so guessed folders are never synchronized.
+UPDATE symbolika_mail_folders folder
+SET is_active = true,
+    date_updated = now()
+FROM employees e
+JOIN directus_users u ON u.id = e.directus_user AND u.status = 'active'
+WHERE folder.employee = e.id
+  AND folder.is_active = false
+  AND COALESCE(e.is_active, true) = true
+  AND NOT EXISTS (
+    SELECT 1 FROM symbolika_mail_folders active_folder
+    WHERE active_folder.employee = e.id
+      AND active_folder.is_active = true
+  );
+
 INSERT INTO symbolika_mail_folders (
   slug, name, imap_name, alias_email, employee, is_shared, is_system, is_active, sort
 )
@@ -54,6 +68,7 @@ WHERE COALESCE(e.is_active, true) = true
   AND NOT EXISTS (
     SELECT 1 FROM symbolika_mail_folders current_folder
     WHERE current_folder.employee = e.id
+      AND current_folder.is_active = true
   )
 ON CONFLICT (slug) DO NOTHING;
 

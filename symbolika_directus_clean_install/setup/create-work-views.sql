@@ -13980,6 +13980,20 @@ WHERE sent.slug = 'sent'
 
 -- Каждый активный сотрудник получает личную локальную папку. Реальную папку
 -- IMAP и псевдоним настраивает администратор после создания почты сотрудника.
+UPDATE symbolika_mail_folders folder
+SET is_active = true,
+    date_updated = now()
+FROM employees e
+JOIN directus_users u ON u.id = e.directus_user AND u.status = 'active'
+WHERE folder.employee = e.id
+  AND folder.is_active = false
+  AND COALESCE(e.is_active, true) = true
+  AND NOT EXISTS (
+    SELECT 1 FROM symbolika_mail_folders active_folder
+    WHERE active_folder.employee = e.id
+      AND active_folder.is_active = true
+  );
+
 INSERT INTO symbolika_mail_folders (slug, name, imap_name, alias_email, employee, is_shared, sort)
 SELECT
   'employee-' || e.id,
@@ -13995,6 +14009,7 @@ WHERE COALESCE(e.is_active, true) = true
   AND NOT EXISTS (
     SELECT 1 FROM symbolika_mail_folders current_folder
     WHERE current_folder.employee = e.id
+      AND current_folder.is_active = true
   )
 ON CONFLICT (slug) DO NOTHING;
 
