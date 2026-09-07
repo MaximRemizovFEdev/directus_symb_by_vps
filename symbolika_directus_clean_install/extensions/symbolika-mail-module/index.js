@@ -121,7 +121,15 @@ const MailWorkspace = {
       settings: null,
       savingFolderId: null,
       creatingFolder: false,
-      newFolder: { name: '', imap_name: '', alias_email: '', employee: null, is_shared: false, members: [] },
+      newFolder: { name: '', imap_name: '', alias_email: '', mail_account: null, employee: null, is_shared: false, members: [] },
+      savingAccountId: null,
+      creatingAccount: false,
+      newAccount: {
+        name: '', email: '', employee: null, use_server_credentials: false,
+        imap_host: 'mail.hosting.reg.ru', imap_port: 993, imap_secure: true, imap_username: '', imap_password: '',
+        smtp_host: 'mail.hosting.reg.ru', smtp_port: 465, smtp_secure: true, smtp_username: '', smtp_password: '',
+        aliases_text: '', inbox_imap_name: 'INBOX', sent_imap_name: 'Sent', archive_imap_name: 'Archive',
+      },
       savingSignatureEmployeeId: null,
     };
   },
@@ -148,6 +156,10 @@ const MailWorkspace = {
     },
     currentSenderAlias() {
       return this.composer.from_alias || this.defaultSenderAlias;
+    },
+    composerSenderOptions() {
+      const folder = this.folders.find((row) => Number(row.id) === Number(this.composer.folder_id));
+      return [...new Set([...(folder?.sender_addresses || []), folder?.alias_email, folder?.account_email].filter(Boolean))];
     },
     defaultSenderAlias() {
       const personalFolder = this.folders.find((folder) => Number(folder.employee) === Number(this.actor?.employee_id) && folder.alias_email);
@@ -786,6 +798,12 @@ const MailWorkspace = {
       this.error = '';
       try {
         this.settings = await this.request('/symbolika-mail/settings');
+        this.settings.accounts = (this.settings.accounts || []).map((account) => ({
+          ...account,
+          imap_password: '', smtp_password: '',
+          aliases_text: (account.aliases || []).map((alias) => alias.email).join(', '),
+        }));
+        if (!this.newFolder.mail_account) this.newFolder.mail_account = this.settings.accounts.find((account) => account.is_active)?.id || null;
       } catch (error) {
         this.error = error.message;
         this.showSettings = false;
@@ -803,6 +821,8 @@ const MailWorkspace = {
             name: folder.name,
             imap_name: folder.imap_name,
             alias_email: folder.alias_email,
+            mail_account: folder.mail_account,
+            folder_type: folder.folder_type,
             employee: folder.employee,
             is_shared: folder.is_shared,
             is_active: folder.is_active,
@@ -830,7 +850,7 @@ const MailWorkspace = {
           method: 'POST',
           body: JSON.stringify(this.newFolder),
         });
-        this.newFolder = { name: '', imap_name: '', alias_email: '', employee: null, is_shared: false, members: [] };
+        this.newFolder = { name: '', imap_name: '', alias_email: '', mail_account: this.newFolder.mail_account, employee: null, is_shared: false, members: [] };
         this.settings.folders.push(created);
         this.notice = `Папка «${created.name}» создана.`;
         await this.loadMailbox(false, true);
@@ -846,7 +866,59 @@ const MailWorkspace = {
     },
 
     senderAliasForFolder(folder) {
-      return folder?.alias_email || this.defaultSenderAlias;
+      return folder?.alias_email || folder?.account_email || this.defaultSenderAlias;
+    },
+
+    accountSenders(accountId) {
+      const account = (this.settings?.accounts || []).find((row) => Number(row.id) === Number(accountId));
+      if (!account) return [];
+      return [account.email, ...(account.aliases || []).map((alias) => alias.email)].filter(Boolean);
+    },
+
+    accountPayload(account) {
+      return {
+        ...account,
+        aliases: String(account.aliases_text || '').split(/[;,\n]/).map((email) => ({ email: email.trim() })).filter((row) => row.email),
+      };
+    },
+
+    async saveAccount(account) {
+      if (this.savingAccountId) return;
+      this.savingAccountId = account.id;
+      this.error = '';
+      try {
+        await this.request(`/symbolika-mail/accounts/${account.id}`, { method: 'PATCH', body: JSON.stringify(this.accountPayload(account)) });
+        this.notice = `Аккаунт «${account.email}» сохранён.`;
+        await this.openSettingsDialog();
+        await this.loadMailbox(false, true);
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.savingAccountId = null;
+      }
+    },
+
+    async createAccount() {
+      if (this.creatingAccount) return;
+      if (!this.newAccount.email.trim()) { this.error = 'Укажите адрес нового почтового аккаунта.'; return; }
+      this.creatingAccount = true;
+      this.error = '';
+      try {
+        await this.request('/symbolika-mail/accounts', { method: 'POST', body: JSON.stringify(this.accountPayload(this.newAccount)) });
+        this.notice = `Аккаунт «${this.newAccount.email}» подключён.`;
+        this.newAccount = {
+          name: '', email: '', employee: null, use_server_credentials: false,
+          imap_host: 'mail.hosting.reg.ru', imap_port: 993, imap_secure: true, imap_username: '', imap_password: '',
+          smtp_host: 'mail.hosting.reg.ru', smtp_port: 465, smtp_secure: true, smtp_username: '', smtp_password: '',
+          aliases_text: '', inbox_imap_name: 'INBOX', sent_imap_name: 'Sent', archive_imap_name: 'Archive',
+        };
+        await this.openSettingsDialog();
+        await this.loadMailbox(false, true);
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.creatingAccount = false;
+      }
     },
 
     folderMemberPermission(folder, employeeId, permission) {
@@ -1641,7 +1713,7 @@ const MailWorkspace = {
             <header class="symbolika-mail-dialog-head"><h2>{{ composer.thread_id ? 'Ответить' : 'Новое письмо' }}</h2><button type="button" class="symbolika-mail-icon-button" @click="showComposer = false"><v-icon name="close" small /></button></header>
             <div class="symbolika-mail-dialog-body">
               <div class="symbolika-mail-address-grid">
-                <label class="symbolika-mail-field">От кого<input v-model.trim="composer.from_alias" class="symbolika-mail-input" type="email" required /></label>
+                <label class="symbolika-mail-field">От кого<select v-model="composer.from_alias" class="symbolika-mail-select" required><option v-for="email in composerSenderOptions" :key="'composer-sender-' + email" :value="email">{{ email }}</option></select></label>
                 <label class="symbolika-mail-field">Кому<input v-model.trim="composer.to" class="symbolika-mail-input" type="text" placeholder="client@example.ru" required /></label>
               </div>
               <label class="symbolika-mail-field">Тема<input v-model.trim="composer.subject" class="symbolika-mail-input" type="text" required /></label>
@@ -1785,9 +1857,43 @@ const MailWorkspace = {
             <div v-else-if="settings" class="symbolika-mail-dialog-body">
               <div class="symbolika-mail-settings-summary">
                 <div class="symbolika-mail-settings-card"><small>Режим</small><strong>{{ settings.connection.mode === 'mock' ? 'Тестовый' : 'IMAP / SMTP' }}</strong></div>
-                <div class="symbolika-mail-settings-card"><small>IMAP</small><strong>{{ settings.connection.imap_host || 'Не настроен' }}:{{ settings.connection.imap_port }}</strong></div>
-                <div class="symbolika-mail-settings-card"><small>SMTP</small><strong>{{ settings.connection.smtp_host || 'Не настроен' }}:{{ settings.connection.smtp_port }}</strong></div>
-                <div class="symbolika-mail-settings-card"><small>Общий ящик</small><strong>{{ settings.connection.user || 'Не настроен' }}</strong></div>
+                <div class="symbolika-mail-settings-card"><small>Активных аккаунтов</small><strong>{{ settings.connection.active_accounts }}</strong></div>
+                <div class="symbolika-mail-settings-card"><small>С паролями</small><strong>{{ settings.connection.configured_accounts }}</strong></div>
+              </div>
+              <section class="symbolika-mail-settings-section"><h3>Почтовые аккаунты</h3><p>Каждый настоящий ящик подключается отдельно. Псевдонимы перечисляются только у того аккаунта, через который почтовый сервер разрешает их отправлять.</p></section>
+              <div class="symbolika-mail-settings-folder is-new">
+                <div class="symbolika-mail-folder-fields">
+                  <label class="symbolika-mail-field">Название<input v-model.trim="newAccount.name" class="symbolika-mail-input" placeholder="Почта Кальвина" /></label>
+                  <label class="symbolika-mail-field">Адрес ящика<input v-model.trim="newAccount.email" class="symbolika-mail-input" type="email" placeholder="kalvin@symb62.ru" /></label>
+                  <label class="symbolika-mail-field">Владелец<select v-model="newAccount.employee" class="symbolika-mail-select"><option :value="null">Без владельца</option><option v-for="employee in mailEmployees" :key="'new-account-' + employee.id" :value="employee.id">{{ employee.full_name }}</option></select></label>
+                  <label class="symbolika-mail-field">Псевдонимы<input v-model.trim="newAccount.aliases_text" class="symbolika-mail-input" placeholder="sales@symb62.ru, info@symb62.ru" /></label>
+                  <label class="symbolika-mail-field">IMAP-сервер<input v-model.trim="newAccount.imap_host" class="symbolika-mail-input" /></label>
+                  <label class="symbolika-mail-field">IMAP-логин<input v-model.trim="newAccount.imap_username" class="symbolika-mail-input" :placeholder="newAccount.email" /></label>
+                  <label class="symbolika-mail-field">IMAP-пароль<input v-model="newAccount.imap_password" class="symbolika-mail-input" type="password" autocomplete="new-password" /></label>
+                  <label class="symbolika-mail-field">SMTP-сервер<input v-model.trim="newAccount.smtp_host" class="symbolika-mail-input" /></label>
+                  <label class="symbolika-mail-field">SMTP-логин<input v-model.trim="newAccount.smtp_username" class="symbolika-mail-input" :placeholder="newAccount.email" /></label>
+                  <label class="symbolika-mail-field">SMTP-пароль<input v-model="newAccount.smtp_password" class="symbolika-mail-input" type="password" autocomplete="new-password" placeholder="Можно тот же пароль" /></label>
+                  <button type="button" class="symbolika-mail-button is-primary" :disabled="creatingAccount" @click="createAccount">{{ creatingAccount ? 'Подключаем…' : 'Подключить ящик' }}</button>
+                </div>
+              </div>
+              <div v-for="account in settings.accounts" :key="'account-' + account.id" class="symbolika-mail-settings-folder">
+                <div class="symbolika-mail-folder-fields">
+                  <label class="symbolika-mail-field">Название<input v-model.trim="account.name" class="symbolika-mail-input" /></label>
+                  <label class="symbolika-mail-field">Адрес ящика<input v-model.trim="account.email" class="symbolika-mail-input" type="email" /></label>
+                  <label class="symbolika-mail-field">Владелец<select v-model="account.employee" class="symbolika-mail-select"><option :value="null">Без владельца</option><option v-for="employee in mailEmployees" :key="'account-owner-' + account.id + '-' + employee.id" :value="employee.id">{{ employee.full_name }}</option></select></label>
+                  <label class="symbolika-mail-field">Псевдонимы<input v-model.trim="account.aliases_text" class="symbolika-mail-input" placeholder="Через запятую" /></label>
+                  <template v-if="!account.use_server_credentials">
+                    <label class="symbolika-mail-field">IMAP-сервер<input v-model.trim="account.imap_host" class="symbolika-mail-input" /></label>
+                    <label class="symbolika-mail-field">IMAP-логин<input v-model.trim="account.imap_username" class="symbolika-mail-input" /></label>
+                    <label class="symbolika-mail-field">Новый IMAP-пароль<input v-model="account.imap_password" class="symbolika-mail-input" type="password" autocomplete="new-password" :placeholder="account.imap_password_configured ? 'Уже сохранён — оставьте пустым' : 'Не настроен'" /></label>
+                    <label class="symbolika-mail-field">SMTP-сервер<input v-model.trim="account.smtp_host" class="symbolika-mail-input" /></label>
+                    <label class="symbolika-mail-field">SMTP-логин<input v-model.trim="account.smtp_username" class="symbolika-mail-input" /></label>
+                    <label class="symbolika-mail-field">Новый SMTP-пароль<input v-model="account.smtp_password" class="symbolika-mail-input" type="password" autocomplete="new-password" :placeholder="account.smtp_password_configured ? 'Уже сохранён — оставьте пустым' : 'Не настроен'" /></label>
+                  </template>
+                  <span v-else class="symbolika-mail-settings-note">Подключение берётся из защищённых переменных сервера.</span>
+                  <label class="symbolika-mail-checkbox"><input v-model="account.is_active" type="checkbox" /> Активен</label>
+                  <button type="button" class="symbolika-mail-button" :disabled="savingAccountId === account.id" @click="saveAccount(account)">{{ savingAccountId === account.id ? 'Сохраняем…' : 'Сохранить аккаунт' }}</button>
+                </div>
               </div>
               <section class="symbolika-mail-settings-section">
                 <h3>Подписи сотрудников</h3>
@@ -1802,8 +1908,9 @@ const MailWorkspace = {
               <div class="symbolika-mail-settings-folder is-new">
                 <div class="symbolika-mail-folder-fields">
                   <label class="symbolika-mail-field">Название<input v-model.trim="newFolder.name" class="symbolika-mail-input" placeholder="Новая папка" /></label>
+                  <label class="symbolika-mail-field">Аккаунт<select v-model="newFolder.mail_account" class="symbolika-mail-select"><option :value="null">Выберите аккаунт</option><option v-for="account in settings.accounts" :key="'new-folder-account-' + account.id" :value="account.id">{{ account.email }}</option></select></label>
                   <label class="symbolika-mail-field">Папка IMAP<input v-model.trim="newFolder.imap_name" class="symbolika-mail-input" placeholder="INBOX.Новая папка" /></label>
-                  <label class="symbolika-mail-field">Псевдоним<input v-model.trim="newFolder.alias_email" class="symbolika-mail-input" type="email" placeholder="employee@symb62.ru" /></label>
+                  <label class="symbolika-mail-field">Адрес отправителя<select v-model="newFolder.alias_email" class="symbolika-mail-select"><option value="">Основной адрес аккаунта</option><option v-for="email in accountSenders(newFolder.mail_account)" :key="'new-folder-sender-' + email" :value="email">{{ email }}</option></select></label>
                   <label class="symbolika-mail-field">Владелец<select v-model="newFolder.employee" class="symbolika-mail-select"><option :value="null">Без владельца</option><option v-for="employee in mailEmployees" :key="'new-' + employee.id" :value="employee.id">{{ employee.full_name }}</option></select></label>
                   <button type="button" class="symbolika-mail-button" :disabled="creatingFolder" @click="createFolder">{{ creatingFolder ? 'Создаём…' : 'Добавить' }}</button>
                 </div>
@@ -1820,8 +1927,9 @@ const MailWorkspace = {
               <div v-for="folder in settings.folders" :key="folder.id" class="symbolika-mail-settings-folder">
                 <div class="symbolika-mail-folder-fields">
                   <label class="symbolika-mail-field">Название<input v-model.trim="folder.name" class="symbolika-mail-input" /></label>
+                  <label class="symbolika-mail-field">Аккаунт<select v-model="folder.mail_account" class="symbolika-mail-select"><option v-for="account in settings.accounts" :key="'folder-account-' + folder.id + '-' + account.id" :value="account.id">{{ account.email }}</option></select></label>
                   <label class="symbolika-mail-field">Папка IMAP<input v-model.trim="folder.imap_name" class="symbolika-mail-input" placeholder="INBOX.Сотрудник" /></label>
-                  <label class="symbolika-mail-field">Псевдоним<input v-model.trim="folder.alias_email" class="symbolika-mail-input" type="email" placeholder="employee@symb62.ru" /></label>
+                  <label class="symbolika-mail-field">Адрес отправителя<select v-model="folder.alias_email" class="symbolika-mail-select"><option value="">Основной адрес аккаунта</option><option v-for="email in accountSenders(folder.mail_account)" :key="'folder-sender-' + folder.id + '-' + email" :value="email">{{ email }}</option></select></label>
                   <label class="symbolika-mail-field">Владелец<select v-model="folder.employee" class="symbolika-mail-select"><option :value="null">Без владельца</option><option v-for="employee in mailEmployees" :key="employee.id" :value="employee.id">{{ employee.full_name }}</option></select></label>
                   <label class="symbolika-mail-checkbox"><input v-model="folder.is_active" type="checkbox" /> Активна</label>
                   <button type="button" class="symbolika-mail-button" :disabled="savingFolderId === folder.id" @click="saveFolder(folder)">{{ savingFolderId === folder.id ? 'Сохраняем…' : 'Сохранить' }}</button>

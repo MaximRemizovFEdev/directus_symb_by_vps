@@ -13836,12 +13836,48 @@ WHERE NOT EXISTS (
 -- Встроенный почтовый клиент
 -- ---------------------------------------------------------------------------
 
+CREATE TABLE IF NOT EXISTS symbolika_mail_accounts (
+  id bigserial PRIMARY KEY,
+  name varchar(255) NOT NULL,
+  email varchar(255) NOT NULL,
+  employee integer REFERENCES employees(id) ON DELETE SET NULL,
+  use_server_credentials boolean NOT NULL DEFAULT false,
+  imap_host varchar(255),
+  imap_port integer NOT NULL DEFAULT 993,
+  imap_secure boolean NOT NULL DEFAULT true,
+  imap_username varchar(255),
+  imap_password_encrypted text,
+  smtp_host varchar(255),
+  smtp_port integer NOT NULL DEFAULT 465,
+  smtp_secure boolean NOT NULL DEFAULT true,
+  smtp_username varchar(255),
+  smtp_password_encrypted text,
+  is_active boolean NOT NULL DEFAULT true,
+  date_created timestamptz NOT NULL DEFAULT now(),
+  date_updated timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS symbolika_mail_accounts_email_uidx ON symbolika_mail_accounts (lower(email));
+
+CREATE TABLE IF NOT EXISTS symbolika_mail_aliases (
+  id bigserial PRIMARY KEY,
+  mail_account bigint NOT NULL REFERENCES symbolika_mail_accounts(id) ON DELETE CASCADE,
+  email varchar(255) NOT NULL,
+  name varchar(255),
+  is_active boolean NOT NULL DEFAULT true,
+  date_created timestamptz NOT NULL DEFAULT now(),
+  date_updated timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (mail_account, email)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS symbolika_mail_aliases_email_uidx ON symbolika_mail_aliases (lower(email));
+
 CREATE TABLE IF NOT EXISTS symbolika_mail_folders (
   id bigserial PRIMARY KEY,
   slug varchar(120) NOT NULL UNIQUE,
   name varchar(255) NOT NULL,
   imap_name varchar(500),
   alias_email varchar(255),
+  mail_account bigint REFERENCES symbolika_mail_accounts(id) ON DELETE RESTRICT,
+  folder_type varchar(30) NOT NULL DEFAULT 'custom',
   employee integer REFERENCES employees(id) ON DELETE SET NULL,
   is_shared boolean NOT NULL DEFAULT false,
   is_system boolean NOT NULL DEFAULT false,
@@ -13850,6 +13886,11 @@ CREATE TABLE IF NOT EXISTS symbolika_mail_folders (
   date_created timestamptz NOT NULL DEFAULT now(),
   date_updated timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE symbolika_mail_folders ADD COLUMN IF NOT EXISTS mail_account bigint REFERENCES symbolika_mail_accounts(id) ON DELETE RESTRICT;
+ALTER TABLE symbolika_mail_folders ADD COLUMN IF NOT EXISTS folder_type varchar(30) NOT NULL DEFAULT 'custom';
+CREATE INDEX IF NOT EXISTS symbolika_mail_folders_account_idx ON symbolika_mail_folders(mail_account, folder_type, is_active);
+CREATE INDEX IF NOT EXISTS symbolika_mail_aliases_account_idx ON symbolika_mail_aliases(mail_account, is_active);
 
 CREATE TABLE IF NOT EXISTS symbolika_mail_threads (
   id bigserial PRIMARY KEY,
@@ -13949,6 +13990,14 @@ CREATE INDEX IF NOT EXISTS symbolika_mail_threads_links_idx
 CREATE INDEX IF NOT EXISTS symbolika_mail_messages_thread_date_idx
   ON symbolika_mail_messages(thread_id, sent_at);
 
+INSERT INTO symbolika_mail_accounts (name, email, use_server_credentials, is_active)
+SELECT 'Основная почта', 'start@symb62.ru', true, true
+WHERE NOT EXISTS (SELECT 1 FROM symbolika_mail_accounts WHERE lower(email) = 'start@symb62.ru');
+
+UPDATE symbolika_mail_accounts
+SET use_server_credentials = true, is_active = true, date_updated = now()
+WHERE lower(email) = 'start@symb62.ru';
+
 INSERT INTO symbolika_mail_folders (slug, name, imap_name, alias_email, is_shared, is_system, sort)
 VALUES
   ('inbox', 'Входящие', 'INBOX', 'start@symb62.ru', true, true, 10),
@@ -13959,6 +14008,20 @@ ON CONFLICT (slug) DO UPDATE SET
   alias_email = COALESCE(symbolika_mail_folders.alias_email, EXCLUDED.alias_email),
   is_shared = true,
   is_system = true;
+
+UPDATE symbolika_mail_folders
+SET mail_account = (SELECT id FROM symbolika_mail_accounts WHERE lower(email) = 'start@symb62.ru' LIMIT 1),
+    folder_type = CASE slug WHEN 'inbox' THEN 'inbox' WHEN 'sent' THEN 'sent' WHEN 'archive' THEN 'archive' ELSE folder_type END,
+    date_updated = now()
+WHERE mail_account IS NULL;
+
+INSERT INTO symbolika_mail_aliases (mail_account, email, name, is_active)
+SELECT DISTINCT account.id, lower(folder.alias_email), folder.name, true
+FROM symbolika_mail_folders folder
+JOIN symbolika_mail_accounts account ON lower(account.email) = 'start@symb62.ru'
+WHERE folder.alias_email IS NOT NULL AND folder.alias_email <> ''
+  AND lower(folder.alias_email) <> lower(account.email)
+ON CONFLICT DO NOTHING;
 
 -- Новые исходящие цепочки должны находиться в «Отправленных», даже если
 -- пользователь открыл окно написания из папки «Входящие».
@@ -13994,12 +14057,13 @@ WHERE folder.employee = e.id
       AND active_folder.is_active = true
   );
 
-INSERT INTO symbolika_mail_folders (slug, name, imap_name, alias_email, employee, is_shared, sort)
+INSERT INTO symbolika_mail_folders (slug, name, imap_name, alias_email, mail_account, employee, is_shared, sort)
 SELECT
   'employee-' || e.id,
   COALESCE(NULLIF(e.full_name, ''), 'Сотрудник'),
   NULL,
   NULL,
+  (SELECT id FROM symbolika_mail_accounts WHERE lower(email) = 'start@symb62.ru' LIMIT 1),
   e.id,
   false,
   100 + e.id

@@ -2,7 +2,7 @@ import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
 import Busboy from 'busboy';
-import { randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -227,8 +227,6 @@ function contentDisposition(disposition, filename) {
 export default {
   id: 'symbolika-mail',
   handler: (router, { database, env, logger }) => {
-    let smtpTransport = null;
-
     const attachmentLimits = () => ({
       files: Math.min(Math.max(Number(env?.SYMBOLIKA_MAIL_ATTACHMENT_MAX_FILES || DEFAULT_ATTACHMENT_MAX_FILES), 1), 30),
       fileBytes: Math.min(Math.max(Number(env?.SYMBOLIKA_MAIL_ATTACHMENT_MAX_FILE_MB || (DEFAULT_ATTACHMENT_MAX_FILE_BYTES / 1024 / 1024)), 1), 50) * 1024 * 1024,
@@ -327,6 +325,85 @@ export default {
     });
 
     const mailMode = () => cleanText(env?.SYMBOLIKA_MAIL_MODE || 'mock', 20).toLowerCase();
+
+    const credentialKey = () => {
+      const secret = String(env?.SECRET || '');
+      if (!secret) throw new Error('Для безопасного сохранения паролей почты не настроен SECRET Directus.');
+      return createHash('sha256').update(`symbolika-mail-accounts:v1:${secret}`).digest();
+    };
+
+    const encryptCredential = (value) => {
+      const plain = String(value || '');
+      if (!plain) return null;
+      const iv = randomBytes(12);
+      const cipher = createCipheriv('aes-256-gcm', credentialKey(), iv);
+      const encrypted = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+      return `v1:${iv.toString('base64')}:${cipher.getAuthTag().toString('base64')}:${encrypted.toString('base64')}`;
+    };
+
+    const decryptCredential = (value) => {
+      const [version, iv, tag, encrypted] = String(value || '').split(':');
+      if (version !== 'v1' || !iv || !tag || !encrypted) return '';
+      const decipher = createDecipheriv('aes-256-gcm', credentialKey(), Buffer.from(iv, 'base64'));
+      decipher.setAuthTag(Buffer.from(tag, 'base64'));
+      return Buffer.concat([decipher.update(Buffer.from(encrypted, 'base64')), decipher.final()]).toString('utf8');
+    };
+
+    const serverConfiguredAliases = () => cleanText(env?.SYMBOLIKA_MAIL_ALLOWED_ALIASES, 10000)
+      .split(/[;,]/).map((email) => email.trim().toLowerCase()).filter((email) => EMAIL_PATTERN.test(email));
+
+    const publicMailAccount = (account, aliases = []) => ({
+      id: account.id,
+      name: account.name,
+      email: account.email,
+      employee: account.employee,
+      use_server_credentials: Boolean(account.use_server_credentials),
+      imap_host: account.use_server_credentials ? cleanText(env?.SYMBOLIKA_IMAP_HOST, 255) : account.imap_host,
+      imap_port: account.use_server_credentials ? Number(env?.SYMBOLIKA_IMAP_PORT || 993) : account.imap_port,
+      imap_secure: account.use_server_credentials ? boolEnv(env?.SYMBOLIKA_IMAP_SECURE, true) : Boolean(account.imap_secure),
+      imap_username: account.use_server_credentials ? cleanText(env?.SYMBOLIKA_IMAP_USER, 255) : account.imap_username,
+      imap_password_configured: account.use_server_credentials
+        ? Boolean(env?.SYMBOLIKA_IMAP_PASSWORD)
+        : Boolean(account.imap_password_encrypted),
+      smtp_host: account.use_server_credentials ? cleanText(env?.SYMBOLIKA_SMTP_HOST || env?.EMAIL_SMTP_HOST, 255) : account.smtp_host,
+      smtp_port: account.use_server_credentials ? Number(env?.SYMBOLIKA_SMTP_PORT || env?.EMAIL_SMTP_PORT || 465) : account.smtp_port,
+      smtp_secure: account.use_server_credentials ? boolEnv(env?.SYMBOLIKA_SMTP_SECURE, true) : Boolean(account.smtp_secure),
+      smtp_username: account.use_server_credentials ? cleanText(env?.SYMBOLIKA_SMTP_USER || env?.EMAIL_SMTP_USER, 255) : account.smtp_username,
+      smtp_password_configured: account.use_server_credentials
+        ? Boolean(env?.SYMBOLIKA_SMTP_PASSWORD || env?.EMAIL_SMTP_PASSWORD)
+        : Boolean(account.smtp_password_encrypted),
+      is_active: Boolean(account.is_active),
+      aliases: [...new Map([
+        ...aliases,
+        ...(account.use_server_credentials ? serverConfiguredAliases().map((email) => ({ email, name: '' })) : []),
+      ].filter((alias) => cleanText(alias.email, 255).toLowerCase() !== cleanText(account.email, 255).toLowerCase())
+        .map((alias) => [cleanText(alias.email, 255).toLowerCase(), alias])).values()],
+    });
+
+    const mailAccount = async (accountId) => {
+      let query = database('symbolika_mail_accounts').where('is_active', true);
+      if (Number(accountId || 0)) query = query.where('id', Number(accountId));
+      else query = query.orderBy('use_server_credentials', 'desc').orderBy('id', 'asc');
+      return query.first();
+    };
+
+    const accountImapSettings = (account) => {
+      const server = Boolean(account?.use_server_credentials);
+      const host = cleanText(server ? env?.SYMBOLIKA_IMAP_HOST : account?.imap_host, 255);
+      const user = cleanText(server ? env?.SYMBOLIKA_IMAP_USER : account?.imap_username, 255);
+      const pass = server ? String(env?.SYMBOLIKA_IMAP_PASSWORD || '') : decryptCredential(account?.imap_password_encrypted);
+      const port = Number(server ? env?.SYMBOLIKA_IMAP_PORT : account?.imap_port) || 993;
+      return { host, user, pass, port, secure: server ? boolEnv(env?.SYMBOLIKA_IMAP_SECURE, port === 993) : Boolean(account?.imap_secure), configured: Boolean(host && user && pass) };
+    };
+
+    const accountSmtpSettings = (account) => {
+      const server = Boolean(account?.use_server_credentials);
+      const host = cleanText(server ? (env?.SYMBOLIKA_SMTP_HOST || env?.EMAIL_SMTP_HOST) : account?.smtp_host, 255);
+      const user = cleanText(server ? (env?.SYMBOLIKA_SMTP_USER || env?.EMAIL_SMTP_USER) : account?.smtp_username, 255);
+      const pass = server ? String(env?.SYMBOLIKA_SMTP_PASSWORD || env?.EMAIL_SMTP_PASSWORD || '') : decryptCredential(account?.smtp_password_encrypted);
+      const port = Number(server ? (env?.SYMBOLIKA_SMTP_PORT || env?.EMAIL_SMTP_PORT) : account?.smtp_port) || 465;
+      return { host, user, pass, port, secure: server ? boolEnv(env?.SYMBOLIKA_SMTP_SECURE, port === 465) : Boolean(account?.smtp_secure), configured: Boolean(host && user && pass) };
+    };
 
     const actorContext = async (req, res) => {
       const userId = req.accountability?.user;
@@ -428,11 +505,12 @@ export default {
       return folder ? { ...folder, access: await folderAccess(folder, actor) } : null;
     };
 
-    const accessibleSystemFolder = async (slug, actor, permission = 'read') => {
+    const accessibleSystemFolder = async (folderType, actor, permission = 'read', accountId = null) => {
       let query = database('symbolika_mail_folders as f')
-        .where('f.slug', slug)
+        .where('f.folder_type', folderType)
         .where('f.is_active', true)
         .select('f.*');
+      if (Number(accountId || 0)) query = query.where('f.mail_account', Number(accountId));
       query = applyFolderAccess(query, actor, 'f', permission);
       const folder = await query.first();
       return folder ? { ...folder, access: await folderAccess(folder, actor) } : null;
@@ -442,7 +520,7 @@ export default {
       let query = database('symbolika_mail_threads as t')
         .join('symbolika_mail_folders as f', 'f.id', 't.folder_id')
         .where('t.id', Number(threadId))
-        .select('t.*', 'f.name as folder_name', 'f.alias_email', 'f.employee as folder_employee');
+        .select('t.*', 'f.name as folder_name', 'f.alias_email', 'f.employee as folder_employee', 'f.mail_account');
       query = applyFolderAccess(query, actor);
       const thread = await query.first();
       if (!thread) return null;
@@ -458,6 +536,20 @@ export default {
         .orderBy('f.name', 'asc');
       query = applyFolderAccess(query, actor);
       const folders = await query;
+      const accountIds = [...new Set(folders.map((row) => Number(row.mail_account)).filter(Number.isInteger))];
+      const accountRows = accountIds.length
+        ? await database('symbolika_mail_accounts').whereIn('id', accountIds).where('is_active', true).select('id', 'email', 'use_server_credentials')
+        : [];
+      const aliasRows = accountIds.length
+        ? await database('symbolika_mail_aliases').whereIn('mail_account', accountIds).where('is_active', true).select('mail_account', 'email')
+        : [];
+      const accountEmails = new Map(accountRows.map((row) => [Number(row.id), cleanText(row.email, 255).toLowerCase()]));
+      const accountSenders = new Map(accountRows.map((row) => [Number(row.id), [
+        cleanText(row.email, 255).toLowerCase(),
+        ...(row.use_server_credentials ? serverConfiguredAliases() : []),
+        ...aliasRows.filter((alias) => Number(alias.mail_account) === Number(row.id)).map((alias) => cleanText(alias.email, 255).toLowerCase()),
+      ].filter(Boolean)]));
+      const activeAccountIds = new Set(accountRows.map((row) => Number(row.id)));
       const ids = folders.map((row) => row.id);
       const counts = ids.length
         ? await database('symbolika_mail_threads')
@@ -469,8 +561,10 @@ export default {
           .sum({ unread: database.raw('CASE WHEN is_unread THEN 1 ELSE 0 END') })
         : [];
       const byFolder = new Map(counts.map((row) => [Number(row.folder_id), row]));
-      return Promise.all(folders.map(async (folder) => ({
+      return Promise.all(folders.filter((folder) => activeAccountIds.has(Number(folder.mail_account))).map(async (folder) => ({
         ...folder,
+        account_email: accountEmails.get(Number(folder.mail_account)) || '',
+        sender_addresses: [...new Set(accountSenders.get(Number(folder.mail_account)) || [])],
         access: await folderAccess(folder, actor),
         total: Number(byFolder.get(Number(folder.id))?.total || 0),
         unread: Number(byFolder.get(Number(folder.id))?.unread || 0),
@@ -497,6 +591,57 @@ export default {
         can_send: Boolean(row.can_send),
       }));
       return result;
+    };
+
+    const aliasesByAccount = async (accountIds) => {
+      const ids = [...new Set((accountIds || []).map(Number).filter(Number.isInteger))];
+      if (!ids.length) return new Map();
+      const rows = await database('symbolika_mail_aliases')
+        .whereIn('mail_account', ids)
+        .where('is_active', true)
+        .select('id', 'mail_account', 'email', 'name')
+        .orderBy('email');
+      const result = new Map(ids.map((id) => [id, []]));
+      rows.forEach((row) => result.get(Number(row.mail_account))?.push({ id: row.id, email: row.email, name: row.name || '' }));
+      return result;
+    };
+
+    const normalizeAccountAliases = (input, primaryEmail) => {
+      const aliases = [];
+      const seen = new Set([cleanText(primaryEmail, 255).toLowerCase()]);
+      jsonArray(input).forEach((row) => {
+        const email = cleanText(typeof row === 'string' ? row : row?.email, 255).toLowerCase();
+        if (!email || seen.has(email)) return;
+        if (!EMAIL_PATTERN.test(email)) throw new Error(`Некорректный адрес псевдонима: ${email}`);
+        seen.add(email);
+        aliases.push({ email, name: cleanText(row?.name, 255) || null });
+      });
+      return aliases;
+    };
+
+    const replaceAccountAliases = async (trx, accountId, aliases) => {
+      await trx('symbolika_mail_aliases').where('mail_account', accountId).delete();
+      if (aliases.length) {
+        await trx('symbolika_mail_aliases').insert(aliases.map((alias) => ({
+          mail_account: accountId,
+          ...alias,
+          is_active: true,
+          date_created: new Date(),
+          date_updated: new Date(),
+        })));
+      }
+    };
+
+    const assertAccountSender = async (accountId, senderEmail) => {
+      const account = await database('symbolika_mail_accounts').where('id', Number(accountId)).where('is_active', true).first('id', 'email');
+      if (!account) throw new Error('Выберите активный почтовый аккаунт.');
+      const sender = cleanText(senderEmail, 255).toLowerCase();
+      if (!sender || sender === cleanText(account.email, 255).toLowerCase()) return account;
+      const alias = await database('symbolika_mail_aliases')
+        .where('mail_account', account.id).where('is_active', true)
+        .whereRaw('lower(email) = lower(?)', [sender]).first('id');
+      if (!alias) throw new Error('Адрес отправителя должен быть основным адресом или псевдонимом выбранного аккаунта.');
+      return account;
     };
 
     const syncFolderMembers = async (trx, folderId, ownerId, input) => {
@@ -589,24 +734,19 @@ export default {
       }
     };
 
-    const smtpSender = () => {
-      if (smtpTransport) return smtpTransport;
-      const host = env?.SYMBOLIKA_SMTP_HOST || env?.EMAIL_SMTP_HOST;
-      const port = Number(env?.SYMBOLIKA_SMTP_PORT || env?.EMAIL_SMTP_PORT || 465);
-      const user = env?.SYMBOLIKA_SMTP_USER || env?.EMAIL_SMTP_USER;
-      const pass = env?.SYMBOLIKA_SMTP_PASSWORD || env?.EMAIL_SMTP_PASSWORD;
-      if (!host || !user || !pass) return null;
-      smtpTransport = nodemailer.createTransport({
-        host,
-        port,
-        secure: boolEnv(env?.SYMBOLIKA_SMTP_SECURE, port === 465),
-        auth: { user, pass },
+    const smtpSender = (account) => {
+      const settings = accountSmtpSettings(account);
+      if (!settings.configured) return null;
+      return nodemailer.createTransport({
+        host: settings.host,
+        port: settings.port,
+        secure: settings.secure,
+        auth: { user: settings.user, pass: settings.pass },
       });
-      return smtpTransport;
     };
 
-    const smtpEnvelopeSender = () => cleanText(
-      env?.SYMBOLIKA_SMTP_USER || env?.EMAIL_SMTP_USER || env?.SYMBOLIKA_EMAIL_FROM,
+    const smtpEnvelopeSender = (account) => cleanText(
+      accountSmtpSettings(account).user || account?.email,
       255,
     ).toLowerCase();
 
@@ -727,53 +867,53 @@ export default {
       return true;
     };
 
-    const imapSettings = () => {
-      const host = cleanText(env?.SYMBOLIKA_IMAP_HOST, 255);
-      const user = cleanText(env?.SYMBOLIKA_IMAP_USER, 255);
-      const pass = String(env?.SYMBOLIKA_IMAP_PASSWORD || '');
-      const port = Number(env?.SYMBOLIKA_IMAP_PORT || 993);
-      return {
-        host,
-        user,
-        pass,
-        port: Number.isFinite(port) && port > 0 ? port : 993,
-        configured: Boolean(host && user && pass),
-      };
-    };
-
     let imapSyncQueue = Promise.resolve();
     const missingImapFolders = new Set();
     const synchronizeImapFolders = (folders, { actor = null, limit = 60 } = {}) => {
       const run = async () => {
-        const settings = imapSettings();
-        if (!settings.configured) {
-          const error = new Error('IMAP не настроен.');
-          error.code = 'IMAP_NOT_CONFIGURED';
-          throw error;
-        }
-
-        const client = new ImapFlow({
-          host: settings.host,
-          port: settings.port,
-          secure: boolEnv(env?.SYMBOLIKA_IMAP_SECURE, settings.port === 993),
-          auth: { user: settings.user, pass: settings.pass },
-          logger: false,
-        });
         let synced = 0;
+        let configuredAccounts = 0;
+        const failedAccounts = [];
         const perFolder = Math.min(Math.max(Number(limit || 60), 1), 200);
-        try {
-          await client.connect();
-          const availableFolders = new Set((await client.list()).map((row) => cleanText(row?.path, 500)).filter(Boolean));
-          for (const folder of folders.filter((row) => cleanText(row?.imap_name, 500))) {
+        const grouped = new Map();
+        for (const folder of folders.filter((row) => cleanText(row?.imap_name, 500))) {
+          const accountId = Number(folder.mail_account || 0);
+          if (!grouped.has(accountId)) grouped.set(accountId, []);
+          grouped.get(accountId).push(folder);
+        }
+        for (const [accountId, accountFolders] of grouped) {
+          const account = await mailAccount(accountId || null);
+          if (!account) continue;
+          let settings;
+          try {
+            settings = accountImapSettings(account);
+          } catch (error) {
+            logger.warn({ account: account.email, error: error?.message }, '[Symbolika Mail] cannot decrypt IMAP credentials');
+            continue;
+          }
+          if (!settings.configured) continue;
+          configuredAccounts += 1;
+          const client = new ImapFlow({
+            host: settings.host,
+            port: settings.port,
+            secure: settings.secure,
+            auth: { user: settings.user, pass: settings.pass },
+            logger: false,
+          });
+          try {
+            await client.connect();
+            const availableFolders = new Set((await client.list()).map((row) => cleanText(row?.path, 500)).filter(Boolean));
+            for (const folder of accountFolders) {
             const imapName = cleanText(folder.imap_name, 500);
+            const missingKey = `${account.id}:${imapName}`;
             if (!availableFolders.has(imapName)) {
-              if (!missingImapFolders.has(imapName)) {
-                missingImapFolders.add(imapName);
-                logger.warn({ folder: imapName }, '[Symbolika Mail] configured folder is missing on IMAP server');
+              if (!missingImapFolders.has(missingKey)) {
+                missingImapFolders.add(missingKey);
+                logger.warn({ account: account.email, folder: imapName }, '[Symbolika Mail] configured folder is missing on IMAP server');
               }
               continue;
             }
-            missingImapFolders.delete(imapName);
+            missingImapFolders.delete(missingKey);
             let lock;
             try {
               lock = await client.getMailboxLock(imapName);
@@ -790,11 +930,20 @@ export default {
             } finally {
               lock?.release?.();
             }
+            }
+          } catch (error) {
+            failedAccounts.push(account.email);
+            logger.warn({ account: account.email, error: error?.message }, '[Symbolika Mail] account sync failed');
+          } finally {
+            try { await client.logout(); } catch { /* connection already closed */ }
           }
-          return { synced };
-        } finally {
-          try { await client.logout(); } catch { /* connection already closed */ }
         }
+        if (grouped.size && !configuredAccounts) {
+          const error = new Error('IMAP не настроен ни для одного доступного почтового аккаунта.');
+          error.code = 'IMAP_NOT_CONFIGURED';
+          throw error;
+        }
+        return { synced, accounts: configuredAccounts, failed_accounts: failedAccounts };
       };
 
       const queued = imapSyncQueue.then(run, run);
@@ -804,7 +953,7 @@ export default {
 
     globalThis[BACKGROUND_SYNC_STATE_KEY]?.stop?.();
     const backgroundSyncEnabled = boolEnv(env?.SYMBOLIKA_MAIL_BACKGROUND_SYNC_ENABLED, true);
-    if (mailMode() === 'imap' && backgroundSyncEnabled && imapSettings().configured) {
+    if (mailMode() === 'imap' && backgroundSyncEnabled) {
       const requestedInterval = Number(env?.SYMBOLIKA_MAIL_BACKGROUND_SYNC_INTERVAL_MS || 20000);
       const intervalMs = Math.min(Math.max(Number.isFinite(requestedInterval) ? requestedInterval : 20000, 10000), 600000);
       const requestedLimit = Number(env?.SYMBOLIKA_MAIL_BACKGROUND_SYNC_LIMIT || 60);
@@ -882,6 +1031,16 @@ export default {
           .where('t.is_starred', true);
         starredCountQuery = applyFolderAccess(starredCountQuery, actor);
         const starredCountRow = await starredCountQuery.count('t.id as count').first();
+        const accessibleAccountIds = [...new Set(folders.map((folder) => Number(folder.mail_account)).filter(Number.isInteger))];
+        const configuredAccount = accessibleAccountIds.length
+          ? await database('symbolika_mail_accounts')
+            .whereIn('id', accessibleAccountIds)
+            .where('is_active', true)
+            .where((builder) => builder
+              .where((server) => server.where('use_server_credentials', true))
+              .orWhere((stored) => stored.whereNotNull('imap_password_encrypted').whereNotNull('smtp_password_encrypted')))
+            .first('id')
+          : null;
         return res.json({
           data: {
             actor: {
@@ -898,7 +1057,7 @@ export default {
               signature_defaults: signatureDefaults(actor, actor.email),
             },
             mode: mailMode(),
-            configured: Boolean(env?.SYMBOLIKA_IMAP_HOST && env?.SYMBOLIKA_IMAP_USER && env?.SYMBOLIKA_IMAP_PASSWORD),
+            configured: Boolean(configuredAccount),
             folders,
             selected_folder: starredScope ? null : (selected?.id || null),
             scope: starredScope ? 'starred' : 'folder',
@@ -1078,7 +1237,8 @@ export default {
         }
         if (update.is_archived === true) {
           let archiveQuery = database('symbolika_mail_folders as f')
-            .where('f.slug', 'archive')
+            .where('f.folder_type', 'archive')
+            .where('f.mail_account', thread.mail_account)
             .where('f.is_active', true)
             .select('f.id');
           archiveQuery = applyFolderAccess(archiveQuery, actor);
@@ -1125,22 +1285,24 @@ export default {
             ? 'У вас нет права отвечать из этой почтовой папки.'
             : 'У вас нет права отправлять письма из этой почтовой папки.');
         }
-        const storageFolder = replyThread ? folder : (await accessibleSystemFolder('sent', actor, 'send') || folder);
+        const account = await mailAccount(folder.mail_account);
+        if (!account) return apiError(res, 503, 'Для папки не выбран активный почтовый аккаунт.');
+        const storageFolder = replyThread ? folder : (await accessibleSystemFolder('sent', actor, 'send', account.id) || folder);
         const folderAlias = cleanText(folder.alias_email, 255).toLowerCase();
-        const fromAlias = cleanText(req.body?.from_alias || folderAlias || actor.sender_alias || env?.SYMBOLIKA_EMAIL_FROM || env?.SYMBOLIKA_SMTP_USER, 255).toLowerCase();
+        const accountEmail = cleanText(account.email, 255).toLowerCase();
+        const fromAlias = cleanText(req.body?.from_alias || folderAlias || accountEmail, 255).toLowerCase();
         if (!EMAIL_PATTERN.test(fromAlias)) return apiError(res, 400, 'Для папки не настроен адрес отправителя.');
-        const mainAlias = cleanText(env?.SYMBOLIKA_EMAIL_FROM || env?.SYMBOLIKA_SMTP_USER, 255).toLowerCase();
-        const configuredAliases = cleanText(env?.SYMBOLIKA_MAIL_ALLOWED_ALIASES, 10000)
-          .split(/[;,]/).map((value) => value.trim().toLowerCase()).filter(Boolean);
+        const accountAliases = await database('symbolika_mail_aliases')
+          .where('mail_account', account.id)
+          .where('is_active', true)
+          .select('email');
         const allowedAliases = new Set([
-          folderAlias,
-          ...(!folderAlias || actor.is_admin || Number(folder.employee) === Number(actor.employee_id)
-            ? [cleanText(actor.sender_alias, 255).toLowerCase(), mainAlias]
-            : []),
-          ...(actor.is_admin ? configuredAliases : []),
-        ].filter(Boolean));
+          accountEmail,
+          ...accountAliases.map((row) => cleanText(row.email, 255).toLowerCase()),
+          ...(account.use_server_credentials ? serverConfiguredAliases() : []),
+        ]);
         if (!allowedAliases.has(fromAlias)) {
-          return apiError(res, 403, 'Этот псевдоним не назначен выбранной почтовой папке.');
+          return apiError(res, 403, 'Этот адрес не принадлежит выбранному почтовому аккаунту.');
         }
         const signatureHtml = req.body?.include_signature === false ? '' : brandedSignatureHtml(actor, fromAlias);
         const signatureText = signaturePlainText(signatureHtml);
@@ -1150,9 +1312,15 @@ export default {
         let messageId = `<mock-${Date.now()}-${Math.random().toString(16).slice(2)}@symb62.ru>`;
         let delivered = false;
         if (mailMode() === 'imap') {
-          const transport = smtpSender();
-          if (!transport) return apiError(res, 503, 'SMTP не настроен. Проверьте серверные переменные почты.');
-          const envelopeFrom = smtpEnvelopeSender();
+          let transport;
+          try {
+            transport = smtpSender(account);
+          } catch (error) {
+            logger.error({ account: account.email, error: error?.message }, 'Symbolika mail SMTP credentials failed');
+            return apiError(res, 503, 'Не удалось прочитать настройки SMTP этого аккаунта.');
+          }
+          if (!transport) return apiError(res, 503, 'SMTP не настроен для выбранного почтового аккаунта.');
+          const envelopeFrom = smtpEnvelopeSender(account);
           if (!EMAIL_PATTERN.test(envelopeFrom)) return apiError(res, 503, 'Для SMTP не настроен адрес авторизованного ящика.');
           let result;
           try {
@@ -1239,11 +1407,18 @@ export default {
         const actor = await actorContext(req, res);
         if (!actor) return;
         if (mailMode() !== 'imap') return res.json({ data: { mode: 'mock', synced: 0, message: 'Демо-режим: тестовые письма уже загружены.' } });
-        if (!imapSettings().configured) return apiError(res, 503, 'IMAP не настроен.');
         const folders = (await folderRows(actor)).filter((folder) => folder.imap_name);
+        if (!folders.length) return apiError(res, 503, 'У доступных почтовых аккаунтов не настроены папки IMAP.');
         const perFolder = Math.min(Math.max(Number(req.body?.limit || 60), 1), 200);
         const result = await synchronizeImapFolders(folders, { actor, limit: perFolder });
-        return res.json({ data: { mode: 'imap', synced: result.synced } });
+        return res.json({ data: {
+          mode: 'imap',
+          synced: result.synced,
+          failed_accounts: result.failed_accounts,
+          message: result.failed_accounts?.length
+            ? `Синхронизация завершена, но не удалось подключиться: ${result.failed_accounts.join(', ')}.`
+            : undefined,
+        } });
       } catch (error) {
         return next(error);
       }
@@ -1418,6 +1593,8 @@ export default {
         });
         const folders = await folderRows(actor);
         const membersByFolder = await folderMembers(folders.map((folder) => folder.id));
+        const accounts = await database('symbolika_mail_accounts').orderBy('name').orderBy('email');
+        const accountAliases = await aliasesByAccount(accounts.map((account) => account.id));
         return res.json({
           data: {
             folders: folders.map((folder) => ({
@@ -1425,18 +1602,148 @@ export default {
               members: membersByFolder.get(Number(folder.id)) || [],
             })),
             employees,
+            accounts: accounts.map((account) => publicMailAccount(account, accountAliases.get(Number(account.id)) || [])),
             connection: {
               mode: mailMode(),
-              imap_host: env?.SYMBOLIKA_IMAP_HOST || '',
-              imap_port: Number(env?.SYMBOLIKA_IMAP_PORT || 993),
-              smtp_host: env?.SYMBOLIKA_SMTP_HOST || '',
-              smtp_port: Number(env?.SYMBOLIKA_SMTP_PORT || 465),
-              user: env?.SYMBOLIKA_IMAP_USER || env?.SYMBOLIKA_SMTP_USER || '',
-              password_configured: Boolean(env?.SYMBOLIKA_IMAP_PASSWORD || env?.SYMBOLIKA_SMTP_PASSWORD),
+              active_accounts: accounts.filter((account) => account.is_active).length,
+              configured_accounts: accounts.filter((account) => {
+                const view = publicMailAccount(account);
+                return account.is_active && view.imap_password_configured && view.smtp_password_configured;
+              }).length,
             },
           },
         });
       } catch (error) {
+        return next(error);
+      }
+    });
+
+    router.post('/accounts', async (req, res, next) => {
+      try {
+        const actor = await actorContext(req, res);
+        if (!actor) return;
+        if (!actor.is_admin) return apiError(res, 403, 'Подключать почтовые аккаунты может только администратор или управляющий.');
+        const email = cleanText(req.body?.email, 255).toLowerCase();
+        const name = cleanText(req.body?.name, 255) || email;
+        if (!EMAIL_PATTERN.test(email)) return apiError(res, 400, 'Укажите корректный адрес почтового аккаунта.');
+        const useServer = Boolean(req.body?.use_server_credentials);
+        const imapPassword = String(req.body?.imap_password || '');
+        const smtpPassword = String(req.body?.smtp_password || imapPassword || '');
+        if (!useServer && (!imapPassword || !smtpPassword)) return apiError(res, 400, 'Укажите пароли IMAP и SMTP.');
+        let aliases;
+        try { aliases = normalizeAccountAliases(req.body?.aliases, email); } catch (error) { return apiError(res, 400, error.message); }
+        const employee = Number(req.body?.employee || 0) || null;
+        let created;
+        await database.transaction(async (trx) => {
+          [created] = await trx('symbolika_mail_accounts').insert({
+            name, email, employee,
+            use_server_credentials: useServer,
+            imap_host: useServer ? null : cleanText(req.body?.imap_host, 255),
+            imap_port: Number(req.body?.imap_port || 993),
+            imap_secure: req.body?.imap_secure !== false,
+            imap_username: useServer ? null : cleanText(req.body?.imap_username || email, 255),
+            imap_password_encrypted: useServer ? null : encryptCredential(imapPassword),
+            smtp_host: useServer ? null : cleanText(req.body?.smtp_host, 255),
+            smtp_port: Number(req.body?.smtp_port || 465),
+            smtp_secure: req.body?.smtp_secure !== false,
+            smtp_username: useServer ? null : cleanText(req.body?.smtp_username || email, 255),
+            smtp_password_encrypted: useServer ? null : encryptCredential(smtpPassword),
+            is_active: true,
+            date_created: new Date(), date_updated: new Date(),
+          }).returning('*');
+          await replaceAccountAliases(trx, created.id, aliases);
+          const folderSpecs = [
+            ['inbox', 'Входящие', cleanText(req.body?.inbox_imap_name, 500) || 'INBOX', 10],
+            ['sent', 'Отправленные', cleanText(req.body?.sent_imap_name, 500) || 'Sent', 900],
+            ['archive', 'Архив', cleanText(req.body?.archive_imap_name, 500) || 'Archive', 950],
+          ];
+          for (const [folderType, folderName, imapName, sort] of folderSpecs) {
+            await trx('symbolika_mail_folders').insert({
+              slug: `account-${created.id}-${folderType}`,
+              name: `${folderName} — ${email}`,
+              imap_name: imapName,
+              alias_email: email,
+              mail_account: created.id,
+              folder_type: folderType,
+              employee,
+              is_shared: false,
+              is_system: true,
+              is_active: true,
+              sort: sort + Number(created.id) * 1000,
+              date_created: new Date(), date_updated: new Date(),
+            });
+          }
+          if (employee) {
+            await trx('symbolika_mail_folders')
+              .where('employee', employee)
+              .whereNull('imap_name')
+              .whereNot('mail_account', created.id)
+              .whereNotExists(function hasThreads() {
+                this.select(trx.raw('1')).from('symbolika_mail_threads as t').whereRaw('t.folder_id = symbolika_mail_folders.id');
+              })
+              .update({ is_active: false, date_updated: new Date() });
+          }
+        });
+        return res.status(201).json({ data: publicMailAccount(created, aliases) });
+      } catch (error) {
+        if (error?.code === '23505') return apiError(res, 409, 'Такой почтовый аккаунт или псевдоним уже подключен.');
+        return next(error);
+      }
+    });
+
+    router.patch('/accounts/:id', async (req, res, next) => {
+      try {
+        const actor = await actorContext(req, res);
+        if (!actor) return;
+        if (!actor.is_admin) return apiError(res, 403, 'Изменять почтовые аккаунты может только администратор или управляющий.');
+        const current = await database('symbolika_mail_accounts').where('id', Number(req.params.id)).first();
+        if (!current) return apiError(res, 404, 'Почтовый аккаунт не найден.');
+        const email = cleanText(req.body?.email ?? current.email, 255).toLowerCase();
+        if (!EMAIL_PATTERN.test(email)) return apiError(res, 400, 'Укажите корректный адрес почтового аккаунта.');
+        let aliases;
+        try { aliases = normalizeAccountAliases(req.body?.aliases ?? [], email); } catch (error) { return apiError(res, 400, error.message); }
+        const useServer = Object.prototype.hasOwnProperty.call(req.body || {}, 'use_server_credentials')
+          ? Boolean(req.body.use_server_credentials) : Boolean(current.use_server_credentials);
+        const update = {
+          name: cleanText(req.body?.name ?? current.name, 255) || email,
+          email,
+          employee: Number(req.body?.employee || 0) || null,
+          use_server_credentials: useServer,
+          imap_host: useServer ? null : cleanText(req.body?.imap_host ?? current.imap_host, 255),
+          imap_port: Number(req.body?.imap_port || current.imap_port || 993),
+          imap_secure: req.body?.imap_secure === undefined ? Boolean(current.imap_secure) : Boolean(req.body.imap_secure),
+          imap_username: useServer ? null : cleanText(req.body?.imap_username ?? current.imap_username ?? email, 255),
+          smtp_host: useServer ? null : cleanText(req.body?.smtp_host ?? current.smtp_host, 255),
+          smtp_port: Number(req.body?.smtp_port || current.smtp_port || 465),
+          smtp_secure: req.body?.smtp_secure === undefined ? Boolean(current.smtp_secure) : Boolean(req.body.smtp_secure),
+          smtp_username: useServer ? null : cleanText(req.body?.smtp_username ?? current.smtp_username ?? email, 255),
+          is_active: req.body?.is_active === undefined ? Boolean(current.is_active) : Boolean(req.body.is_active),
+          date_updated: new Date(),
+        };
+        if (useServer) {
+          update.imap_password_encrypted = null;
+          update.smtp_password_encrypted = null;
+        } else {
+          if (req.body?.imap_password) update.imap_password_encrypted = encryptCredential(req.body.imap_password);
+          if (req.body?.smtp_password) update.smtp_password_encrypted = encryptCredential(req.body.smtp_password);
+          if (req.body?.clear_imap_password) update.imap_password_encrypted = null;
+          if (req.body?.clear_smtp_password) update.smtp_password_encrypted = null;
+        }
+        await database.transaction(async (trx) => {
+          await trx('symbolika_mail_accounts').where('id', current.id).update(update);
+          await replaceAccountAliases(trx, current.id, aliases);
+          await trx('symbolika_mail_folders')
+            .where('mail_account', current.id)
+            .update({
+              employee: update.employee,
+              alias_email: trx.raw('CASE WHEN lower(alias_email) = lower(?) THEN ? ELSE alias_email END', [current.email, email]),
+              date_updated: new Date(),
+            });
+        });
+        const saved = await database('symbolika_mail_accounts').where('id', current.id).first();
+        return res.json({ data: publicMailAccount(saved, aliases) });
+      } catch (error) {
+        if (error?.code === '23505') return apiError(res, 409, 'Такой почтовый аккаунт или псевдоним уже подключен.');
         return next(error);
       }
     });
@@ -1456,9 +1763,16 @@ export default {
           if (value && !EMAIL_PATTERN.test(value)) return apiError(res, 400, 'Некорректный адрес псевдонима.');
           update.alias_email = value || null;
         }
+        if ('mail_account' in (req.body || {})) update.mail_account = Number(req.body.mail_account || 0) || null;
+        if ('folder_type' in (req.body || {})) {
+          const folderType = cleanText(req.body.folder_type, 30);
+          update.folder_type = ['inbox', 'sent', 'archive', 'custom'].includes(folderType) ? folderType : 'custom';
+        }
         if ('employee' in (req.body || {})) update.employee = Number(req.body.employee || 0) || null;
         if ('is_shared' in (req.body || {})) update.is_shared = Boolean(req.body.is_shared);
         if ('is_active' in (req.body || {})) update.is_active = Boolean(req.body.is_active);
+        const targetAccount = update.mail_account ?? current.mail_account;
+        try { await assertAccountSender(targetAccount, update.alias_email ?? current.alias_email); } catch (error) { return apiError(res, 400, error.message); }
         await database.transaction(async (trx) => {
           await trx('symbolika_mail_folders').where('id', current.id).update(update);
           if (Object.prototype.hasOwnProperty.call(req.body || {}, 'members')) {
@@ -1481,6 +1795,10 @@ export default {
         if (!name) return apiError(res, 400, 'Укажите название папки.');
         const aliasEmail = cleanText(req.body?.alias_email, 255).toLowerCase();
         if (aliasEmail && !EMAIL_PATTERN.test(aliasEmail)) return apiError(res, 400, 'Некорректный адрес псевдонима.');
+        const accountId = Number(req.body?.mail_account || 0);
+        if (!accountId) return apiError(res, 400, 'Выберите почтовый аккаунт.');
+        let account;
+        try { account = await assertAccountSender(accountId, aliasEmail); } catch (error) { return apiError(res, 400, error.message); }
         const baseSlug = cleanText(name, 120).toLowerCase()
           .replace(/[^a-zа-яё0-9]+/gi, '-')
           .replace(/^-+|-+$/g, '') || 'folder';
@@ -1494,7 +1812,9 @@ export default {
             slug,
             name,
             imap_name: cleanText(req.body?.imap_name, 500) || null,
-            alias_email: aliasEmail || null,
+            alias_email: aliasEmail || account.email,
+            mail_account: accountId,
+            folder_type: 'custom',
             employee: Number(req.body?.employee || 0) || null,
             is_shared: Boolean(req.body?.is_shared),
             is_system: false,
