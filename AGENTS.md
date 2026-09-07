@@ -55,6 +55,8 @@ symbolika-db
 - `symbolika_directus_clean_install/extensions/symbolika-contact-duplicates/` — админский endpoint поиска и транзакционного объединения дублей клиентов и компаний с переносом связанных данных.
 - `symbolika_directus_clean_install/extensions/symbolika-mail/` — защищённый почтовый endpoint; доступ строится по владельцу и участникам папки, а не по роли сотрудника.
 - `symbolika_directus_clean_install/extensions/symbolika-push/` — push и внешние уведомления, включая VK.
+- `symbolika_directus_clean_install/extensions/symbolika-mail/` — встроенная почта: несколько IMAP/SMTP-аккаунтов, псевдонимы, папки и серверная проверка прав.
+- `symbolika_directus_clean_install/extensions/symbolika-mail-module/` — интерфейс почты и административные настройки аккаунтов, псевдонимов и доступа сотрудников.
 
 ## Рабочие модули
 
