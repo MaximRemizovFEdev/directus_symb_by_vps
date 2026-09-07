@@ -8,7 +8,6 @@ import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const MAIL_ROLES = new Set(['Administrator', 'Управляющий', 'Менеджер']);
 const ADMIN_ROLES = new Set(['Administrator', 'Управляющий']);
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const MAIL_ATTACHMENT_ROOT = '/directus/uploads/symbolika-mail';
@@ -342,14 +341,19 @@ export default {
         .select(
           'u.id as user_id', 'u.email', 'u.first_name', 'u.last_name', 'u.avatar',
           'r.name as role_name', 'e.id as employee_id', 'e.full_name as employee_name',
+          'e.is_active as employee_is_active',
           'e.email_signature', 'e.email_signature_settings', 'e.public_position', 'e.phone as employee_phone',
         )
         .first();
-      if (!actor || !MAIL_ROLES.has(actor.role_name)) {
-        apiError(res, 403, 'Почта доступна администраторам, управляющим и менеджерам.');
+      if (!actor) {
+        apiError(res, 403, 'Почта недоступна для текущего пользователя.');
         return null;
       }
       actor.is_admin = ADMIN_ROLES.has(actor.role_name);
+      if (!actor.is_admin && (!actor.employee_id || actor.employee_is_active === false)) {
+        apiError(res, 403, 'Почта доступна активным сотрудникам с учетной записью.');
+        return null;
+      }
       actor.name = actor.employee_name
         || [actor.first_name, actor.last_name].filter(Boolean).join(' ')
         || actor.email;
@@ -376,30 +380,62 @@ export default {
       return actor;
     };
 
-    const applyFolderAccess = (query, actor, alias = 'f') => {
+    const permissionColumn = (permission = 'read') => ({
+      read: 'can_read',
+      reply: 'can_reply',
+      send: 'can_send',
+    }[permission] || 'can_read');
+
+    const folderAccess = async (folder, actor) => {
+      if (!folder) return { read: false, reply: false, send: false };
+      if (actor.is_admin || Number(folder.employee) === Number(actor.employee_id)) {
+        return { read: true, reply: true, send: true };
+      }
+      if (!actor.employee_id) return { read: false, reply: false, send: false };
+      const member = await database('symbolika_mail_folder_members')
+        .where({ folder_id: folder.id, employee: actor.employee_id })
+        .first('can_read', 'can_reply', 'can_send');
+      return {
+        read: Boolean(member?.can_read),
+        reply: Boolean(member?.can_reply),
+        send: Boolean(member?.can_send),
+      };
+    };
+
+    const applyFolderAccess = (query, actor, alias = 'f', permission = 'read') => {
       if (actor.is_admin) return query;
+      const permissionField = permissionColumn(permission);
+      if (!actor.employee_id) return query.whereRaw('false');
       return query.where((builder) => {
-        builder.where(`${alias}.is_shared`, true);
-        if (actor.employee_id) builder.orWhere(`${alias}.employee`, actor.employee_id);
+        builder.where(`${alias}.employee`, actor.employee_id)
+          .orWhereExists(function memberFolderAccess() {
+            this.select(database.raw('1'))
+              .from('symbolika_mail_folder_members as mail_member')
+              .whereRaw(`mail_member.folder_id = ${alias}.id`)
+              .where('mail_member.employee', actor.employee_id)
+              .where(`mail_member.${permissionField}`, true);
+          });
       });
     };
 
-    const accessibleFolder = async (folderId, actor) => {
+    const accessibleFolder = async (folderId, actor, permission = 'read') => {
       let query = database('symbolika_mail_folders as f')
         .where('f.id', Number(folderId))
         .where('f.is_active', true)
         .select('f.*');
-      query = applyFolderAccess(query, actor);
-      return query.first();
+      query = applyFolderAccess(query, actor, 'f', permission);
+      const folder = await query.first();
+      return folder ? { ...folder, access: await folderAccess(folder, actor) } : null;
     };
 
-    const accessibleSystemFolder = async (slug, actor) => {
+    const accessibleSystemFolder = async (slug, actor, permission = 'read') => {
       let query = database('symbolika_mail_folders as f')
         .where('f.slug', slug)
         .where('f.is_active', true)
         .select('f.*');
-      query = applyFolderAccess(query, actor);
-      return query.first();
+      query = applyFolderAccess(query, actor, 'f', permission);
+      const folder = await query.first();
+      return folder ? { ...folder, access: await folderAccess(folder, actor) } : null;
     };
 
     const accessibleThread = async (threadId, actor) => {
@@ -408,7 +444,10 @@ export default {
         .where('t.id', Number(threadId))
         .select('t.*', 'f.name as folder_name', 'f.alias_email', 'f.employee as folder_employee');
       query = applyFolderAccess(query, actor);
-      return query.first();
+      const thread = await query.first();
+      if (!thread) return null;
+      thread.access = await folderAccess({ id: thread.folder_id, employee: thread.folder_employee }, actor);
+      return thread;
     };
 
     const folderRows = async (actor) => {
@@ -430,11 +469,65 @@ export default {
           .sum({ unread: database.raw('CASE WHEN is_unread THEN 1 ELSE 0 END') })
         : [];
       const byFolder = new Map(counts.map((row) => [Number(row.folder_id), row]));
-      return folders.map((folder) => ({
+      return Promise.all(folders.map(async (folder) => ({
         ...folder,
+        access: await folderAccess(folder, actor),
         total: Number(byFolder.get(Number(folder.id))?.total || 0),
         unread: Number(byFolder.get(Number(folder.id))?.unread || 0),
+      })));
+    };
+
+    const folderMembers = async (folderIds) => {
+      const ids = [...new Set((folderIds || []).map(Number).filter(Number.isInteger))];
+      if (!ids.length) return new Map();
+      const rows = await database('symbolika_mail_folder_members as member')
+        .join('employees as e', 'e.id', 'member.employee')
+        .whereIn('member.folder_id', ids)
+        .select(
+          'member.folder_id', 'member.employee', 'member.can_read', 'member.can_reply', 'member.can_send',
+          'e.full_name as employee_name',
+        )
+        .orderBy('e.full_name');
+      const result = new Map(ids.map((id) => [id, []]));
+      rows.forEach((row) => result.get(Number(row.folder_id))?.push({
+        employee: Number(row.employee),
+        employee_name: row.employee_name,
+        can_read: Boolean(row.can_read),
+        can_reply: Boolean(row.can_reply),
+        can_send: Boolean(row.can_send),
       }));
+      return result;
+    };
+
+    const syncFolderMembers = async (trx, folderId, ownerId, input) => {
+      const requested = new Map();
+      jsonArray(input).forEach((row) => {
+        const employee = Number(row?.employee || 0);
+        if (!Number.isInteger(employee) || employee <= 0 || employee === Number(ownerId)) return;
+        const canReply = Boolean(row?.can_reply);
+        const canSend = Boolean(row?.can_send);
+        requested.set(employee, {
+          folder_id: folderId,
+          employee,
+          can_read: Boolean(row?.can_read) || canReply || canSend,
+          can_reply: canReply,
+          can_send: canSend,
+          date_created: new Date(),
+          date_updated: new Date(),
+        });
+      });
+      const employeeIds = [...requested.keys()];
+      const activeIds = employeeIds.length
+        ? new Set((await trx('employees as e')
+          .join('directus_users as u', 'u.id', 'e.directus_user')
+          .whereIn('e.id', employeeIds)
+          .where('e.is_active', true)
+          .where('u.status', 'active')
+          .pluck('e.id')).map(Number))
+        : new Set();
+      await trx('symbolika_mail_folder_members').where('folder_id', folderId).delete();
+      const members = [...requested.values()].filter((row) => activeIds.has(row.employee));
+      if (members.length) await trx('symbolika_mail_folder_members').insert(members);
     };
 
     const threadQuery = (actor) => {
@@ -453,17 +546,27 @@ export default {
     };
 
     const mailNotificationRecipients = async (folder) => {
-      if (folder?.employee) {
-        const owner = await database('employees').where('id', folder.employee).whereNotNull('directus_user').first('directus_user');
-        return owner?.directus_user ? [owner.directus_user] : [];
+      if (!folder) return [];
+      const recipients = new Set();
+      if (folder.employee) {
+        const owner = await database('employees as e')
+          .join('directus_users as u', 'u.id', 'e.directus_user')
+          .where('e.id', folder.employee)
+          .where('e.is_active', true)
+          .where('u.status', 'active')
+          .first('u.id');
+        if (owner?.id) recipients.add(owner.id);
       }
-      if (!folder?.is_shared) return [];
-      const users = await database('directus_users as u')
-        .join('directus_roles as r', 'r.id', 'u.role')
+      const members = await database('symbolika_mail_folder_members as member')
+        .join('employees as e', 'e.id', 'member.employee')
+        .join('directus_users as u', 'u.id', 'e.directus_user')
+        .where('member.folder_id', folder.id)
+        .where('member.can_read', true)
         .where('u.status', 'active')
-        .whereIn('r.name', [...MAIL_ROLES])
-        .select('u.id');
-      return users.map((row) => row.id);
+        .where('e.is_active', true)
+        .distinct('u.id');
+      members.forEach((row) => recipients.add(row.id));
+      return [...recipients];
     };
 
     const mailTopicEnabled = async (userId) => {
@@ -1011,20 +1114,30 @@ export default {
         const body = cleanText(req.body?.body, 200000);
         if (!body && !outgoingAttachments.length) return apiError(res, 400, 'Введите текст письма или прикрепите файл.');
 
-        const replyThread = req.body?.thread_id ? await accessibleThread(req.body.thread_id, actor) : null;
+        const requestedThreadId = Number(req.body?.thread_id || 0);
+        const replyThread = requestedThreadId ? await accessibleThread(requestedThreadId, actor) : null;
+        if (requestedThreadId && !replyThread) return apiError(res, 404, 'Переписка не найдена или недоступна.');
         const requestedFolderId = Number(req.body?.folder_id || replyThread?.folder_id || 0);
-        const folder = await accessibleFolder(requestedFolderId, actor);
-        if (!folder) return apiError(res, 400, 'Выберите доступную почтовую папку.');
-        const storageFolder = replyThread ? folder : (await accessibleSystemFolder('sent', actor) || folder);
-        const fromAlias = cleanText(req.body?.from_alias || actor.sender_alias || folder.alias_email || env?.SYMBOLIKA_EMAIL_FROM || env?.SYMBOLIKA_SMTP_USER, 255).toLowerCase();
+        const requiredPermission = replyThread ? 'reply' : 'send';
+        const folder = await accessibleFolder(requestedFolderId, actor, requiredPermission);
+        if (!folder) {
+          return apiError(res, 403, replyThread
+            ? 'У вас нет права отвечать из этой почтовой папки.'
+            : 'У вас нет права отправлять письма из этой почтовой папки.');
+        }
+        const storageFolder = replyThread ? folder : (await accessibleSystemFolder('sent', actor, 'send') || folder);
+        const folderAlias = cleanText(folder.alias_email, 255).toLowerCase();
+        const fromAlias = cleanText(req.body?.from_alias || folderAlias || actor.sender_alias || env?.SYMBOLIKA_EMAIL_FROM || env?.SYMBOLIKA_SMTP_USER, 255).toLowerCase();
         if (!EMAIL_PATTERN.test(fromAlias)) return apiError(res, 400, 'Для папки не настроен адрес отправителя.');
+        const mainAlias = cleanText(env?.SYMBOLIKA_EMAIL_FROM || env?.SYMBOLIKA_SMTP_USER, 255).toLowerCase();
         const configuredAliases = cleanText(env?.SYMBOLIKA_MAIL_ALLOWED_ALIASES, 10000)
           .split(/[;,]/).map((value) => value.trim().toLowerCase()).filter(Boolean);
         const allowedAliases = new Set([
-          cleanText(folder.alias_email, 255).toLowerCase(),
-          cleanText(actor.sender_alias, 255).toLowerCase(),
-          cleanText(env?.SYMBOLIKA_EMAIL_FROM || env?.SYMBOLIKA_SMTP_USER, 255).toLowerCase(),
-          ...configuredAliases,
+          folderAlias,
+          ...(!folderAlias || actor.is_admin || Number(folder.employee) === Number(actor.employee_id)
+            ? [cleanText(actor.sender_alias, 255).toLowerCase(), mainAlias]
+            : []),
+          ...(actor.is_admin ? configuredAliases : []),
         ].filter(Boolean));
         if (!allowedAliases.has(fromAlias)) {
           return apiError(res, 403, 'Этот псевдоним не назначен выбранной почтовой папке.');
@@ -1291,17 +1404,26 @@ export default {
         const employees = await database('employees as e')
           .leftJoin('directus_users as u', 'u.id', 'e.directus_user')
           .where('e.is_active', true)
-          .select('e.id', 'e.full_name', 'e.email_signature', 'e.email_signature_settings', 'e.public_position', 'e.phone', 'u.email')
+          .select(
+            'e.id', 'e.full_name', 'e.email_signature', 'e.email_signature_settings', 'e.public_position', 'e.phone',
+            'u.id as user_id', 'u.email', 'u.status as user_status',
+          )
           .orderBy('e.full_name');
         employees.forEach((employee) => {
+          employee.mail_enabled = Boolean(employee.user_id && employee.user_status === 'active');
           employee.email_signature = sanitizeSignatureHtml(employee.email_signature);
           employee.signature_settings = signatureSettings(employee, employee.email);
           employee.signature_defaults = signatureDefaults(employee, employee.email);
           employee.signature_preview = brandedSignatureHtml(employee, employee.email);
         });
+        const folders = await folderRows(actor);
+        const membersByFolder = await folderMembers(folders.map((folder) => folder.id));
         return res.json({
           data: {
-            folders: await folderRows(actor),
+            folders: folders.map((folder) => ({
+              ...folder,
+              members: membersByFolder.get(Number(folder.id)) || [],
+            })),
             employees,
             connection: {
               mode: mailMode(),
@@ -1337,8 +1459,14 @@ export default {
         if ('employee' in (req.body || {})) update.employee = Number(req.body.employee || 0) || null;
         if ('is_shared' in (req.body || {})) update.is_shared = Boolean(req.body.is_shared);
         if ('is_active' in (req.body || {})) update.is_active = Boolean(req.body.is_active);
-        await database('symbolika_mail_folders').where('id', current.id).update(update);
-        return res.json({ data: { id: current.id, ...update } });
+        await database.transaction(async (trx) => {
+          await trx('symbolika_mail_folders').where('id', current.id).update(update);
+          if (Object.prototype.hasOwnProperty.call(req.body || {}, 'members')) {
+            await syncFolderMembers(trx, current.id, update.employee ?? current.employee, req.body.members);
+          }
+        });
+        const membersByFolder = await folderMembers([current.id]);
+        return res.json({ data: { id: current.id, ...update, members: membersByFolder.get(Number(current.id)) || [] } });
       } catch (error) {
         return next(error);
       }
@@ -1360,20 +1488,25 @@ export default {
         let suffix = 2;
         while (await database('symbolika_mail_folders').where('slug', slug).first('id')) slug = `${baseSlug}-${suffix++}`;
         const maxSort = await database('symbolika_mail_folders').max('sort as value').first();
-        const [created] = await database('symbolika_mail_folders').insert({
-          slug,
-          name,
-          imap_name: cleanText(req.body?.imap_name, 500) || null,
-          alias_email: aliasEmail || null,
-          employee: Number(req.body?.employee || 0) || null,
-          is_shared: Boolean(req.body?.is_shared),
-          is_system: false,
-          is_active: true,
-          sort: Number(maxSort?.value || 100) + 10,
-          date_created: new Date(),
-          date_updated: new Date(),
-        }).returning('*');
-        return res.status(201).json({ data: created });
+        let created;
+        await database.transaction(async (trx) => {
+          [created] = await trx('symbolika_mail_folders').insert({
+            slug,
+            name,
+            imap_name: cleanText(req.body?.imap_name, 500) || null,
+            alias_email: aliasEmail || null,
+            employee: Number(req.body?.employee || 0) || null,
+            is_shared: Boolean(req.body?.is_shared),
+            is_system: false,
+            is_active: true,
+            sort: Number(maxSort?.value || 100) + 10,
+            date_created: new Date(),
+            date_updated: new Date(),
+          }).returning('*');
+          await syncFolderMembers(trx, created.id, created.employee, req.body?.members);
+        });
+        const membersByFolder = await folderMembers([created.id]);
+        return res.status(201).json({ data: { ...created, members: membersByFolder.get(Number(created.id)) || [] } });
       } catch (error) {
         return next(error);
       }

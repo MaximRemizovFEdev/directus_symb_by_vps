@@ -121,7 +121,7 @@ const MailWorkspace = {
       settings: null,
       savingFolderId: null,
       creatingFolder: false,
-      newFolder: { name: '', imap_name: '', alias_email: '', employee: null, is_shared: false },
+      newFolder: { name: '', imap_name: '', alias_email: '', employee: null, is_shared: false, members: [] },
       savingSignatureEmployeeId: null,
     };
   },
@@ -130,6 +130,21 @@ const MailWorkspace = {
     selectedFolder() {
       if (this.mailboxScope === 'starred') return null;
       return this.folders.find((row) => Number(row.id) === Number(this.selectedFolderId)) || null;
+    },
+    mailEmployees() {
+      return (this.settings?.employees || []).filter((employee) => employee.mail_enabled);
+    },
+    selectedThreadFolder() {
+      return this.folders.find((row) => Number(row.id) === Number(this.selectedThread?.folder_id)) || null;
+    },
+    canCompose() {
+      return this.folders.some((folder) => folder.access?.send);
+    },
+    canReplySelectedThread() {
+      return Boolean(this.selectedThreadFolder?.access?.reply);
+    },
+    canForwardSelectedThread() {
+      return Boolean(this.selectedThreadFolder?.access?.send);
     },
     currentSenderAlias() {
       return this.composer.from_alias || this.defaultSenderAlias;
@@ -428,13 +443,18 @@ const MailWorkspace = {
     },
 
     openForwardComposer(thread) {
+      const folder = this.folders.find((row) => Number(row.id) === Number(thread?.folder_id || this.selectedFolderId));
+      if (!folder?.access?.send) {
+        this.error = 'У вас нет права отправлять письма из этой папки.';
+        return;
+      }
       const lastMessage = this.messages[this.messages.length - 1] || {};
       const forwardedFiles = (lastMessage.attachments || []).map((file) => file.name).filter(Boolean);
       const attachmentNote = forwardedFiles.length ? `\nВложения исходного письма: ${forwardedFiles.join(', ')}` : '';
       this.composer = {
         thread_id: null,
-        folder_id: thread?.folder_id || this.selectedFolderId,
-        from_alias: this.defaultSenderAlias,
+        folder_id: folder.id,
+        from_alias: this.senderAliasForFolder(folder),
         to: '',
         subject: /^fwd:/i.test(thread?.subject || '') ? thread.subject : `Fwd: ${thread?.subject || ''}`,
         body: `\n\n---------- Пересланное письмо ----------\nОт: ${lastMessage.from_name || lastMessage.from_email || ''}\nДата: ${this.formatDate(lastMessage.sent_at, true)}\nТема: ${lastMessage.subject || thread?.subject || ''}${attachmentNote}\n\n${lastMessage.body_text || ''}`,
@@ -614,13 +634,23 @@ const MailWorkspace = {
     },
 
     openComposer(thread = null) {
+      const requestedFolder = this.folders.find((row) => Number(row.id) === Number(thread?.folder_id || this.selectedFolderId));
+      const folder = requestedFolder?.access?.[thread ? 'reply' : 'send']
+        ? requestedFolder
+        : (!thread ? this.folders.find((row) => row.access?.send) : null);
+      if (!folder) {
+        this.error = thread
+          ? 'У вас нет права отвечать из этой почтовой папки.'
+          : 'У вас нет почтовой папки с правом отправки.';
+        return;
+      }
       const participant = thread?.participants?.find((row) => row.email && !row.email.endsWith('@symb62.ru'))
         || thread?.participants?.[0]
         || {};
       this.composer = {
         thread_id: thread?.id || null,
-        folder_id: thread?.folder_id || this.selectedFolderId,
-        from_alias: this.defaultSenderAlias,
+        folder_id: folder.id,
+        from_alias: this.senderAliasForFolder(folder),
         to: participant.email || '',
         subject: thread ? (/^re:/i.test(thread.subject) ? thread.subject : `Re: ${thread.subject}`) : '',
         body: '',
@@ -776,6 +806,7 @@ const MailWorkspace = {
             employee: folder.employee,
             is_shared: folder.is_shared,
             is_active: folder.is_active,
+            members: folder.members || [],
           }),
         });
         this.notice = `Папка «${folder.name}» сохранена.`;
@@ -799,7 +830,7 @@ const MailWorkspace = {
           method: 'POST',
           body: JSON.stringify(this.newFolder),
         });
-        this.newFolder = { name: '', imap_name: '', alias_email: '', employee: null, is_shared: false };
+        this.newFolder = { name: '', imap_name: '', alias_email: '', employee: null, is_shared: false, members: [] };
         this.settings.folders.push(created);
         this.notice = `Папка «${created.name}» создана.`;
         await this.loadMailbox(false, true);
@@ -807,6 +838,38 @@ const MailWorkspace = {
         this.error = error.message;
       } finally {
         this.creatingFolder = false;
+      }
+    },
+
+    folderMember(folder, employeeId) {
+      return (folder?.members || []).find((row) => Number(row.employee) === Number(employeeId)) || null;
+    },
+
+    senderAliasForFolder(folder) {
+      return folder?.alias_email || this.defaultSenderAlias;
+    },
+
+    folderMemberPermission(folder, employeeId, permission) {
+      return Boolean(this.folderMember(folder, employeeId)?.[permission]);
+    },
+
+    setFolderMemberPermission(folder, employeeId, permission, checked) {
+      if (!folder) return;
+      if (!Array.isArray(folder.members)) folder.members = [];
+      let member = this.folderMember(folder, employeeId);
+      if (!member && checked) {
+        member = { employee: Number(employeeId), can_read: false, can_reply: false, can_send: false };
+        folder.members.push(member);
+      }
+      if (!member) return;
+      member[permission] = Boolean(checked);
+      if (checked && (permission === 'can_reply' || permission === 'can_send')) member.can_read = true;
+      if (!checked && permission === 'can_read') {
+        member.can_reply = false;
+        member.can_send = false;
+      }
+      if (!member.can_read && !member.can_reply && !member.can_send) {
+        folder.members = folder.members.filter((row) => Number(row.employee) !== Number(employeeId));
       }
     },
 
@@ -1144,9 +1207,16 @@ const MailWorkspace = {
         .symbolika-mail-signature-row strong, .symbolika-mail-signature-row small { display: block; }
         .symbolika-mail-signature-row small { margin-block-start: 4px; color: var(--theme--foreground-subdued); font-size: 10px; }
         .symbolika-mail-signature-summary { min-block-size: 52px; max-block-size: 76px; overflow: hidden; padding: 9px 11px; border: 1px solid var(--theme--border-color-subdued); border-radius: 9px; background: var(--theme--background); color: var(--theme--foreground-subdued); font-size: 11px; line-height: 1.4; }
-        .symbolika-mail-settings-folder { display: grid; grid-template-columns: 1.1fr 1.2fr 1.2fr 1fr auto auto; align-items: end; gap: 9px; padding: 12px 0; border-block-start: 1px solid var(--theme--border-color-subdued); }
+        .symbolika-mail-settings-folder { display: grid; gap: 13px; padding: 14px 0; border-block-start: 1px solid var(--theme--border-color-subdued); }
         .symbolika-mail-settings-folder.is-new { margin-block: 12px 4px; padding: 14px; border: 1px dashed rgb(249 115 22 / .45); border-radius: 12px; background: rgb(249 115 22 / .055); }
         .symbolika-mail-settings-folder.is-new .symbolika-mail-button { border-color: #F97316; }
+        .symbolika-mail-folder-fields { display: grid; grid-template-columns: 1.1fr 1.2fr 1.2fr 1fr auto auto; align-items: end; gap: 9px; }
+        .symbolika-mail-folder-members { padding: 11px; border: 1px solid var(--theme--border-color-subdued); border-radius: 10px; background: var(--theme--background); }
+        .symbolika-mail-folder-members > strong { display: block; margin-block-end: 8px; font-size: 11px; }
+        .symbolika-mail-folder-member { display: grid; grid-template-columns: minmax(180px, 1fr) repeat(3, auto); align-items: center; gap: 14px; min-block-size: 34px; padding: 4px 2px; border-block-start: 1px solid var(--theme--border-color-subdued); }
+        .symbolika-mail-folder-member:first-of-type { border-block-start: 0; }
+        .symbolika-mail-folder-member > span { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 720; }
+        .symbolika-mail-folder-member .symbolika-mail-checkbox { min-block-size: 28px; font-size: 10px; }
         .symbolika-mail-checkbox { display: inline-flex; align-items: center; gap: 7px; min-block-size: 42px; color: var(--theme--foreground); font-size: 11px; font-weight: 700; white-space: nowrap; }
         .symbolika-mail-loading { display: grid; place-items: center; min-block-size: 240px; color: var(--theme--foreground-subdued); }
         .symbolika-mail-empty-list { padding: 38px 20px; color: var(--theme--foreground-subdued); text-align: center; font-size: 12px; }
@@ -1326,10 +1396,10 @@ const MailWorkspace = {
           .symbolika-mail-sync-state, .symbolika-mail-top-actions > .symbolika-mail-mode { display: none; }
           .symbolika-mail-reader-actions .symbolika-mail-button-label { display: none; }
           .symbolika-mail-settings-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-          .symbolika-mail-settings-folder { grid-template-columns: 1fr 1fr; }
+          .symbolika-mail-folder-fields { grid-template-columns: 1fr 1fr; }
           .symbolika-mail-signature-row { grid-template-columns: 160px minmax(240px, 1fr); }
           .symbolika-mail-signature-row > button { grid-column: 2; justify-self: end; }
-          .symbolika-mail-settings-folder > button { justify-self: end; }
+          .symbolika-mail-folder-fields > button { justify-self: end; }
         }
         @media (max-width: 760px) {
           .symbolika-mail-signature-grid { grid-template-columns: 1fr; }
@@ -1362,7 +1432,8 @@ const MailWorkspace = {
           .symbolika-mail-message-head time { grid-column: 2; }
           .symbolika-mail-reply-bar { padding: 10px 14px; }
           .symbolika-mail-settings-summary { grid-template-columns: 1fr; }
-          .symbolika-mail-settings-folder { grid-template-columns: 1fr; }
+          .symbolika-mail-folder-fields { grid-template-columns: 1fr; }
+          .symbolika-mail-folder-member { grid-template-columns: 1fr; gap: 3px; padding-block: 9px; }
           .symbolika-mail-signature-row { grid-template-columns: 1fr; }
           .symbolika-mail-signature-row > button { grid-column: auto; }
           .symbolika-mail-field-grid { grid-template-columns: 1fr; }
@@ -1393,7 +1464,7 @@ const MailWorkspace = {
             <span>Почта</span>
             <small v-if="totalUnread">{{ totalUnread }} новых</small>
           </div>
-          <button type="button" class="symbolika-mail-button is-primary symbolika-mail-side-compose" @click="openComposer()">
+          <button type="button" class="symbolika-mail-button is-primary symbolika-mail-side-compose" :disabled="!canCompose" :title="canCompose ? 'Написать письмо' : 'Нет папки с правом отправки'" @click="openComposer()">
             <v-icon name="edit" small /> Написать
           </button>
           <div class="symbolika-mail-side-section-label">Быстрый доступ</div>
@@ -1507,10 +1578,10 @@ const MailWorkspace = {
                     </div>
                     <div class="symbolika-mail-reader-actions">
                       <button type="button" class="symbolika-mail-icon-button" title="Связи, папка и теги" @click="openLinkDialog"><v-icon name="link" small /></button>
-                      <button type="button" class="symbolika-mail-icon-button" title="Переслать" @click="openForwardComposer(selectedThread)"><v-icon name="forward" small /></button>
+                      <button type="button" class="symbolika-mail-icon-button" :disabled="!canForwardSelectedThread" title="Переслать" @click="openForwardComposer(selectedThread)"><v-icon name="forward" small /></button>
                       <button type="button" class="symbolika-mail-icon-button" :title="selectedThread.is_starred ? 'Убрать из избранного' : 'В избранное'" @click="patchThread(selectedThread, { is_starred: !selectedThread.is_starred })"><v-icon :name="selectedThread.is_starred ? 'star' : 'star_outline'" small /></button>
                       <button type="button" class="symbolika-mail-icon-button" title="Архивировать" @click="patchThread(selectedThread, { is_archived: true })"><v-icon name="archive" small /></button>
-                      <button type="button" class="symbolika-mail-button is-primary" @click="openComposer(selectedThread)"><v-icon name="reply" small /><span class="symbolika-mail-button-label">Ответить</span></button>
+                      <button type="button" class="symbolika-mail-button is-primary" :disabled="!canReplySelectedThread" @click="openComposer(selectedThread)"><v-icon name="reply" small /><span class="symbolika-mail-button-label">Ответить</span></button>
                     </div>
                   </div>
                   <div class="symbolika-mail-links">
@@ -1552,7 +1623,7 @@ const MailWorkspace = {
                     </div>
                   </article>
                 </div>
-                <div class="symbolika-mail-reply-bar"><button type="button" class="symbolika-mail-button is-primary" @click="openComposer(selectedThread)"><v-icon name="reply" small /> Ответить</button></div>
+                <div class="symbolika-mail-reply-bar"><button type="button" class="symbolika-mail-button is-primary" :disabled="!canReplySelectedThread" @click="openComposer(selectedThread)"><v-icon name="reply" small /> Ответить</button></div>
               </template>
             </section>
           </div>
@@ -1727,22 +1798,43 @@ const MailWorkspace = {
                   <button type="button" class="symbolika-mail-button" @click="openSignatureDialog(employee)"><v-icon name="edit" small /> Настроить</button>
                 </div>
               </section>
-              <section class="symbolika-mail-settings-section"><h3>Папки и псевдонимы</h3><p>Сопоставление папок REG.RU с сотрудниками и адресами отправителя.</p></section>
+              <section class="symbolika-mail-settings-section"><h3>Папки, сотрудники и права</h3><p>Владелец всегда имеет полный доступ. Для остальных сотрудников отдельно назначаются чтение, ответы и новые письма.</p></section>
               <div class="symbolika-mail-settings-folder is-new">
-                <label class="symbolika-mail-field">Название<input v-model.trim="newFolder.name" class="symbolika-mail-input" placeholder="Новая папка" /></label>
-                <label class="symbolika-mail-field">Папка IMAP<input v-model.trim="newFolder.imap_name" class="symbolika-mail-input" placeholder="INBOX.Новая папка" /></label>
-                <label class="symbolika-mail-field">Псевдоним<input v-model.trim="newFolder.alias_email" class="symbolika-mail-input" type="email" placeholder="manager@symb62.ru" /></label>
-                <label class="symbolika-mail-field">Сотрудник<select v-model="newFolder.employee" class="symbolika-mail-select"><option :value="null">Не назначен</option><option v-for="employee in settings.employees" :key="'new-' + employee.id" :value="employee.id">{{ employee.full_name }}</option></select></label>
-                <label class="symbolika-mail-checkbox"><input v-model="newFolder.is_shared" type="checkbox" /> Общая</label>
-                <button type="button" class="symbolika-mail-button" :disabled="creatingFolder" @click="createFolder">{{ creatingFolder ? 'Создаём…' : 'Добавить' }}</button>
+                <div class="symbolika-mail-folder-fields">
+                  <label class="symbolika-mail-field">Название<input v-model.trim="newFolder.name" class="symbolika-mail-input" placeholder="Новая папка" /></label>
+                  <label class="symbolika-mail-field">Папка IMAP<input v-model.trim="newFolder.imap_name" class="symbolika-mail-input" placeholder="INBOX.Новая папка" /></label>
+                  <label class="symbolika-mail-field">Псевдоним<input v-model.trim="newFolder.alias_email" class="symbolika-mail-input" type="email" placeholder="employee@symb62.ru" /></label>
+                  <label class="symbolika-mail-field">Владелец<select v-model="newFolder.employee" class="symbolika-mail-select"><option :value="null">Без владельца</option><option v-for="employee in mailEmployees" :key="'new-' + employee.id" :value="employee.id">{{ employee.full_name }}</option></select></label>
+                  <button type="button" class="symbolika-mail-button" :disabled="creatingFolder" @click="createFolder">{{ creatingFolder ? 'Создаём…' : 'Добавить' }}</button>
+                </div>
+                <div class="symbolika-mail-folder-members">
+                  <strong>Участники новой папки</strong>
+                  <div v-for="employee in mailEmployees" v-show="Number(employee.id) !== Number(newFolder.employee)" :key="'new-member-' + employee.id" class="symbolika-mail-folder-member">
+                    <span>{{ employee.full_name }}</span>
+                    <label class="symbolika-mail-checkbox"><input type="checkbox" :checked="folderMemberPermission(newFolder, employee.id, 'can_read')" @change="setFolderMemberPermission(newFolder, employee.id, 'can_read', $event.target.checked)" /> Читать</label>
+                    <label class="symbolika-mail-checkbox"><input type="checkbox" :checked="folderMemberPermission(newFolder, employee.id, 'can_reply')" @change="setFolderMemberPermission(newFolder, employee.id, 'can_reply', $event.target.checked)" /> Отвечать</label>
+                    <label class="symbolika-mail-checkbox"><input type="checkbox" :checked="folderMemberPermission(newFolder, employee.id, 'can_send')" @change="setFolderMemberPermission(newFolder, employee.id, 'can_send', $event.target.checked)" /> Отправлять</label>
+                  </div>
+                </div>
               </div>
               <div v-for="folder in settings.folders" :key="folder.id" class="symbolika-mail-settings-folder">
-                <label class="symbolika-mail-field">Название<input v-model.trim="folder.name" class="symbolika-mail-input" /></label>
-                <label class="symbolika-mail-field">Папка IMAP<input v-model.trim="folder.imap_name" class="symbolika-mail-input" placeholder="INBOX/Менеджер" /></label>
-                <label class="symbolika-mail-field">Псевдоним<input v-model.trim="folder.alias_email" class="symbolika-mail-input" type="email" placeholder="manager@symb62.ru" /></label>
-                <label class="symbolika-mail-field">Сотрудник<select v-model="folder.employee" class="symbolika-mail-select"><option :value="null">Не назначен</option><option v-for="employee in settings.employees" :key="employee.id" :value="employee.id">{{ employee.full_name }}</option></select></label>
-                <label class="symbolika-mail-checkbox"><input v-model="folder.is_shared" type="checkbox" /> Общая</label>
-                <button type="button" class="symbolika-mail-button" :disabled="savingFolderId === folder.id" @click="saveFolder(folder)">{{ savingFolderId === folder.id ? 'Сохраняем…' : 'Сохранить' }}</button>
+                <div class="symbolika-mail-folder-fields">
+                  <label class="symbolika-mail-field">Название<input v-model.trim="folder.name" class="symbolika-mail-input" /></label>
+                  <label class="symbolika-mail-field">Папка IMAP<input v-model.trim="folder.imap_name" class="symbolika-mail-input" placeholder="INBOX.Сотрудник" /></label>
+                  <label class="symbolika-mail-field">Псевдоним<input v-model.trim="folder.alias_email" class="symbolika-mail-input" type="email" placeholder="employee@symb62.ru" /></label>
+                  <label class="symbolika-mail-field">Владелец<select v-model="folder.employee" class="symbolika-mail-select"><option :value="null">Без владельца</option><option v-for="employee in mailEmployees" :key="employee.id" :value="employee.id">{{ employee.full_name }}</option></select></label>
+                  <label class="symbolika-mail-checkbox"><input v-model="folder.is_active" type="checkbox" /> Активна</label>
+                  <button type="button" class="symbolika-mail-button" :disabled="savingFolderId === folder.id" @click="saveFolder(folder)">{{ savingFolderId === folder.id ? 'Сохраняем…' : 'Сохранить' }}</button>
+                </div>
+                <div class="symbolika-mail-folder-members">
+                  <strong>Участники и права</strong>
+                  <div v-for="employee in mailEmployees" v-show="Number(employee.id) !== Number(folder.employee)" :key="'member-' + folder.id + '-' + employee.id" class="symbolika-mail-folder-member">
+                    <span>{{ employee.full_name }}</span>
+                    <label class="symbolika-mail-checkbox"><input type="checkbox" :checked="folderMemberPermission(folder, employee.id, 'can_read')" @change="setFolderMemberPermission(folder, employee.id, 'can_read', $event.target.checked)" /> Читать</label>
+                    <label class="symbolika-mail-checkbox"><input type="checkbox" :checked="folderMemberPermission(folder, employee.id, 'can_reply')" @change="setFolderMemberPermission(folder, employee.id, 'can_reply', $event.target.checked)" /> Отвечать</label>
+                    <label class="symbolika-mail-checkbox"><input type="checkbox" :checked="folderMemberPermission(folder, employee.id, 'can_send')" @change="setFolderMemberPermission(folder, employee.id, 'can_send', $event.target.checked)" /> Отправлять</label>
+                  </div>
+                </div>
               </div>
             </div>
             <footer class="symbolika-mail-dialog-actions"><button type="button" class="symbolika-mail-button" @click="showSettings = false">Закрыть</button></footer>

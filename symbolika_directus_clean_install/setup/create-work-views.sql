@@ -13872,6 +13872,21 @@ CREATE TABLE IF NOT EXISTS symbolika_mail_threads (
   UNIQUE(folder_id, external_thread_id)
 );
 
+CREATE TABLE IF NOT EXISTS symbolika_mail_folder_members (
+  id bigserial PRIMARY KEY,
+  folder_id bigint NOT NULL REFERENCES symbolika_mail_folders(id) ON DELETE CASCADE,
+  employee integer NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  can_read boolean NOT NULL DEFAULT true,
+  can_reply boolean NOT NULL DEFAULT false,
+  can_send boolean NOT NULL DEFAULT false,
+  date_created timestamptz NOT NULL DEFAULT now(),
+  date_updated timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (folder_id, employee)
+);
+
+CREATE INDEX IF NOT EXISTS symbolika_mail_folder_members_employee_idx
+  ON symbolika_mail_folder_members(employee, folder_id);
+
 ALTER TABLE symbolika_mail_threads ADD COLUMN IF NOT EXISTS tags jsonb NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS symbolika_mail_payment_tasks (
@@ -13963,24 +13978,39 @@ WHERE sent.slug = 'sent'
     WHERE m.thread_id = t.id AND m.direction = 'inbound'
   );
 
--- Локальная папка менеджера нужна для отладки интерфейса до подключения IMAP.
+-- Каждый активный сотрудник получает личную локальную папку. Реальную папку
+-- IMAP и псевдоним настраивает администратор после создания почты сотрудника.
 INSERT INTO symbolika_mail_folders (slug, name, imap_name, alias_email, employee, is_shared, sort)
 SELECT
-  'manager-' || e.id,
-  COALESCE(NULLIF(e.full_name, ''), 'Менеджер'),
-  'INBOX/' || COALESCE(NULLIF(e.full_name, ''), 'Менеджер'),
+  'employee-' || e.id,
+  COALESCE(NULLIF(e.full_name, ''), 'Сотрудник'),
+  NULL,
   NULL,
   e.id,
   false,
   100 + e.id
 FROM employees e
-LEFT JOIN directus_users u ON u.id = e.directus_user
-LEFT JOIN directus_roles r ON r.id = u.role
+JOIN directus_users u ON u.id = e.directus_user AND u.status = 'active'
 WHERE COALESCE(e.is_active, true) = true
-  AND (r.name = 'Менеджер' OR lower(COALESCE(e.full_name, '')) LIKE '%дмитр%')
-ON CONFLICT (slug) DO UPDATE SET
-  name = EXCLUDED.name,
-  employee = EXCLUDED.employee;
+  AND NOT EXISTS (
+    SELECT 1 FROM symbolika_mail_folders current_folder
+    WHERE current_folder.employee = e.id
+  )
+ON CONFLICT (slug) DO NOTHING;
+
+-- Начальный доступ к общим папкам сохраняет прежнее поведение. Далее состав
+-- участников и их права управляются в настройках почты.
+INSERT INTO symbolika_mail_folder_members (folder_id, employee, can_read, can_reply, can_send)
+SELECT f.id, e.id, true, true, true
+FROM symbolika_mail_folders f
+CROSS JOIN employees e
+JOIN directus_users u ON u.id = e.directus_user AND u.status = 'active'
+JOIN directus_roles r ON r.id = u.role
+WHERE f.is_active = true
+  AND f.is_shared = true
+  AND COALESCE(e.is_active, true) = true
+  AND r.name IN ('Administrator', 'Управляющий', 'Менеджер')
+ON CONFLICT (folder_id, employee) DO NOTHING;
 
 DO $$
 DECLARE
