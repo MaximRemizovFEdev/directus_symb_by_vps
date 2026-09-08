@@ -68,6 +68,7 @@ import {
   orderNumber as resolveOrderNumber,
   orderRowKey as resolveOrderRowKey,
 } from './lib/entity-context.js';
+import { buildMonthlyFinancialRows } from './lib/financial-results.js';
 
 const fields = [
   'id',
@@ -1314,6 +1315,7 @@ export const CostingModule = {
       orderEconomicsSort: 'date_desc',
       salaryRows: [],
       payrollSalaryRows: [],
+      monthlySalaryRows: [],
       payrollMonth: new Date().toISOString().slice(0, 7),
       financeSettings: {
         id: 1,
@@ -3134,55 +3136,14 @@ export const CostingModule = {
     },
 
     monthlyFinancialRows() {
-      const months = new Map();
-      const ensure = (dateValue) => {
-        const key = this.monthKey(dateValue);
-        if (!key) return null;
-        if (!months.has(key)) {
-          months.set(key, {
-            key,
-            label: this.monthLabel(key),
-            clean_profit: 0,
-            operational_expenses: 0,
-            salary_expenses: 0,
-            other_expenses: 0,
-            result: 0,
-            orders_count: new Set(),
-            items_count: 0,
-          });
-        }
-        return months.get(key);
-      };
-
-      this.rows.forEach((row) => {
-        const month = ensure(row.date);
-        if (!month) return;
-        month.clean_profit += this.parseMoney(row.profit_sum);
-        month.items_count += 1;
-        const orderKey = this.entityId(row.order_link) || row.order || row.order_number;
-        if (orderKey) month.orders_count.add(orderKey);
+      return buildMonthlyFinancialRows({
+        costingRows: this.rows,
+        expenseRows: this.expenseRows,
+        salaryRows: this.monthlySalaryRows,
+        monthKey: (value) => this.monthKey(value),
+        monthLabel: (value) => this.monthLabel(value),
+        orderKey: (row) => this.entityId(row?.order_link) || row?.order || row?.order_number || null,
       });
-
-      this.expenseRows.forEach((row) => {
-        if (['contractor_payment', 'employee_bonus'].includes(row.expense_type)) return;
-        const month = ensure(this.expenseCashDate(row));
-        if (!month) return;
-        const amount = this.parseMoney(row.amount);
-        month.operational_expenses += amount;
-        if (['salary_payment', 'employee_advance'].includes(row.expense_type)) {
-          month.salary_expenses += amount;
-        } else {
-          month.other_expenses += amount;
-        }
-      });
-
-      return Array.from(months.values())
-        .map((month) => ({
-          ...month,
-          orders_count_value: month.orders_count.size,
-          result: month.clean_profit - month.operational_expenses,
-        }))
-        .sort((a, b) => b.key.localeCompare(a.key));
     },
 
     monthlyFinancialSummary() {
@@ -3190,20 +3151,24 @@ export const CostingModule = {
         summary.clean_profit += row.clean_profit;
         summary.operational_expenses += row.operational_expenses;
         summary.salary_expenses += row.salary_expenses;
+        summary.other_expenses += row.other_expenses;
+        summary.completed_order_margin += row.completed_order_margin;
+        summary.actual_result += row.actual_result;
         summary.result += row.result;
         return summary;
       }, {
         clean_profit: 0,
         operational_expenses: 0,
         salary_expenses: 0,
+        other_expenses: 0,
+        completed_order_margin: 0,
+        actual_result: 0,
         result: 0,
       });
     },
 
     financeDashboardMetrics() {
       const now = new Date();
-      const todayEnd = new Date(now);
-      todayEnd.setHours(23, 59, 59, 999);
       const currentMonthKey = this.monthKey(now);
       const currentYear = now.getFullYear();
       const previousYear = currentYear - 1;
@@ -3211,13 +3176,18 @@ export const CostingModule = {
       const monthRow = this.monthlyFinancialRows.find((row) => row.key === currentMonthKey) || {
         key: currentMonthKey,
         label: this.monthLabel(currentMonthKey),
+        order_margin: 0,
+        completed_order_margin: 0,
         clean_profit: 0,
         operational_expenses: 0,
         salary_expenses: 0,
         other_expenses: 0,
         result: 0,
+        actual_result: 0,
         orders_count_value: 0,
+        completed_orders_count_value: 0,
         items_count: 0,
+        completed_items_count: 0,
       };
 
       const customerDebt = this.financeRows.reduce((sum, row) => sum + Math.max(this.parseMoney(row.payment_due), 0), 0);
@@ -3226,32 +3196,16 @@ export const CostingModule = {
       const salaryDebt = this.salaryRows.reduce((sum, row) => sum + Math.max(this.parseMoney(row.salary_debt), 0), 0);
       const ourDebt = contractorDebt + salaryDebt + customerOverpay;
 
-      const actualMonthExpenses = this.expenseRows.reduce((sum, row) => {
-        if (['contractor_payment', 'employee_bonus'].includes(row.expense_type)) return sum;
-        const cashDate = this.expenseCashDate(row);
-        if (this.monthKey(cashDate) !== currentMonthKey) return sum;
-        const date = new Date(cashDate);
-        if (Number.isNaN(date.getTime()) || date > todayEnd) return sum;
-        return sum + this.parseMoney(row.amount);
-      }, 0);
-
-      const futureMonthExpenses = this.expenseRows.reduce((sum, row) => {
-        if (['contractor_payment', 'employee_bonus'].includes(row.expense_type)) return sum;
-        const cashDate = this.expenseCashDate(row);
-        if (this.monthKey(cashDate) !== currentMonthKey) return sum;
-        const date = new Date(cashDate);
-        if (Number.isNaN(date.getTime()) || date <= todayEnd) return sum;
-        return sum + this.parseMoney(row.amount);
-      }, 0);
-
       const yearRows = this.monthlyFinancialRows.filter((row) => Number(String(row.key).slice(0, 4)) === currentYear);
       const previousYearRows = this.monthlyFinancialRows.filter((row) => Number(String(row.key).slice(0, 4)) === previousYear);
       const sumField = (rows, field) => rows.reduce((sum, row) => sum + this.parseMoney(row[field]), 0);
-      const currentYearResult = sumField(yearRows, 'result');
-      const previousYearResult = sumField(previousYearRows, 'result');
+      const currentYearResult = sumField(yearRows, 'actual_result');
+      const previousYearResult = sumField(previousYearRows, 'actual_result');
       const unpaidPremises = this.currentPremisesStatus.due;
-      const projectedExpenses = actualMonthExpenses + futureMonthExpenses + unpaidPremises + salaryDebt;
-      const projectedResult = this.parseMoney(monthRow.clean_profit) - projectedExpenses;
+      const projectedExpenses = this.parseMoney(monthRow.other_expenses)
+        + this.parseMoney(monthRow.salary_expenses)
+        + unpaidPremises;
+      const projectedResult = this.parseMoney(monthRow.order_margin) - projectedExpenses;
 
       return {
         customerDebt,
@@ -3261,9 +3215,9 @@ export const CostingModule = {
         ourDebt,
         currentMonth: {
           ...monthRow,
-          operational_expenses_to_date: actualMonthExpenses,
-          future_operational_expenses: futureMonthExpenses + unpaidPremises,
-          result_to_date: this.parseMoney(monthRow.clean_profit) - actualMonthExpenses,
+          operational_expenses_to_date: this.parseMoney(monthRow.other_expenses),
+          future_operational_expenses: unpaidPremises,
+          result_to_date: this.parseMoney(monthRow.actual_result),
           projected_expenses: projectedExpenses,
           projected_result: projectedResult,
         },
@@ -3271,7 +3225,7 @@ export const CostingModule = {
         previousYear,
         currentYearResult,
         previousYearResult,
-        currentYearProfit: sumField(yearRows, 'clean_profit'),
+        currentYearProfit: sumField(yearRows, 'completed_order_margin'),
         currentYearExpenses: sumField(yearRows, 'operational_expenses'),
       };
     },
@@ -3279,17 +3233,17 @@ export const CostingModule = {
     financeDashboardExpenseBreakdown() {
       const currentMonthKey = this.monthKey(new Date());
       return expenseTypes
-        .filter((type) => !['contractor_payment', 'employee_bonus'].includes(type.value))
+        .filter((type) => !['contractor_payment', 'salary_payment', 'employee_advance', 'employee_bonus'].includes(type.value))
         .map((type) => ({
           type: type.value,
           title: type.text,
           amount: this.expenseRows.reduce((sum, row) => {
             if (row.expense_type !== type.value) return sum;
-            if (this.monthKey(this.expenseCashDate(row)) !== currentMonthKey) return sum;
+            if (this.monthKey(row.accounting_month || row.expense_date) !== currentMonthKey) return sum;
             return sum + this.parseMoney(row.amount);
           }, 0),
         }))
-        .filter((row) => row.amount || ['rent', 'utilities', 'delivery', 'salary_payment', 'employee_advance'].includes(row.type));
+        .filter((row) => row.amount || ['rent', 'utilities', 'delivery'].includes(row.type));
     },
 
     visiblePayrollExpenseRows() {
@@ -3819,6 +3773,7 @@ export const CostingModule = {
       if (tab === 'payroll') {
         this.loadSalaryRows();
         this.loadPayrollSalaryRows();
+        this.loadMonthlySalaryRows();
         this.loadManagerSummary();
         this.loadEmployees();
       }
@@ -5322,7 +5277,7 @@ export const CostingModule = {
       ) {
         tasks.push(this.loadRows({ silent: true }), this.loadContractors());
       }
-      if (allowed.has('admin_finance_dashboard') || allowed.has('expenses') || allowed.has('payroll') || allowed.has('contractor_settlements') || allowed.has('monthly_results')) tasks.push(this.loadFinanceRows(), this.loadExpenseRows(), this.loadContractorPaymentRows(), this.loadSalaryRows(), this.loadFinanceSettings(), this.loadEmployees(), this.loadPaymentTypes(), this.loadContractors(), this.loadRows(), this.loadContractorRows());
+      if (allowed.has('admin_finance_dashboard') || allowed.has('expenses') || allowed.has('payroll') || allowed.has('contractor_settlements') || allowed.has('monthly_results')) tasks.push(this.loadFinanceRows(), this.loadExpenseRows(), this.loadContractorPaymentRows(), this.loadSalaryRows(), this.loadMonthlySalaryRows(), this.loadFinanceSettings(), this.loadEmployees(), this.loadPaymentTypes(), this.loadContractors(), this.loadRows(), this.loadContractorRows());
       if (allowed.has('payroll')) tasks.push(this.loadManagerSummary(), this.loadPayrollSalaryRows());
       if (allowed.has('finance')) tasks.push(this.loadFinanceRows(), this.loadFinanceItemRows(), this.loadManagerFinanceSummary(), this.loadCustomers(), this.loadCompanies(), this.loadGiftCertificates());
       if (allowed.has('gift_certificates')) tasks.push(this.loadGiftCertificates(), this.loadGiftCertificateTransactions(), this.loadCustomers(), this.loadCompanies());
@@ -7064,6 +7019,7 @@ export const CostingModule = {
           this.loadExpenseRows(),
           this.loadSalaryRows(),
           this.loadPayrollSalaryRows(),
+          this.loadMonthlySalaryRows(),
           this.loadManagerSummary(),
           this.loadFinanceRows(),
           this.loadContractorRows(),
@@ -8563,6 +8519,7 @@ export const CostingModule = {
             this.loadAdminData(),
             this.loadEmployees(),
             this.loadSalaryRows(),
+            this.loadMonthlySalaryRows(),
             this.loadManagerSummary(),
           ]);
         } else {
@@ -9016,6 +8973,20 @@ export const CostingModule = {
       } catch (error) {
         this.error = error.message;
         this.payrollSalaryRows = [];
+      }
+    },
+
+    async loadMonthlySalaryRows() {
+      try {
+        const params = new URLSearchParams();
+        params.set('fields', salaryFields.join(','));
+        params.set('sort', '-month_start,employee_name');
+        await this.loadPagedCollection('monthly_salary', '/items/employee_salary_monthly', params, (rows, append) => {
+          this.monthlySalaryRows = append ? this.mergePagedRows(this.monthlySalaryRows, rows) : rows;
+        });
+      } catch (error) {
+        this.error = error.message;
+        this.monthlySalaryRows = [];
       }
     },
 
@@ -13964,14 +13935,14 @@ export const CostingModule = {
             "Комментарий": 'контрагенты + ЗП + переплаты',
           },
           {
-            "Показатель": 'Финрезультат месяца сейчас',
+            "Показатель": 'Фактический результат месяца',
             "Сумма": this.formatMoney(metrics.currentMonth.result_to_date),
-            "Комментарий": 'чистая прибыль минус фактические расходы',
+            "Комментарий": 'завершённые заказы минус начисленная зарплата и прочие расходы',
           },
           {
             "Показатель": 'Прогноз месяца',
             "Сумма": this.formatMoney(metrics.currentMonth.projected_result),
-            "Комментарий": 'с учетом будущих расходов и долга по ЗП',
+            "Комментарий": 'все текущие заказы минус начисленная зарплата, прочие и постоянные расходы',
           },
           {
             "Показатель": `Финрезультат ${metrics.currentYear}`,
@@ -14017,12 +13988,15 @@ export const CostingModule = {
         return this.monthlyFinancialRows.map((row) => ({
           "Месяц": row.label,
           "Заказов": row.orders_count_value,
+          "ЗавершеноЗаказов": row.completed_orders_count_value,
           "Позиций": row.items_count,
-          "ЧистаяПрибыль": this.formatMoney(row.clean_profit),
-          "Расходы": this.formatMoney(row.operational_expenses),
-          "ЗПИАвансы": this.formatMoney(row.salary_expenses),
+          "ЗавершеноПозиций": row.completed_items_count,
+          "МаржаЗаказовДоЗарплат": this.formatMoney(row.order_margin),
+          "МаржаЗавершенныхЗаказов": this.formatMoney(row.completed_order_margin),
+          "ЗарплатаНачислена": this.formatMoney(row.salary_expenses),
           "ПрочиеРасходы": this.formatMoney(row.other_expenses),
-          "Итог": this.formatMoney(row.result),
+          "ФактическийРезультат": this.formatMoney(row.actual_result),
+          "Прогноз": this.formatMoney(row.result),
         }));
       }
 
@@ -31358,10 +31332,10 @@ export const CostingModule = {
             <article class="symbolika-finance-hero-card" :class="parseMoney(financeDashboardMetrics.currentMonth.result_to_date) < 0 ? 'is-negative' : 'is-positive'">
               <header>
                 <span class="symbolika-finance-metric-icon"><v-icon name="account_balance_wallet" /></span>
-                <div><small>Финансовый результат</small><strong>Месяц на сегодня</strong></div>
+                <div><small>Фактический результат</small><strong>По завершённым заказам</strong></div>
               </header>
               <div class="symbolika-finance-hero-value">{{ formatMoney(financeDashboardMetrics.currentMonth.result_to_date) }} <small>₽</small></div>
-              <p>Чистая прибыль после уже оплаченных операционных расходов.</p>
+              <p>Маржа завершённых заказов минус начисленные зарплаты и прочие расходы месяца.</p>
             </article>
             <article class="symbolika-finance-hero-card is-forecast" :class="parseMoney(financeDashboardMetrics.currentMonth.projected_result) < 0 ? 'is-negative' : 'is-positive'">
               <header>
@@ -31369,7 +31343,7 @@ export const CostingModule = {
                 <div><small>Ожидаемый результат</small><strong>Прогноз до конца месяца</strong></div>
               </header>
               <div class="symbolika-finance-hero-value">{{ formatMoney(financeDashboardMetrics.currentMonth.projected_result) }} <small>₽</small></div>
-              <p>С учётом будущих расходов месяца и задолженности по зарплате.</p>
+              <p>Все заказы месяца минус начисленные зарплаты, прочие и известные постоянные расходы.</p>
             </article>
           </section>
 
@@ -31387,12 +31361,12 @@ export const CostingModule = {
             <article class="symbolika-finance-balance-card" :class="parseMoney(financeDashboardMetrics.currentYearResult) < 0 ? 'is-negative' : 'is-year'">
               <header><span><v-icon name="calendar_month" small /></span><small>Текущий год</small></header>
               <strong>{{ formatMoney(financeDashboardMetrics.currentYearResult) }} <small>₽</small></strong>
-              <p>Финансовый результат {{ financeDashboardMetrics.currentYear }}</p>
+              <p>Фактический результат по завершённым заказам за {{ financeDashboardMetrics.currentYear }}</p>
             </article>
             <article class="symbolika-finance-balance-card is-previous">
               <header><span><v-icon name="history" small /></span><small>Прошлый год</small></header>
               <strong>{{ formatMoney(financeDashboardMetrics.previousYearResult) }} <small>₽</small></strong>
-              <p>Финансовый результат {{ financeDashboardMetrics.previousYear }}</p>
+              <p>Фактический результат по завершённым заказам за {{ financeDashboardMetrics.previousYear }}</p>
             </article>
           </section>
 
@@ -31402,15 +31376,15 @@ export const CostingModule = {
           <section class="symbolika-finance-breakdown-grid">
             <article class="symbolika-finance-breakdown-card is-income">
               <span class="symbolika-finance-breakdown-icon"><v-icon name="trending_up" /></span>
-              <div><small>Прибыль по заказам</small><strong>{{ formatMoney(financeDashboardMetrics.currentMonth.clean_profit) }} <small>₽</small></strong><p>Заказы минус себестоимость, проценты и налоги — до операционных расходов</p></div>
+              <div><small>Маржа всех заказов</small><strong>{{ formatMoney(financeDashboardMetrics.currentMonth.order_margin) }} <small>₽</small></strong><p>Выручка минус себестоимость и налоги; проценты менеджеров находятся в зарплате</p></div>
             </article>
             <article class="symbolika-finance-breakdown-card is-spent">
               <span class="symbolika-finance-breakdown-icon"><v-icon name="payments" /></span>
-              <div><small>Расходы оплачены</small><strong>{{ formatMoney(financeDashboardMetrics.currentMonth.operational_expenses_to_date) }} <small>₽</small></strong><p>Аренда, зарплата, авансы, доставка и прочее</p></div>
+              <div><small>Начислено зарплаты</small><strong>{{ formatMoney(financeDashboardMetrics.currentMonth.salary_expenses) }} <small>₽</small></strong><p>Оклады, проценты от оплаченной базы заказов и премии расчётного месяца</p></div>
             </article>
             <article class="symbolika-finance-breakdown-card is-upcoming">
               <span class="symbolika-finance-breakdown-icon"><v-icon name="event_upcoming" /></span>
-              <div><small>Предстоящие расходы</small><strong>{{ formatMoney(financeDashboardMetrics.currentMonth.future_operational_expenses + financeDashboardMetrics.salaryDebt) }} <small>₽</small></strong><p>Будущие платежи месяца и долг по зарплате</p></div>
+              <div><small>Прочие расходы</small><strong>{{ formatMoney(financeDashboardMetrics.currentMonth.other_expenses) }} <small>₽</small></strong><p>Аренда, коммунальные услуги, доставка, материалы, обслуживание и прочее</p></div>
             </article>
             <article class="symbolika-finance-breakdown-card is-overpay">
               <span class="symbolika-finance-breakdown-icon"><v-icon name="savings" /></span>
@@ -31419,7 +31393,7 @@ export const CostingModule = {
           </section>
 
           <div class="symbolika-finance-section-head">
-            <div><strong>Расходы текущего месяца</strong><span>Оплаченные операционные расходы по статьям</span></div>
+            <div><strong>Прочие расходы текущего месяца</strong><span>Без зарплат, авансов и оплат контрагентам</span></div>
           </div>
           <div class="symbolika-costing-table-wrap symbolika-finance-expense-table">
             <table class="symbolika-costing-table symbolika-costing-table-finance">
@@ -31445,14 +31419,13 @@ export const CostingModule = {
                     <div class="symbolika-costing-subtle">
                       <span v-if="row.type === 'delivery'">доставка учитывается как операционный расход месяца</span>
                       <span v-else-if="row.type === 'rent'">постоянные расходы</span>
-                      <span v-else-if="['salary_payment', 'employee_advance', 'employee_bonus'].includes(row.type)">выплаты сотрудникам</span>
                       <span v-else>операционный расход</span>
                     </div>
                   </td>
                 </tr>
               </tbody>
             </table>
-            <div v-if="!financeDashboardExpenseBreakdown.length" class="symbolika-costing-empty">Расходов текущего месяца пока нет</div>
+            <div v-if="!financeDashboardExpenseBreakdown.length" class="symbolika-costing-empty">Прочих расходов текущего месяца пока нет</div>
           </div>
         </div>
 
@@ -31986,63 +31959,78 @@ export const CostingModule = {
         <div v-if="activeTab === 'monthly_results'" class="symbolika-costing-expenses">
           <div class="symbolika-costing-dashboard symbolika-costing-dashboard-tight">
             <div class="symbolika-costing-card blue">
-              <div class="symbolika-costing-card-title">Прибыль по заказам</div>
+              <div class="symbolika-costing-card-title">Маржа всех заказов</div>
               <div class="symbolika-costing-card-value">{{ formatMoney(monthlyFinancialSummary.clean_profit) }}</div>
-              <div class="symbolika-costing-card-note">после себестоимости, процентов и налогов</div>
+              <div class="symbolika-costing-card-note">после себестоимости и налогов, до зарплат</div>
             </div>
             <div class="symbolika-costing-card orange">
-              <div class="symbolika-costing-card-title">Расходы</div>
-              <div class="symbolika-costing-card-value">{{ formatMoney(monthlyFinancialSummary.operational_expenses) }}</div>
-              <div class="symbolika-costing-card-note">зарплаты, авансы, аренда, прочее</div>
+              <div class="symbolika-costing-card-title">Прочие расходы</div>
+              <div class="symbolika-costing-card-value">{{ formatMoney(monthlyFinancialSummary.other_expenses) }}</div>
+              <div class="symbolika-costing-card-note">без зарплат и оплат контрагентам</div>
             </div>
             <div class="symbolika-costing-card danger">
-              <div class="symbolika-costing-card-title">ЗП и авансы</div>
+              <div class="symbolika-costing-card-title">Зарплата начислена</div>
               <div class="symbolika-costing-card-value">{{ formatMoney(monthlyFinancialSummary.salary_expenses) }}</div>
-              <div class="symbolika-costing-card-note">фактические выплаты</div>
+              <div class="symbolika-costing-card-note">оклады, проценты и премии</div>
             </div>
             <div class="symbolika-costing-card green">
-              <div class="symbolika-costing-card-title">Чистая прибыль</div>
+              <div class="symbolika-costing-card-title">Фактический результат</div>
+              <div class="symbolika-costing-card-value">{{ formatMoney(monthlyFinancialSummary.actual_result) }}</div>
+              <div class="symbolika-costing-card-note">завершённые заказы минус зарплаты и прочие расходы</div>
+            </div>
+            <div class="symbolika-costing-card green">
+              <div class="symbolika-costing-card-title">Прогноз</div>
               <div class="symbolika-costing-card-value">{{ formatMoney(monthlyFinancialSummary.result) }}</div>
-              <div class="symbolika-costing-card-note">прибыль минус расходы</div>
+              <div class="symbolika-costing-card-note">все заказы минус зарплаты и прочие расходы</div>
             </div>
           </div>
 
           <div class="symbolika-costing-table-wrap">
             <table class="symbolika-costing-table symbolika-costing-table-finance">
               <colgroup>
-                <col style="width: 18%" />
+                <col style="width: 15%" />
+                <col style="width: 9%" />
+                <col style="width: 9%" />
+                <col style="width: 15%" />
                 <col style="width: 12%" />
                 <col style="width: 12%" />
-                <col style="width: 17%" />
-                <col style="width: 17%" />
-                <col style="width: 12%" />
-                <col style="width: 12%" />
+                <col style="width: 14%" />
+                <col style="width: 14%" />
               </colgroup>
               <thead>
                 <tr>
                   <th>Месяц</th>
                   <th class="symbolika-costing-num">Заказов</th>
                   <th class="symbolika-costing-num">Позиций</th>
-                  <th class="symbolika-costing-num">Прибыль по заказам</th>
-                  <th class="symbolika-costing-num">Расходы</th>
-                  <th class="symbolika-costing-num">ЗП / авансы</th>
-                  <th class="symbolika-costing-num">Чистая прибыль</th>
+                  <th class="symbolika-costing-num">Маржа заказов</th>
+                  <th class="symbolika-costing-num">Прочие расходы</th>
+                  <th class="symbolika-costing-num">Зарплата начислена</th>
+                  <th class="symbolika-costing-num">Фактический результат</th>
+                  <th class="symbolika-costing-num">Прогноз</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="row in monthlyFinancialRows" :key="row.key">
                   <td>
                     <div class="symbolika-costing-product">{{ row.label }}</div>
-                    <div class="symbolika-costing-subtle">контрагентские оплаты не вычитаются</div>
+                    <div class="symbolika-costing-subtle">оплаты контрагентам повторно не вычитаются</div>
                   </td>
-                  <td class="symbolika-costing-num">{{ row.orders_count_value }}</td>
-                  <td class="symbolika-costing-num">{{ row.items_count }}</td>
-                  <td class="symbolika-costing-num">{{ formatMoney(row.clean_profit) }}</td>
                   <td class="symbolika-costing-num">
-                    <div>{{ formatMoney(row.operational_expenses) }}</div>
-                    <div class="symbolika-costing-subtle">прочие {{ formatMoney(row.other_expenses) }}</div>
+                    <div>{{ row.orders_count_value }}</div>
+                    <div class="symbolika-costing-subtle">завершено {{ row.completed_orders_count_value }}</div>
                   </td>
-                  <td class="symbolika-costing-num">{{ formatMoney(row.salary_expenses) }}</td>
+                  <td class="symbolika-costing-num">
+                    <div>{{ row.items_count }}</div>
+                    <div class="symbolika-costing-subtle">завершено {{ row.completed_items_count }}</div>
+                  </td>
+                  <td class="symbolika-costing-num"><div>{{ formatMoney(row.order_margin) }}</div><div class="symbolika-costing-subtle">завершено {{ formatMoney(row.completed_order_margin) }}</div></td>
+                  <td class="symbolika-costing-num">{{ formatMoney(row.other_expenses) }}</td>
+                  <td class="symbolika-costing-num"><div>{{ formatMoney(row.salary_expenses) }}</div><div class="symbolika-costing-subtle">оклад {{ formatMoney(row.salary_fixed) }} · % {{ formatMoney(row.salary_commission) }} · премии {{ formatMoney(row.salary_bonus) }}</div></td>
+                  <td class="symbolika-costing-num">
+                    <span class="symbolika-costing-pill" :class="row.actual_result >= 0 ? 'symbolika-costing-pill-green' : 'symbolika-costing-pill-danger'">
+                      {{ formatMoney(row.actual_result) }}
+                    </span>
+                  </td>
                   <td class="symbolika-costing-num">
                     <span class="symbolika-costing-pill" :class="row.result >= 0 ? 'symbolika-costing-pill-green' : 'symbolika-costing-pill-danger'">
                       {{ formatMoney(row.result) }}
