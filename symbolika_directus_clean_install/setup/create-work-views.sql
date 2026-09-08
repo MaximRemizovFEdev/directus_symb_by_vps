@@ -11557,30 +11557,6 @@ BEFORE INSERT ON symbolika_automation_issues
 FOR EACH ROW
 EXECUTE FUNCTION symbolika_skip_procurement_task_issue();
 
-UPDATE symbolika_tasks
-SET status = CASE WHEN status = 'done' THEN status ELSE 'cancelled' END,
-    date_updated = now()
-WHERE task_type = 'procurement'
-   OR id IN (
-     SELECT task_order_id FROM procurement_requests
-     UNION SELECT task_payment_id FROM procurement_requests
-     UNION SELECT task_pickup_id FROM procurement_requests
-     UNION SELECT task_order_id FROM procurement_batches
-     UNION SELECT management_task_id FROM procurement_batches
-     UNION SELECT task_payment_id FROM procurement_batches
-     UNION SELECT task_pickup_id FROM procurement_batches
-   );
-
-UPDATE procurement_requests
-SET task_order_id = NULL, task_payment_id = NULL, task_pickup_id = NULL, date_updated = now()
-WHERE task_order_id IS NOT NULL OR task_payment_id IS NOT NULL OR task_pickup_id IS NOT NULL;
-
-UPDATE procurement_batches
-SET task_order_id = NULL, management_task_id = NULL,
-    task_payment_id = NULL, task_pickup_id = NULL, date_updated = now()
-WHERE task_order_id IS NOT NULL OR management_task_id IS NOT NULL
-   OR task_payment_id IS NOT NULL OR task_pickup_id IS NOT NULL;
-
 SELECT refresh_symbolika_automation_issues();
 
 SELECT sync_contractor_costing_item(id)
