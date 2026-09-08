@@ -3442,10 +3442,8 @@ export const CostingModule = {
       return (this.automationIssueRows || []).reduce((counts, issue) => {
         counts.all += 1;
         if (issue.issue_type === 'status_mismatch') counts.status_mismatch += 1;
-        if (issue.issue_type === 'procurement_without_task') counts.procurement_without_task += 1;
-        if (issue.issue_type === 'completed_task_open_procurement') counts.completed_task_open_procurement += 1;
         return counts;
-      }, { all: 0, status_mismatch: 0, procurement_without_task: 0, completed_task_open_procurement: 0 });
+      }, { all: 0, status_mismatch: 0 });
     },
 
     visibleAutomationIssues() {
@@ -7363,21 +7361,18 @@ export const CostingModule = {
     automationIssueTypeName(type) {
       return {
         status_mismatch: 'Статусы',
-        procurement_without_task: 'Закупка без задачи',
-        completed_task_open_procurement: 'Задача и закупка',
       }[type] || 'Автоматизация';
     },
 
     automationIssuePrimaryAction(issue) {
       if (issue?.issue_type === 'status_mismatch') return 'Открыть заказ';
-      if (issue?.issue_type === 'procurement_without_task') return 'Открыть закупку';
       if (issue?.task_id) return 'Открыть задачу';
       return 'Открыть';
     },
 
     async openAutomationIssue(issue, target = 'primary') {
       if (!issue) return;
-      if ((target === 'task' || (target === 'primary' && issue.issue_type === 'completed_task_open_procurement')) && issue.task_id) {
+      if (target === 'task' && issue.task_id) {
         const row = await this.findLinkedTask(issue.task_id);
         if (row) {
           this.openTaskDialog(row);
@@ -29530,14 +29525,6 @@ export const CostingModule = {
               <span>Статусы</span><strong>{{ automationIssueCounts.status_mismatch }}</strong>
               <small>заказ и позиции</small>
             </button>
-            <button type="button" class="symbolika-costing-automation-stat is-procurement" :class="{ 'is-active': automationIssueFilter === 'procurement_without_task' }" @click="automationIssueFilter = 'procurement_without_task'">
-              <span>Без задачи</span><strong>{{ automationIssueCounts.procurement_without_task }}</strong>
-              <small>активные закупки</small>
-            </button>
-            <button type="button" class="symbolika-costing-automation-stat is-task" :class="{ 'is-active': automationIssueFilter === 'completed_task_open_procurement' }" @click="automationIssueFilter = 'completed_task_open_procurement'">
-              <span>Не синхронизировано</span><strong>{{ automationIssueCounts.completed_task_open_procurement }}</strong>
-              <small>задача уже выполнена</small>
-            </button>
           </div>
 
           <section class="symbolika-costing-health-panel">
@@ -29587,7 +29574,7 @@ export const CostingModule = {
           <div class="symbolika-costing-automation-head">
             <div>
               <strong>Нарушения автоматизаций</strong>
-              <span>Список обновляется автоматически после изменения заказов, позиций, закупок и задач.</span>
+              <span>Список обновляется автоматически после изменения заказов и позиций.</span>
             </div>
             <button type="button" class="symbolika-costing-mini-button" :disabled="automationIssuesLoading" @click="loadAutomationIssues()">
               <v-icon name="refresh" small />{{ automationIssuesLoading ? 'Обновляем…' : 'Обновить' }}
@@ -29612,15 +29599,14 @@ export const CostingModule = {
               </div>
               <div class="symbolika-costing-automation-actions">
                 <button type="button" class="symbolika-costing-mini-button is-primary" @click="openAutomationIssue(issue)">{{ automationIssuePrimaryAction(issue) }}</button>
-                <button v-if="issue.task_id && issue.issue_type !== 'completed_task_open_procurement'" type="button" class="symbolika-costing-icon-button" title="Открыть задачу" @click="openAutomationIssue(issue, 'task')"><v-icon name="task_alt" small /></button>
-                <button v-if="issue.procurement_request_id && issue.issue_type === 'completed_task_open_procurement'" type="button" class="symbolika-costing-icon-button" title="Открыть закупку" @click="openAutomationIssue(issue, 'procurement')"><v-icon name="local_shipping" small /></button>
+                <button v-if="issue.task_id" type="button" class="symbolika-costing-icon-button" title="Открыть задачу" @click="openAutomationIssue(issue, 'task')"><v-icon name="task_alt" small /></button>
               </div>
             </article>
           </div>
           <div v-else-if="!automationIssuesLoading" class="symbolika-costing-automation-ok">
             <span><v-icon name="verified" /></span>
             <strong>{{ automationIssueCounts.all ? 'По выбранному фильтру нарушений нет' : 'Все автоматизации согласованы' }}</strong>
-            <small>{{ automationIssueCounts.all ? 'Выберите другой раздел контроля.' : 'Несогласованных статусов и проблем со связями закупок не найдено.' }}</small>
+            <small>{{ automationIssueCounts.all ? 'Выберите другой раздел контроля.' : 'Несогласованных статусов заказов и позиций не найдено.' }}</small>
           </div>
 
           <section class="symbolika-costing-feedback-inbox">
@@ -35063,7 +35049,7 @@ export const CostingModule = {
                 Тип задачи
                 <select v-model="taskDialog.task_type" class="symbolika-costing-select" :disabled="currentRoleName === 'Дизайнер' || !!taskDialog.id">
                   <option value="general">Обычная</option>
-                  <option value="procurement">Закупка</option>
+                  <option v-if="taskDialog.task_type === 'procurement'" value="procurement">Закупка (архив)</option>
                   <option value="design">Макет / дизайн</option>
                 </select>
               </label>
