@@ -3572,19 +3572,56 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
   UPDATE order_payments op
-     SET access_manager_user = e.directus_user,
-         access_shipping_method = o.shipping_method,
-         order_number_display = o.order_number,
-         customer_name_display = c.name,
-         customer_company_name_display = cc.name
-    FROM orders o
-    LEFT JOIN employees e ON e.id = o.manager_employee
-    LEFT JOIN customers c ON c.id = o.customer
-    LEFT JOIN customer_companies cc ON cc.id = o.customer_company
-   WHERE op.id = payment_id
-     AND op."order" = o.id;
+     SET access_manager_user = source.access_manager_user,
+         access_shipping_method = source.shipping_method,
+         order_number_display = source.order_number,
+         customer_name_display = source.customer_name,
+         customer_company_name_display = source.company_name
+    FROM (
+      SELECT op2.id,
+        COALESCE(order_employee.directus_user, company_employee.directus_user, customer_employee.directus_user) AS access_manager_user,
+        o.shipping_method, o.order_number,
+        COALESCE(c.name, direct_customer.name) AS customer_name,
+        COALESCE(cc.name, direct_company.name) AS company_name
+      FROM order_payments op2
+      LEFT JOIN orders o ON o.id = op2."order"
+      LEFT JOIN employees order_employee ON order_employee.id = o.manager_employee
+      LEFT JOIN customers c ON c.id = o.customer
+      LEFT JOIN customer_companies cc ON cc.id = o.customer_company
+      LEFT JOIN customers direct_customer ON direct_customer.id = op2.customer
+      LEFT JOIN employees customer_employee ON customer_employee.id = direct_customer.manager
+      LEFT JOIN customer_companies direct_company ON direct_company.id = op2.customer_company
+      LEFT JOIN employees company_employee ON company_employee.id = direct_company.manager
+      WHERE op2.id = payment_id
+    ) source
+   WHERE op.id = source.id;
 END;
 $$;
+
+CREATE OR REPLACE FUNCTION symbolika_prepare_customer_payment()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE source_order record;
+BEGIN
+  NEW.amount := round(COALESCE(NEW.amount, 0), 2);
+  IF NEW.amount <= 0 THEN RAISE EXCEPTION 'Сумма платежа должна быть больше нуля'; END IF;
+  IF NEW."order" IS NOT NULL THEN
+    SELECT o.customer, o.customer_company INTO source_order FROM orders o WHERE o.id = NEW."order";
+    IF NOT FOUND THEN RAISE EXCEPTION 'Заказ для платежа не найден'; END IF;
+    NEW.customer := source_order.customer;
+    NEW.customer_company := source_order.customer_company;
+  ELSIF num_nonnulls(NEW.customer, NEW.customer_company) <> 1 THEN
+    RAISE EXCEPTION 'Для платежа без заказа укажите одного плательщика: клиента или компанию';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS symbolika_prepare_customer_payment ON order_payments;
+CREATE TRIGGER symbolika_prepare_customer_payment
+BEFORE INSERT OR UPDATE OF "order", customer, customer_company, amount ON order_payments
+FOR EACH ROW EXECUTE FUNCTION symbolika_prepare_customer_payment();
 
 CREATE OR REPLACE FUNCTION sync_order_payment_access_trigger()
 RETURNS trigger
@@ -3726,7 +3763,7 @@ FOR EACH ROW
 EXECUTE FUNCTION sync_work_order_trigger();
 
 CREATE TRIGGER symbolika_sync_order_payment_access
-AFTER INSERT OR UPDATE OF "order" ON order_payments
+AFTER INSERT OR UPDATE OF "order", customer, customer_company ON order_payments
 FOR EACH ROW
 EXECUTE FUNCTION sync_order_payment_access_trigger();
 
@@ -13315,6 +13352,8 @@ CREATE TABLE IF NOT EXISTS customer_operations (
   operation_type varchar(64) NOT NULL DEFAULT 'other',
   direction varchar(32) NOT NULL DEFAULT 'customer_owes_us',
   amount numeric(14,2) NOT NULL DEFAULT 0,
+  allocated_amount numeric(14,2) NOT NULL DEFAULT 0,
+  payment_due numeric(14,2) NOT NULL DEFAULT 0,
   customer integer REFERENCES customers(id) ON DELETE SET NULL,
   customer_company integer REFERENCES customer_companies(id) ON DELETE SET NULL,
   manager_employee integer REFERENCES employees(id) ON DELETE SET NULL,
@@ -13333,6 +13372,8 @@ ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS operation_date date NOT
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS operation_type varchar(64) NOT NULL DEFAULT 'other';
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS direction varchar(32) NOT NULL DEFAULT 'customer_owes_us';
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS amount numeric(14,2) NOT NULL DEFAULT 0;
+ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS allocated_amount numeric(14,2) NOT NULL DEFAULT 0;
+ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS payment_due numeric(14,2) NOT NULL DEFAULT 0;
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS customer integer REFERENCES customers(id) ON DELETE SET NULL;
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS customer_company integer REFERENCES customer_companies(id) ON DELETE SET NULL;
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS manager_employee integer REFERENCES employees(id) ON DELETE SET NULL;
@@ -13341,6 +13382,13 @@ ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS description text NOT NU
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS reference text;
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS date_created timestamptz NOT NULL DEFAULT now();
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS date_updated timestamptz NOT NULL DEFAULT now();
+
+ALTER TABLE payment_allocations ALTER COLUMN "order" DROP NOT NULL;
+ALTER TABLE payment_allocations ADD COLUMN IF NOT EXISTS customer_operation integer REFERENCES customer_operations(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS payment_allocations_customer_operation_idx ON payment_allocations(customer_operation);
+ALTER TABLE payment_allocations DROP CONSTRAINT IF EXISTS payment_allocations_one_target_check;
+ALTER TABLE payment_allocations ADD CONSTRAINT payment_allocations_one_target_check
+  CHECK (num_nonnulls("order", customer_operation) = 1);
 
 CREATE INDEX IF NOT EXISTS customer_operations_customer_idx ON customer_operations(customer);
 CREATE INDEX IF NOT EXISTS customer_operations_company_idx ON customer_operations(customer_company);
@@ -13355,6 +13403,8 @@ AS $$
 BEGIN
   NEW.operation_date := COALESCE(NEW.operation_date, CURRENT_DATE);
   NEW.amount := round(COALESCE(NEW.amount, 0), 2);
+  NEW.allocated_amount := round(COALESCE(NEW.allocated_amount, 0), 2);
+  NEW.payment_due := GREATEST(NEW.amount - NEW.allocated_amount, 0);
   NEW.description := btrim(COALESCE(NEW.description, ''));
   NEW.date_updated := now();
 
@@ -13528,12 +13578,15 @@ BEGIN
     co.manager_employee, e.full_name, NULL,
     CASE co.status WHEN 'confirmed' THEN 'Подтверждена' WHEN 'draft' THEN 'Черновик' ELSE 'Отменена' END,
     CASE WHEN co.direction = 'customer_owes_us' THEN co.amount ELSE 0 END,
-    CASE WHEN co.direction = 'we_owe_customer' THEN co.amount ELSE 0 END,
-    CASE WHEN co.direction = 'customer_owes_us' THEN co.amount ELSE 0 END,
-    CASE WHEN co.direction = 'we_owe_customer' THEN co.amount ELSE 0 END,
-    CASE WHEN co.direction = 'customer_owes_us' THEN co.amount ELSE 0 END,
-    CASE WHEN co.direction = 'we_owe_customer' THEN co.amount ELSE 0 END,
-    CASE WHEN co.direction = 'customer_owes_us' THEN 'Клиент должен' ELSE 'Мы должны' END,
+    COALESCE(co.allocated_amount, 0),
+    CASE WHEN co.direction = 'customer_owes_us' THEN COALESCE(co.payment_due, co.amount)
+         ELSE -COALESCE(co.payment_due, co.amount) END,
+    CASE WHEN co.direction = 'we_owe_customer' THEN COALESCE(co.payment_due, co.amount)
+         ELSE GREATEST(COALESCE(co.allocated_amount, 0) - co.amount, 0) END,
+    CASE WHEN co.direction = 'customer_owes_us' THEN COALESCE(co.payment_due, co.amount) ELSE 0 END,
+    CASE WHEN co.direction = 'we_owe_customer' THEN COALESCE(co.payment_due, co.amount) ELSE 0 END,
+    CASE WHEN COALESCE(co.payment_due, co.amount) = 0 THEN 'Расчет закрыт'
+         WHEN co.direction = 'customer_owes_us' THEN 'Клиент должен' ELSE 'Мы должны' END,
     'operation', co.id, co.operation_type, co.direction, co.description
   FROM customer_operations co
   LEFT JOIN customers c ON c.id = co.customer
@@ -13593,6 +13646,185 @@ CREATE TRIGGER symbolika_refresh_customer_operation
 AFTER INSERT OR UPDATE OR DELETE ON customer_operations
 FOR EACH ROW EXECUTE FUNCTION symbolika_refresh_customer_operation();
 
+CREATE OR REPLACE FUNCTION symbolika_validate_payment_allocation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  payment_row order_payments%ROWTYPE;
+  target_customer integer;
+  target_company integer;
+  operation_direction text;
+  operation_status text;
+  allocated_total numeric(14,2);
+  target_due numeric(14,2);
+BEGIN
+  NEW.amount := round(COALESCE(NEW.amount, 0), 2);
+  IF NEW.amount <= 0 THEN RAISE EXCEPTION 'Сумма распределения должна быть больше нуля'; END IF;
+  IF num_nonnulls(NEW."order", NEW.customer_operation) <> 1 THEN
+    RAISE EXCEPTION 'Распределение должно ссылаться на один заказ или одну клиентскую операцию';
+  END IF;
+  SELECT * INTO payment_row FROM order_payments WHERE id = NEW.payment FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Платеж для распределения не найден'; END IF;
+  SELECT COALESCE(sum(pa.amount), 0) INTO allocated_total
+  FROM payment_allocations pa
+  WHERE pa.payment = NEW.payment AND pa.id IS DISTINCT FROM NEW.id;
+  IF allocated_total + NEW.amount > payment_row.amount THEN RAISE EXCEPTION 'Распределено больше суммы платежа'; END IF;
+
+  IF NEW."order" IS NOT NULL THEN
+    SELECT o.customer, o.customer_company
+    INTO target_customer, target_company FROM orders o WHERE o.id = NEW."order";
+  ELSE
+    SELECT co.customer, co.customer_company, co.direction, co.status,
+           GREATEST(COALESCE(co.payment_due, co.amount), 0)
+             + COALESCE((SELECT pa.amount FROM payment_allocations pa WHERE pa.id = NEW.id), 0)
+    INTO target_customer, target_company, operation_direction, operation_status, target_due
+    FROM customer_operations co WHERE co.id = NEW.customer_operation;
+    IF operation_status <> 'confirmed' THEN RAISE EXCEPTION 'Распределять оплату можно только на подтвержденную клиентскую операцию'; END IF;
+    IF COALESCE(payment_row.payment_direction, 'incoming') = 'incoming' AND operation_direction <> 'customer_owes_us' THEN
+      RAISE EXCEPTION 'Входящую оплату можно зачесть только в операцию, по которой клиент должен нам';
+    END IF;
+  END IF;
+  IF NEW.customer_operation IS NOT NULL AND NEW.amount > target_due THEN RAISE EXCEPTION 'Сумма распределения превышает остаток по основанию'; END IF;
+  IF target_company IS NOT NULL THEN
+    IF payment_row.customer_company IS DISTINCT FROM target_company THEN RAISE EXCEPTION 'Платеж и основание относятся к разным компаниям'; END IF;
+  ELSIF payment_row.customer_company IS NOT NULL OR payment_row.customer IS DISTINCT FROM target_customer THEN
+    RAISE EXCEPTION 'Платеж и основание относятся к разным клиентам';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS symbolika_validate_payment_allocation ON payment_allocations;
+CREATE TRIGGER symbolika_validate_payment_allocation
+BEFORE INSERT OR UPDATE ON payment_allocations
+FOR EACH ROW EXECUTE FUNCTION symbolika_validate_payment_allocation();
+
+CREATE OR REPLACE FUNCTION symbolika_recalc_payment_allocation_totals(payment_id integer)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  IF payment_id IS NULL THEN RETURN; END IF;
+  UPDATE order_payments op
+  SET allocated_amount = totals.allocated,
+      unallocated_amount = GREATEST(COALESCE(op.amount, 0) - totals.allocated, 0)
+  FROM (SELECT COALESCE(sum(pa.amount), 0)::numeric(10,2) AS allocated
+        FROM payment_allocations pa WHERE pa.payment = payment_id) totals
+  WHERE op.id = payment_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION symbolika_recalc_customer_operation_payment(operation_id integer)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  IF operation_id IS NULL THEN RETURN; END IF;
+  UPDATE customer_operations co
+  SET allocated_amount = totals.allocated,
+      payment_due = GREATEST(COALESCE(co.amount, 0) - totals.allocated, 0)
+  FROM (SELECT COALESCE(sum(pa.amount), 0)::numeric(14,2) AS allocated
+        FROM payment_allocations pa WHERE pa.customer_operation = operation_id) totals
+  WHERE co.id = operation_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION recalc_order_payment_on_allocation_trigger()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP IN ('INSERT', 'UPDATE') THEN
+    PERFORM symbolika_recalc_payment_allocation_totals(NEW.payment);
+    PERFORM recalc_order_payment_totals(NEW."order");
+    PERFORM symbolika_recalc_customer_operation_payment(NEW.customer_operation);
+  END IF;
+  IF TG_OP IN ('UPDATE', 'DELETE') THEN
+    PERFORM symbolika_recalc_payment_allocation_totals(OLD.payment);
+    PERFORM recalc_order_payment_totals(OLD."order");
+    PERFORM symbolika_recalc_customer_operation_payment(OLD.customer_operation);
+  END IF;
+  RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION recalc_order_payment_on_payment_trigger()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE allocation record;
+BEGIN
+  IF TG_OP IN ('INSERT', 'UPDATE') THEN
+    IF NEW."order" IS NOT NULL AND COALESCE(NEW.amount, 0) > 0
+       AND COALESCE(NEW.allocation_mode, 'to_order') = 'to_order'
+       AND NOT EXISTS (SELECT 1 FROM payment_allocations pa WHERE pa.payment = NEW.id) THEN
+      INSERT INTO payment_allocations (payment, "order", amount, comment)
+      VALUES (NEW.id, NEW."order", NEW.amount, 'Автоматическое распределение');
+    END IF;
+    PERFORM symbolika_recalc_payment_allocation_totals(NEW.id);
+    PERFORM recalc_order_payment_totals(NEW."order");
+    FOR allocation IN SELECT customer_operation FROM payment_allocations WHERE payment = NEW.id AND customer_operation IS NOT NULL LOOP
+      PERFORM symbolika_recalc_customer_operation_payment(allocation.customer_operation);
+    END LOOP;
+  END IF;
+  IF TG_OP IN ('UPDATE', 'DELETE') THEN
+    PERFORM recalc_order_payment_totals(OLD."order");
+    FOR allocation IN SELECT customer_operation FROM payment_allocations WHERE payment = OLD.id AND customer_operation IS NOT NULL LOOP
+      PERFORM symbolika_recalc_customer_operation_payment(allocation.customer_operation);
+    END LOOP;
+  END IF;
+  RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION symbolika_refresh_customer_payment_balance()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP IN ('UPDATE', 'DELETE') THEN
+    PERFORM symbolika_recalc_customer_operation_balance(OLD.customer);
+    PERFORM symbolika_recalc_company_operation_balance(OLD.customer_company);
+  END IF;
+  IF TG_OP IN ('INSERT', 'UPDATE') THEN
+    PERFORM symbolika_recalc_customer_operation_balance(NEW.customer);
+    PERFORM symbolika_recalc_company_operation_balance(NEW.customer_company);
+  END IF;
+  PERFORM refresh_customer_reconciliation();
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS symbolika_refresh_customer_payment_balance ON order_payments;
+CREATE TRIGGER symbolika_refresh_customer_payment_balance
+AFTER INSERT OR UPDATE OR DELETE ON order_payments
+FOR EACH ROW EXECUTE FUNCTION symbolika_refresh_customer_payment_balance();
+
+CREATE OR REPLACE FUNCTION symbolika_refresh_customer_order_balance()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP IN ('UPDATE', 'DELETE') THEN
+    PERFORM symbolika_recalc_customer_operation_balance(OLD.customer);
+    PERFORM symbolika_recalc_company_operation_balance(OLD.customer_company);
+  END IF;
+  IF TG_OP IN ('INSERT', 'UPDATE') THEN
+    PERFORM symbolika_recalc_customer_operation_balance(NEW.customer);
+    PERFORM symbolika_recalc_company_operation_balance(NEW.customer_company);
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS symbolika_refresh_customer_order_balance ON orders;
+CREATE TRIGGER symbolika_refresh_customer_order_balance
+AFTER INSERT OR UPDATE OF customer, customer_company, order_sum OR DELETE ON orders
+FOR EACH ROW EXECUTE FUNCTION symbolika_refresh_customer_order_balance();
+
+UPDATE customer_operations co
+SET allocated_amount = totals.allocated,
+    payment_due = GREATEST(co.amount - totals.allocated, 0)
+FROM (SELECT co2.id, COALESCE(sum(pa.amount), 0)::numeric(14,2) AS allocated
+      FROM customer_operations co2 LEFT JOIN payment_allocations pa ON pa.customer_operation = co2.id GROUP BY co2.id) totals
+WHERE totals.id = co.id;
+
+UPDATE order_payments op
+SET allocated_amount = totals.allocated,
+    unallocated_amount = GREATEST(op.amount - totals.allocated, 0)
+FROM (SELECT op2.id, COALESCE(sum(pa.amount), 0)::numeric(10,2) AS allocated
+      FROM order_payments op2 LEFT JOIN payment_allocations pa ON pa.payment = op2.id GROUP BY op2.id) totals
+WHERE totals.id = op.id;
+
 DO $$
 DECLARE row_item record;
 BEGIN
@@ -13633,8 +13865,20 @@ INSERT INTO directus_fields (
   ('customer_operations','status',NULL,'select-dropdown','{"choices":[{"text":"Черновик","value":"draft"},{"text":"Подтверждена","value":"confirmed"},{"text":"Отменена","value":"cancelled"}]}'::json,'labels',NULL,false,false,9,'half',json_build_array(json_build_object('language','ru-RU','translation','Статус'))::json,true),
   ('customer_operations','description',NULL,'input-multiline',NULL,NULL,NULL,false,false,10,'full',json_build_array(json_build_object('language','ru-RU','translation','Что сделали'))::json,true),
   ('customer_operations','reference',NULL,'input',NULL,NULL,NULL,false,false,11,'full',json_build_array(json_build_object('language','ru-RU','translation','Ссылка / номер / примечание'))::json,false),
-  ('customer_operations','date_created','date-created',NULL,NULL,'datetime',NULL,true,true,12,'half',NULL,false),
-  ('customer_operations','date_updated','date-updated',NULL,NULL,'datetime',NULL,true,true,13,'half',NULL,false);
+  ('customer_operations','allocated_amount',NULL,'input',NULL,NULL,NULL,true,false,12,'half',json_build_array(json_build_object('language','ru-RU','translation','Оплачено'))::json,false),
+  ('customer_operations','payment_due',NULL,'input',NULL,NULL,NULL,true,false,13,'half',json_build_array(json_build_object('language','ru-RU','translation','Остаток'))::json,false),
+  ('customer_operations','date_created','date-created',NULL,NULL,'datetime',NULL,true,true,14,'half',NULL,false),
+  ('customer_operations','date_updated','date-updated',NULL,NULL,'datetime',NULL,true,true,15,'half',NULL,false);
+
+DELETE FROM directus_fields WHERE collection = 'payment_allocations' AND field = 'customer_operation';
+INSERT INTO directus_fields (
+  collection, field, special, interface, options, display, display_options,
+  readonly, hidden, sort, width, translations, required
+) VALUES (
+  'payment_allocations', 'customer_operation', 'm2o', 'select-dropdown-m2o', '{"template":"{{description}}"}'::json,
+  'related-values', '{"template":"{{description}}"}'::json, false, false, 4, 'half',
+  json_build_array(json_build_object('language','ru-RU','translation','Клиентская операция'))::json, false
+);
 
 DELETE FROM directus_relations
 WHERE many_collection = 'customer_operations' AND many_field IN ('customer','customer_company','manager_employee');
@@ -13643,11 +13887,16 @@ INSERT INTO directus_relations (many_collection, many_field, one_collection, one
   ('customer_operations','customer_company','customer_companies','nullify'),
   ('customer_operations','manager_employee','employees','nullify');
 
+DELETE FROM directus_relations
+WHERE many_collection = 'payment_allocations' AND many_field = 'customer_operation';
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_deselect_action)
+VALUES ('payment_allocations', 'customer_operation', 'customer_operations', 'cascade');
+
 DELETE FROM directus_permissions WHERE collection = 'customer_operations';
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy) VALUES
   ('customer_operations','read','{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,NULL,'*','00000000-0000-4000-8000-000000000201'),
-  ('customer_operations','create','{}'::json,'{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,'operation_date,operation_type,direction,amount,customer,customer_company,manager_employee,status,description,reference','00000000-0000-4000-8000-000000000201'),
-  ('customer_operations','update','{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,'{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,'operation_date,operation_type,direction,amount,customer,customer_company,status,description,reference','00000000-0000-4000-8000-000000000201'),
+  ('customer_operations','create','{}'::json,'{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,'operation_date,operation_type,direction,amount,customer,customer_company,manager_employee,status,description,reference,allocated_amount,payment_due','00000000-0000-4000-8000-000000000201'),
+  ('customer_operations','update','{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,'{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,'operation_date,operation_type,direction,amount,customer,customer_company,status,description,reference,allocated_amount,payment_due','00000000-0000-4000-8000-000000000201'),
   ('customer_operations','read','{}'::json,NULL,NULL,'*','00000000-0000-4000-8000-000000000205'),
   ('customer_operations','create','{}'::json,NULL,NULL,'*','00000000-0000-4000-8000-000000000205'),
   ('customer_operations','update','{}'::json,NULL,NULL,'*','00000000-0000-4000-8000-000000000205'),
@@ -15016,7 +15265,7 @@ INSERT INTO directus_fields (
   ('customer_companies', 'opening_balance_comment', 'input', NULL, NULL, false, false, 9, 'half', json_build_array(json_build_object('language','ru-RU','translation','Комментарий к начальному остатку'))::json, NULL, false, true);
 
 UPDATE directus_fields
-SET options = '{"choices":[{"text":"Начальный остаток","value":"opening_balance"},{"text":"Покупка на маркетплейсе","value":"marketplace_purchase"},{"text":"Выдача / снятие наличных","value":"cash_withdrawal"},{"text":"Прочая просьба","value":"other"}]}'::json
+SET options = '{"choices":[{"text":"Начальный остаток","value":"opening_balance"},{"text":"Покупка на маркетплейсе","value":"marketplace_purchase"},{"text":"Выдача / снятие наличных","value":"cash_withdrawal"},{"text":"Долг перед клиентом","value":"customer_debt"},{"text":"Прочая просьба","value":"other"}]}'::json
 WHERE collection = 'customer_operations' AND field = 'operation_type';
 
 -- Office managers own customer relationships in the same way as managers:
@@ -15028,9 +15277,29 @@ WHERE policy = '00000000-0000-4000-8000-000000000202'
 
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy) VALUES
   ('customer_operations','read','{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,NULL,'*','00000000-0000-4000-8000-000000000202'),
-  ('customer_operations','create','{}'::json,'{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,'operation_date,operation_type,direction,amount,customer,customer_company,manager_employee,status,description,reference','00000000-0000-4000-8000-000000000202'),
-  ('customer_operations','update','{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,'{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,'operation_date,operation_type,direction,amount,customer,customer_company,status,description,reference','00000000-0000-4000-8000-000000000202'),
+  ('customer_operations','create','{}'::json,'{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,'operation_date,operation_type,direction,amount,customer,customer_company,manager_employee,status,description,reference,allocated_amount,payment_due','00000000-0000-4000-8000-000000000202'),
+  ('customer_operations','update','{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,'{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,'operation_date,operation_type,direction,amount,customer,customer_company,status,description,reference,allocated_amount,payment_due','00000000-0000-4000-8000-000000000202'),
   ('manager_finance_summary','read','{"directus_user":{"_eq":"$CURRENT_USER"}}'::json,NULL,NULL,'id,employee,employee_name,order_percent,orders_count,orders_sum,paid_orders_sum,unpaid_orders_sum,commission_total,commission_accrued,commission_expected,commission_paid,commission_to_pay','00000000-0000-4000-8000-000000000202');
+
+UPDATE directus_permissions
+SET fields = CASE WHEN fields = '*' OR position('customer_operation' in fields) > 0 THEN fields ELSE fields || ',customer_operation' END,
+    permissions = CASE WHEN action IN ('read','update')
+      THEN '{"_or":[{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}},{"customer_operation":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}'::json
+      ELSE permissions END
+WHERE collection = 'payment_allocations'
+  AND policy IN ('00000000-0000-4000-8000-000000000201','00000000-0000-4000-8000-000000000202');
+
+UPDATE directus_permissions
+SET validation = '{"_or":[{"order":{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}},{"customer":{"manager":{"directus_user":{"_eq":"$CURRENT_USER"}}}},{"customer_company":{"_or":[{"manager":{"directus_user":{"_eq":"$CURRENT_USER"}}},{"customers":{"manager":{"directus_user":{"_eq":"$CURRENT_USER"}}}}]}}]}'::json
+WHERE collection = 'order_payments'
+  AND action = 'create'
+  AND policy IN ('00000000-0000-4000-8000-000000000201','00000000-0000-4000-8000-000000000202');
+
+UPDATE directus_permissions
+SET validation = '{"payment":{"access_manager_user":{"_eq":"$CURRENT_USER"}}}'::json
+WHERE collection = 'payment_allocations'
+  AND action = 'create'
+  AND policy IN ('00000000-0000-4000-8000-000000000201','00000000-0000-4000-8000-000000000202');
 
 UPDATE directus_permissions
 SET fields = fields || ',opening_balance_amount,opening_balance_direction,opening_balance_date,opening_balance_comment'
