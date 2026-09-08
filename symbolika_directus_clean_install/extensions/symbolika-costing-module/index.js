@@ -9534,7 +9534,7 @@ export const CostingModule = {
 
     async loadTzConstructorSpecs() {
       try {
-        const payload = await this.request('/items/tz_constructor_specs?fields=id,category,subcategory,application_method,category_name,subcategory_name,application_method_name,fields,template,example,active,sort&filter[active][_eq]=true&sort=sort,id&limit=-1');
+        const payload = await this.request('/items/tz_constructor_specs?fields=id,category,subcategory,application_method,category_name,subcategory_name,application_method_name,route_area,fields,template,example,active,sort&filter[active][_eq]=true&sort=sort,id&limit=-1');
         this.tzConstructorSpecs = payload.data || [];
       } catch {
         this.tzConstructorSpecs = [];
@@ -10927,7 +10927,14 @@ export const CostingModule = {
     buildTzText(item) {
       const spec = this.tzConstructorSpecFor(item);
       if (!spec?.template) return '';
-      const base = this.renderTzTemplate(spec.template, this.buildTzContext(item));
+      const context = this.buildTzContext(item);
+      let template = String(spec.template || '');
+      if (spec.route_area === 'screen_printing' && !template.includes('{{quantity}}')) {
+        template = template.includes('{{product_name}}')
+          ? template.replace('{{product_name}}', '{{product_name}}, {{quantity}} шт.')
+          : `{{quantity}} шт., ${template}`;
+      }
+      const base = this.renderTzTemplate(template, context);
       if (!this.isTextileTzItem(item)) return base;
       const values = this.tzConstructorValues(item);
       const additions = [];

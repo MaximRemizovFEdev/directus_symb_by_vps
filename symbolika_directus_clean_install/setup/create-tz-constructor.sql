@@ -434,8 +434,8 @@ INSERT INTO _tz_constructor_seed (
     {"key":"colors_count","label":"Количество цветов","type":"number","required":true},
     {"key":"comment","label":"Комментарий к ТЗ","type":"textarea","required":false}
   ]$json$::jsonb,
-  '{{product_name}}, шелкография {{application_size}}, {{colors_count}} цвет(а){{#comment}}. {{comment}}{{/comment}}',
-  'Ручки, шелкография 60х8 мм, 1 цвет',
+  '{{product_name}}, {{quantity}} шт., шелкография {{application_size}}, {{colors_count}} цвет(а){{#comment}}. {{comment}}{{/comment}}',
+  'Ручки, 100 шт., шелкография 60х8 мм, 1 цвет',
   200
 ),
 (
@@ -794,6 +794,7 @@ SELECT
   END,
   CASE
     WHEN method_name = 'Вышивка' THEN '{{product_name}}, вышивка {{application_size}}, {{colors_count}} цвет(а){{#comment}}. {{comment}}{{/comment}}'
+    WHEN method_name IN ('Шелкография', 'Шелкография с трансфером') THEN '{{product_name}}, {{quantity}} шт., ' || method_name || ', размер нанесения {{application_size}}{{#comment}}. {{comment}}{{/comment}}'
     ELSE '{{product_name}}, ' || method_name || ', размер нанесения {{application_size}}{{#comment}}. {{comment}}{{/comment}}'
   END,
   method_name || ': размер нанесения 90х50 мм',
