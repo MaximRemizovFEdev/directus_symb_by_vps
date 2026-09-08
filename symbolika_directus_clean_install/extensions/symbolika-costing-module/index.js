@@ -539,7 +539,7 @@ const tabs = [
   { id: 'admin_finance_dashboard', title: 'Финансовый дэшборд', collection: '' },
   { id: 'contractor_settlements', title: 'Расчеты с контрагентами', collection: 'contractors' },
   { id: 'monthly_results', title: 'Финрезультат по месяцам', collection: '' },
-  { id: 'finance', title: 'Сверки', collection: 'customer_reconciliation' },
+  { id: 'finance', title: 'Сверки и операции', collection: 'customer_reconciliation' },
   { id: 'client_operations', title: 'Клиентские операции', collection: 'customer_operations' },
   { id: 'gift_certificates', title: 'Подарочные сертификаты', collection: 'gift_certificates' },
   { id: 'clients', title: 'Клиенты', collection: 'customers' },
@@ -650,7 +650,7 @@ const moduleSections = {
   },
   orders: {
     title: 'Заказы',
-    tabs: ['dashboard', 'events', 'problems', 'search', 'all_orders', 'my_orders', 'estimates', 'clients', 'companies', 'finance', 'client_operations', 'gift_certificates', 'office'],
+    tabs: ['dashboard', 'events', 'problems', 'search', 'all_orders', 'my_orders', 'estimates', 'clients', 'companies', 'finance', 'gift_certificates', 'office'],
     roles: ['Administrator', 'Управляющий', 'Менеджер', 'Производство', 'Шелкография', 'Дизайнер'],
   },
   tasks: {
@@ -680,7 +680,7 @@ const moduleSections = {
   },
   finance: {
     title: 'Финансы',
-    tabs: ['finance', 'client_operations', 'gift_certificates'],
+    tabs: ['finance', 'gift_certificates'],
     roles: ['Administrator', 'Управляющий', 'Менеджер'],
   },
   clients: {
@@ -1460,6 +1460,7 @@ export const CostingModule = {
       expandedClientRows: {},
       paymentDialog: null,
       clientPaymentDialog: null,
+      clientOperationDialog: null,
       paymentDeleteDialog: null,
       itemReorganizeDialog: null,
       orderMergeDialog: null,
@@ -1536,7 +1537,7 @@ export const CostingModule = {
       else if (this.currentRoleName === 'Производство') roleTabs = withWorkTabs(['my_orders', 'production', 'labels', 'admin_inventory', 'admin_procurement']);
       else if (this.currentRoleName === 'Шелкография') roleTabs = withWorkTabs(['my_orders', 'screen', 'labels', 'admin_inventory', 'admin_procurement']);
       else if (this.currentRoleName === 'Контрагент') roleTabs = tabs.filter((tab) => tab.id === 'contractor_work');
-      else if (this.currentRoleName === 'Менеджер') roleTabs = withWorkTabs(['my_orders', 'estimates', 'office', 'finance', 'client_operations', 'gift_certificates', 'clients', 'companies', 'admin_procurement']);
+      else if (this.currentRoleName === 'Менеджер') roleTabs = withWorkTabs(['my_orders', 'estimates', 'office', 'finance', 'gift_certificates', 'clients', 'companies', 'admin_procurement']);
       else if (this.currentRoleName === 'Дизайнер') roleTabs = tabs.filter((tab) => ['my_orders', 'tasks', 'tasks_archive', 'events', 'admin_procurement'].includes(tab.id));
       else roleTabs = [];
 
@@ -2026,7 +2027,7 @@ export const CostingModule = {
         { title: 'Личный кабинет', tabs: ['profile'] },
         { title: 'Работа', tabs: ['dashboard', 'queue', 'tasks', 'tasks_archive', 'events', 'problems', 'search'] },
         { title: 'Заказы', tabs: ['all_orders', 'my_orders', 'estimates'] },
-        { title: 'Клиенты и расчёты', tabs: ['clients', 'companies', 'finance', 'client_operations', 'gift_certificates'] },
+        { title: 'Клиенты и расчёты', tabs: ['clients', 'companies', 'finance', 'gift_certificates'] },
         { title: 'Работа контрагента', tabs: ['contractor_work'] },
         { title: 'Производство', tabs: ['production', 'screen', 'labels'] },
         { title: 'Склад', tabs: ['admin_inventory'] },
@@ -5318,7 +5319,7 @@ export const CostingModule = {
       }
       if (allowed.has('admin_finance_dashboard') || allowed.has('expenses') || allowed.has('payroll') || allowed.has('contractor_settlements') || allowed.has('monthly_results')) tasks.push(this.loadFinanceRows(), this.loadExpenseRows(), this.loadContractorPaymentRows(), this.loadSalaryRows(), this.loadMonthlySalaryRows(), this.loadFinanceSettings(), this.loadEmployees(), this.loadPaymentTypes(), this.loadContractors(), this.loadRows(), this.loadContractorRows());
       if (allowed.has('payroll')) tasks.push(this.loadManagerSummary(), this.loadPayrollSalaryRows());
-      if (allowed.has('finance')) tasks.push(this.loadFinanceRows(), this.loadFinanceItemRows(), this.loadManagerFinanceSummary(), this.loadCustomers(), this.loadCompanies(), this.loadGiftCertificates());
+      if (allowed.has('finance')) tasks.push(this.loadFinanceRows(), this.loadFinanceItemRows(), this.loadManagerFinanceSummary(), this.loadCustomers(), this.loadCompanies(), this.loadGiftCertificates(), this.loadPaymentTypes());
       if (allowed.has('gift_certificates')) tasks.push(this.loadGiftCertificates(), this.loadGiftCertificateTransactions(), this.loadCustomers(), this.loadCompanies());
       if (allowed.has('clients') || allowed.has('companies')) tasks.push(this.loadFinanceRows(), this.loadCustomers(), this.loadCompanies(), this.loadGiftCertificates(), this.loadEmployees());
       if (!allowed.has('finance') && !allowed.has('clients') && !allowed.has('companies') && (allowed.has('my_orders') || allowed.has('all_orders') || allowed.has('deadlines') || allowed.has('office'))) tasks.push(this.loadCustomers(), this.loadCompanies());
@@ -5550,34 +5551,53 @@ export const CostingModule = {
       return value === 'we_owe_customer' ? 'Мы должны клиенту' : 'Клиент должен нам';
     },
 
-    openClientDebtOperation() {
-      this.startAdminCreate();
-      if (this.adminEditing !== 'new') return;
-      this.adminForm.direction = 'we_owe_customer';
-      this.adminForm.operation_type = 'customer_debt';
-      if (this.financeCompanyFilter) {
-        this.adminForm.customer_company = String(this.financeCompanyFilter);
-      } else if (this.financeCustomerFilter) {
-        const customerId = String(this.financeCustomerFilter);
-        const customer = this.customers.find((row) => String(row.id) === customerId);
-        const linkedCompany = this.entityId(customer?.company);
-        if (linkedCompany) this.adminForm.customer_company = linkedCompany;
-        else this.adminForm.customer = customerId;
-      }
-      this.hydrateAdminSearchableRelations();
-    },
-
-    openClientPaymentDialog() {
-      let customerId = String(this.financeCustomerFilter || '');
-      let companyId = String(this.financeCompanyFilter || '');
+    selectedFinanceParty(row = null) {
+      let customerId = String(this.entityId(row?.customer) || this.financeCustomerFilter || '');
+      let companyId = String(this.entityId(row?.customer_company) || this.financeCompanyFilter || '');
       if (customerId && !companyId) {
-        const customer = this.customers.find((row) => String(row.id) === customerId);
+        const customer = this.customers.find((item) => String(item.id) === customerId);
         const linkedCompany = this.entityId(customer?.company);
         if (linkedCompany) {
           companyId = linkedCompany;
           customerId = '';
         }
       }
+      return { customerId, companyId };
+    },
+
+    selectFinanceCustomer() {
+      if (this.financeCustomerFilter) this.financeCompanyFilter = '';
+      const { customerId, companyId } = this.selectedFinanceParty();
+      this.financeCustomerFilter = customerId;
+      this.financeCompanyFilter = companyId;
+    },
+
+    selectFinanceCompany() {
+      if (this.financeCompanyFilter) this.financeCustomerFilter = '';
+    },
+
+    selectClientRowPayer(row) {
+      const { customerId, companyId } = this.selectedFinanceParty(row);
+      this.financeCustomerFilter = customerId;
+      this.financeCompanyFilter = companyId;
+    },
+
+    openClientPaymentForRow(row) {
+      this.selectClientRowPayer(row);
+      this.openClientPaymentDialog();
+    },
+
+    openClientOperationForRow(row) {
+      this.selectClientRowPayer(row);
+      this.openClientOperationDialog();
+    },
+
+    openClientDebtOperation() {
+      this.openClientOperationDialog(null, 'we_owe_customer');
+    },
+
+    openClientPaymentDialog() {
+      const { customerId, companyId } = this.selectedFinanceParty();
       this.clientPaymentDialog = {
         partyType: companyId ? 'company' : 'customer',
         customerId,
@@ -5590,6 +5610,76 @@ export const CostingModule = {
         saving: false,
       };
       this.refreshClientPaymentTargets();
+    },
+
+    openClientOperationDialog(row = null, defaultDirection = 'customer_owes_us') {
+      const operationId = this.entityId(row?.client_operation);
+      const { customerId, companyId } = this.selectedFinanceParty(row);
+      const direction = row?.direction || defaultDirection;
+      this.clientOperationDialog = {
+        id: operationId || null,
+        partyType: companyId ? 'company' : 'customer',
+        customerId,
+        companyId,
+        operationDate: this.dateOnly(row?.date) || this.todayInput(),
+        operationType: row?.operation_type || (direction === 'we_owe_customer' ? 'customer_debt' : 'other'),
+        direction,
+        amount: row ? String(this.parseMoney(row.order_sum) || '') : '',
+        description: row?.description || '',
+        reference: '',
+        saving: false,
+      };
+    },
+
+    closeClientOperationDialog() {
+      if (this.clientOperationDialog?.saving) return;
+      this.clientOperationDialog = null;
+    },
+
+    async saveClientOperation() {
+      const dialog = this.clientOperationDialog;
+      if (!dialog || dialog.saving) return;
+      const customerId = dialog.partyType === 'customer' ? Number(dialog.customerId || 0) : 0;
+      const companyId = dialog.partyType === 'company' ? Number(dialog.companyId || 0) : 0;
+      const amount = this.parseMoney(dialog.amount);
+      if (!customerId && !companyId) {
+        this.error = 'Выберите клиента или компанию.';
+        return;
+      }
+      if (amount <= 0) {
+        this.error = 'Укажите сумму клиентской операции.';
+        return;
+      }
+      if (!String(dialog.description || '').trim()) {
+        this.error = 'Опишите клиентскую операцию.';
+        return;
+      }
+
+      dialog.saving = true;
+      this.error = '';
+      try {
+        const body = {
+          operation_date: dialog.operationDate || this.todayInput(),
+          operation_type: dialog.operationType || 'other',
+          direction: dialog.direction || 'customer_owes_us',
+          amount,
+          customer: customerId || null,
+          customer_company: companyId || null,
+          status: 'confirmed',
+          description: String(dialog.description || '').trim(),
+        };
+        if (!dialog.id || dialog.reference) body.reference = String(dialog.reference || '').trim() || null;
+        if (!dialog.id && this.currentEmployeeId) body.manager_employee = Number(this.currentEmployeeId);
+        await this.request(dialog.id ? `/items/customer_operations/${dialog.id}` : '/items/customer_operations', {
+          method: dialog.id ? 'PATCH' : 'POST',
+          body: JSON.stringify(body),
+        });
+        this.clientOperationDialog = null;
+        await Promise.all([this.loadFinanceRows(), this.loadCustomers(), this.loadCompanies()]);
+      } catch (error) {
+        this.error = error?.message || 'Не удалось сохранить клиентскую операцию.';
+        if (this.clientOperationDialog) this.clientOperationDialog.saving = false;
+      }
     },
 
     closeClientPaymentDialog() {
@@ -5694,12 +5784,7 @@ export const CostingModule = {
     },
 
     openClientOperation(row) {
-      const operationId = this.entityId(row?.client_operation);
-      this.setTab('client_operations');
-      this.$nextTick(() => {
-        const operation = (this.adminRows.client_operations || []).find((item) => String(item.id) === operationId);
-        if (operation) this.startAdminEdit(operation);
-      });
+      this.openClientOperationDialog(row);
     },
 
     clearFinanceEntityFilters() {
@@ -17313,17 +17398,27 @@ export const CostingModule = {
 
         .symbolika-costing-reconciliation-toolbar {
           align-items: flex-start;
+          flex-wrap: wrap;
         }
 
         .symbolika-costing-reconciliation-filters {
           display: grid;
           grid-template-columns: minmax(150px, 230px) minmax(150px, 230px) 140px 140px auto;
+          flex: 1 1 760px;
           gap: 10px;
           align-items: center;
         }
 
         .symbolika-costing-reconciliation-filters .symbolika-costing-input {
           min-inline-size: 0;
+        }
+
+        .symbolika-costing-client-finance-actions {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          flex-wrap: wrap;
+          gap: 8px;
         }
 
         .symbolika-costing-table-finance-items {
@@ -17823,6 +17918,7 @@ export const CostingModule = {
         .symbolika-costing-client-card-actions {
           display: flex;
           align-items: center;
+          flex-wrap: wrap;
           gap: 10px;
           margin-block-start: 12px;
         }
@@ -32590,13 +32686,13 @@ export const CostingModule = {
         <div v-if="activeTab === 'finance' && moduleSection === 'clients'" class="symbolika-costing-reconciliation">
           <div class="symbolika-costing-subtoolbar symbolika-costing-reconciliation-toolbar">
             <div class="symbolika-costing-reconciliation-filters">
-              <select v-model="financeCustomerFilter" class="symbolika-costing-select">
+              <select v-model="financeCustomerFilter" class="symbolika-costing-select" @change="selectFinanceCustomer">
                 <option value="">Все клиенты</option>
                 <option v-for="customer in customers" :key="customer.id" :value="customer.id">
                   {{ customer.name }}{{ customer.phone ? ' · ' + customer.phone : '' }}
                 </option>
               </select>
-              <select v-model="financeCompanyFilter" class="symbolika-costing-select">
+              <select v-model="financeCompanyFilter" class="symbolika-costing-select" @change="selectFinanceCompany">
                 <option value="">Все компании</option>
                 <option v-for="company in companies" :key="company.id" :value="company.id">
                   {{ company.name }}
@@ -32607,6 +32703,14 @@ export const CostingModule = {
               <button type="button" class="symbolika-costing-mini-button" @click="clearFinanceEntityFilters">
                 <v-icon name="filter_alt_off" small />
                 Сбросить
+              </button>
+            </div>
+            <div class="symbolika-costing-client-finance-actions">
+              <button type="button" class="symbolika-costing-button symbolika-costing-button-compact" @click="openClientPaymentDialog">
+                <v-icon name="payments" small />Принять оплату
+              </button>
+              <button type="button" class="symbolika-costing-mini-button" @click="openClientOperationDialog()">
+                <v-icon name="add" small />Добавить операцию
               </button>
             </div>
           </div>
@@ -32674,7 +32778,8 @@ export const CostingModule = {
                   </span>
                   <span>
                     <v-icon name="receipt_long" small />
-                    {{ row.orders.length }} {{ pluralRu(row.orders.length, 'заказ', 'заказа', 'заказов') }}
+                    {{ row.orders.length }} {{ pluralRu(row.orders.length, 'заказ', 'заказа', 'заказов') }} ·
+                    {{ row.operations.length }} {{ pluralRu(row.operations.length, 'операция', 'операции', 'операций') }}
                   </span>
                 </div>
 
@@ -32699,9 +32804,15 @@ export const CostingModule = {
                 </div>
 
                 <div class="symbolika-costing-client-card-actions">
+                  <button type="button" class="symbolika-costing-button symbolika-costing-button-compact" @click="openClientPaymentForRow(row)">
+                    <v-icon name="payments" small />Оплата
+                  </button>
+                  <button type="button" class="symbolika-costing-mini-button" @click="openClientOperationForRow(row)">
+                    <v-icon name="add" small />Операция
+                  </button>
                   <button type="button" class="symbolika-costing-mini-button" @click="toggleClientRow(row)">
                     <v-icon :name="isClientRowExpanded(row) ? 'expand_less' : 'expand_more'" small />
-                    {{ isClientRowExpanded(row) ? 'Скрыть заказы' : 'Показать заказы' }}
+                    {{ isClientRowExpanded(row) ? 'Скрыть историю' : 'Показать историю' }}
                   </button>
                   <button type="button" class="symbolika-costing-mini-button" @click="openEntityDetail(row.customer_company_name ? 'company' : 'customer', row)">
                     <v-icon name="account_balance_wallet" small />
@@ -32726,6 +32837,24 @@ export const CostingModule = {
                     <span class="symbolika-costing-cell-money">
                       <span>Сумма <strong>{{ formatMoney(order.order_sum) }}</strong></span>
                       <span>Остаток <strong>{{ formatMoney(order.payment_due) }}</strong></span>
+                    </span>
+                  </div>
+                  <div
+                    v-for="operation in row.operations"
+                    :key="'operation-' + operation.id"
+                    class="symbolika-costing-client-order"
+                    role="button"
+                    tabindex="0"
+                    @click="openClientOperation(operation)"
+                    @keydown.enter="openClientOperation(operation)"
+                  >
+                    <span class="symbolika-costing-client-order-title">
+                      <span class="symbolika-costing-order">{{ clientOperationTypeName(operation.operation_type) }}</span>
+                      <span class="symbolika-costing-cell-meta">{{ formatDate(operation.date) }} · {{ operation.description || clientOperationDirectionName(operation.direction) }}</span>
+                    </span>
+                    <span class="symbolika-costing-cell-money">
+                      <span>Сумма <strong>{{ formatMoney(operation.order_sum) }}</strong></span>
+                      <span>Остаток <strong>{{ formatMoney(operation.payment_due) }}</strong></span>
                     </span>
                   </div>
                 </div>
@@ -32790,13 +32919,13 @@ export const CostingModule = {
             </div>
 
             <div class="symbolika-costing-reconciliation-filters">
-              <select v-model="financeCustomerFilter" class="symbolika-costing-select">
+              <select v-model="financeCustomerFilter" class="symbolika-costing-select" @change="selectFinanceCustomer">
                 <option value="">Все клиенты</option>
                 <option v-for="customer in customers" :key="customer.id" :value="customer.id">
                   {{ customer.name }}{{ customer.phone ? ' · ' + customer.phone : '' }}
                 </option>
               </select>
-              <select v-model="financeCompanyFilter" class="symbolika-costing-select">
+              <select v-model="financeCompanyFilter" class="symbolika-costing-select" @change="selectFinanceCompany">
                 <option value="">Все компании</option>
                 <option v-for="company in companies" :key="company.id" :value="company.id">
                   {{ company.name }}
@@ -32807,6 +32936,14 @@ export const CostingModule = {
               <button type="button" class="symbolika-costing-mini-button" @click="clearFinanceEntityFilters">
                 <v-icon name="filter_alt_off" small />
                 Сбросить
+              </button>
+            </div>
+            <div class="symbolika-costing-client-finance-actions">
+              <button type="button" class="symbolika-costing-button symbolika-costing-button-compact" @click="openClientPaymentDialog">
+                <v-icon name="payments" small />Принять оплату
+              </button>
+              <button type="button" class="symbolika-costing-mini-button" @click="openClientOperationDialog()">
+                <v-icon name="add" small />Добавить операцию
               </button>
             </div>
           </div>
@@ -36008,6 +36145,80 @@ export const CostingModule = {
               <button type="button" class="symbolika-costing-mini-button" :disabled="clientPaymentDialog.saving" @click="closeClientPaymentDialog">Отмена</button>
               <button type="button" class="symbolika-costing-button" :disabled="clientPaymentDialog.saving" @click="saveClientPayment">
                 <v-icon name="save" small />{{ clientPaymentDialog.saving ? 'Сохраняю…' : 'Сохранить оплату' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="clientOperationDialog" class="symbolika-costing-modal-backdrop" @click.self="closeClientOperationDialog">
+          <div class="symbolika-costing-modal symbolika-costing-client-payment-modal">
+            <div class="symbolika-costing-modal-head">
+              <div>
+                <div class="symbolika-costing-subtle">Клиентские взаиморасчёты</div>
+                <h2>{{ clientOperationDialog.id ? 'Редактировать операцию' : 'Добавить операцию клиенту' }}</h2>
+                <p>Операция сразу попадёт в сверку выбранного клиента или компании.</p>
+              </div>
+              <button type="button" class="symbolika-costing-detail-close" :disabled="clientOperationDialog.saving" @click="closeClientOperationDialog">×</button>
+            </div>
+
+            <div class="symbolika-costing-segments symbolika-costing-payment-mode">
+              <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': clientOperationDialog.partyType === 'customer' }" @click="clientOperationDialog.partyType = 'customer'; clientOperationDialog.companyId = ''">Клиент</button>
+              <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': clientOperationDialog.partyType === 'company' }" @click="clientOperationDialog.partyType = 'company'; clientOperationDialog.customerId = ''">Компания</button>
+            </div>
+
+            <div class="symbolika-costing-modal-grid">
+              <label v-if="clientOperationDialog.partyType === 'customer'" class="symbolika-costing-label symbolika-costing-detail-wide">
+                Клиент
+                <select v-model="clientOperationDialog.customerId" class="symbolika-costing-select">
+                  <option value="">Выберите клиента</option>
+                  <option v-for="customer in customers.filter(item => !entityId(item.company))" :key="customer.id" :value="customer.id">{{ customer.name }}{{ customer.phone ? ' · ' + customer.phone : '' }}</option>
+                </select>
+              </label>
+              <label v-else class="symbolika-costing-label symbolika-costing-detail-wide">
+                Компания
+                <select v-model="clientOperationDialog.companyId" class="symbolika-costing-select">
+                  <option value="">Выберите компанию</option>
+                  <option v-for="company in companies" :key="company.id" :value="company.id">{{ company.name }}</option>
+                </select>
+              </label>
+              <label class="symbolika-costing-label">
+                Влияние на баланс
+                <select v-model="clientOperationDialog.direction" class="symbolika-costing-select" @change="clientOperationDialog.operationType = clientOperationDialog.direction === 'we_owe_customer' ? 'customer_debt' : (clientOperationDialog.operationType === 'customer_debt' ? 'other' : clientOperationDialog.operationType)">
+                  <option value="customer_owes_us">Клиент должен нам</option>
+                  <option value="we_owe_customer">Мы должны клиенту</option>
+                </select>
+              </label>
+              <label class="symbolika-costing-label">
+                Вид операции
+                <select v-model="clientOperationDialog.operationType" class="symbolika-costing-select">
+                  <option value="marketplace_purchase">Покупка на маркетплейсе</option>
+                  <option value="cash_withdrawal">Выдача / снятие наличных</option>
+                  <option value="customer_debt">Долг перед клиентом</option>
+                  <option value="other">Прочая просьба</option>
+                </select>
+              </label>
+              <label class="symbolika-costing-label">
+                Сумма
+                <input v-model="clientOperationDialog.amount" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0,00" @focus="prepareNumericInput($event)" />
+              </label>
+              <label class="symbolika-costing-label">
+                Дата
+                <input v-model="clientOperationDialog.operationDate" class="symbolika-costing-input" type="date" />
+              </label>
+              <label class="symbolika-costing-label symbolika-costing-detail-wide">
+                Что сделали / основание
+                <textarea v-model.trim="clientOperationDialog.description" class="symbolika-costing-comment" placeholder="Например: купили товар по просьбе клиента"></textarea>
+              </label>
+              <label class="symbolika-costing-label symbolika-costing-detail-wide">
+                Ссылка, номер или примечание
+                <input v-model.trim="clientOperationDialog.reference" class="symbolika-costing-input" placeholder="Необязательно" />
+              </label>
+            </div>
+
+            <div class="symbolika-costing-modal-actions">
+              <button type="button" class="symbolika-costing-mini-button" :disabled="clientOperationDialog.saving" @click="closeClientOperationDialog">Отмена</button>
+              <button type="button" class="symbolika-costing-button" :disabled="clientOperationDialog.saving" @click="saveClientOperation">
+                <v-icon name="save" small />{{ clientOperationDialog.saving ? 'Сохраняю…' : 'Сохранить операцию' }}
               </button>
             </div>
           </div>
