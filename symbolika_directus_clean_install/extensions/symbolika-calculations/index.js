@@ -157,18 +157,8 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
   }
 
   async function generateOrderNumber() {
-    const last = await database('orders')
-      .whereNotNull('order_number')
-      .orderBy('id', 'desc')
-      .first();
-
-    let next = 1;
-
-    if (last?.order_number) {
-      const match = String(last.order_number).match(/(\d+)$/);
-      if (match) next = Number(match[1]) + 1;
-    }
-
+    const result = await database.raw("select nextval('orders_order_number_seq')::bigint as value");
+    const next = Number(result?.rows?.[0]?.value || result?.[0]?.value || 1);
     return `SO-${String(next).padStart(5, '0')}`;
   }
 
