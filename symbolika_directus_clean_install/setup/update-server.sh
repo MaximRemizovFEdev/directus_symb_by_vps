@@ -103,11 +103,11 @@ log "Установка воспроизводимых зависимостей 
 docker compose stop directus >/dev/null 2>&1 || true
 docker run --rm -v "${PROJECT_DIR}/extensions/symbolika-calculations:/app" -w /app node:20-alpine npm ci --omit=dev
 docker run --rm -v "${PROJECT_DIR}/extensions/symbolika-mail:/app" -w /app node:20-alpine npm ci --omit=dev
-if ! test -f "${PROJECT_DIR}/extensions/symbolika-mail/node_modules/imapflow/index.js"; then
+if ! test -f "${PROJECT_DIR}/extensions/symbolika-mail/node_modules/imapflow/lib/imap-flow.js"; then
   log "Повторная установка зависимостей почты после неполного npm ci"
   docker run --rm -v "${PROJECT_DIR}/extensions/symbolika-mail:/app" -w /app node:20-alpine npm ci --omit=dev
 fi
-test -f "${PROJECT_DIR}/extensions/symbolika-mail/node_modules/imapflow/index.js" \
+test -f "${PROJECT_DIR}/extensions/symbolika-mail/node_modules/imapflow/lib/imap-flow.js" \
   || fail "Зависимость imapflow почтового расширения не установлена"
 
 log "Применение новых транзакционных миграций"
