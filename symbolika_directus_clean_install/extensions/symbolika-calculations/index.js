@@ -210,15 +210,19 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     return status?.id || null;
   }
 
-  async function normalizedContractorCost(contractorId, value) {
-    if (!contractorId) return num(value);
+  async function contractorCostComponent(contractorId, value) {
+    if (!contractorId) return { cost: num(value), isScreenPrinting: false };
 
     const contractor = await database('contractors')
       .where({ id: contractorId })
-      .select('is_internal_production')
+      .select('name', 'is_internal_production')
       .first();
+    const isScreenPrinting = String(contractor?.name || '').toLowerCase().includes('шелкограф');
 
-    return contractor?.is_internal_production ? 0 : num(value);
+    return {
+      cost: contractor?.is_internal_production || isScreenPrinting ? 0 : num(value),
+      isScreenPrinting,
+    };
   }
 
   async function getRoleUserIds(roleName) {
@@ -2120,10 +2124,17 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     const quantity = num(item.quantity);
     const price = num(item.price_per_unit);
 
-    const contractor_1_cost = await normalizedContractorCost(item.contractor_1, item.contractor_1_cost);
-    const contractor_2_cost = await normalizedContractorCost(item.contractor_2, item.contractor_2_cost);
+    const contractor1 = await contractorCostComponent(item.contractor_1, item.contractor_1_cost);
+    const contractor2 = await contractorCostComponent(item.contractor_2, item.contractor_2_cost);
+    const contractor_1_cost = contractor1.cost;
+    const contractor_2_cost = contractor2.cost;
+    const screenPrintingCost = contractor1.isScreenPrinting
+      || contractor2.isScreenPrinting
+      || Boolean(item.internal_route_screen)
+      ? num(item.screen_printing_cost_per_unit)
+      : 0;
 
-    const unit_cost = round(contractor_1_cost + contractor_2_cost);
+    const unit_cost = round(contractor_1_cost + contractor_2_cost + screenPrintingCost);
     const total_cost = round(unit_cost * quantity);
 
     const order_sum = round(quantity * price);

@@ -6,6 +6,15 @@ const numberValue = (value) => {
 
 const normalizedItemStatus = (value) => String(value || '').trim().toLowerCase();
 
+export const orderMarginBeforePayroll = (row) => (
+  numberValue(row?.profit_sum) + numberValue(row?.manager_commission_sum)
+);
+
+export const orderMarginPercentBeforePayroll = (row) => {
+  const revenue = numberValue(row?.order_sum);
+  return revenue > 0 ? orderMarginBeforePayroll(row) / revenue * 100 : 0;
+};
+
 export function buildMonthlyFinancialRows({
   costingRows = [],
   expenseRows = [],
@@ -51,9 +60,7 @@ export function buildMonthlyFinancialRows({
   orders.forEach((order) => {
     const month = ensure(order.date);
     if (!month) return;
-    const margin = order.rows.reduce((sum, row) => (
-      sum + numberValue(row?.profit_sum) + numberValue(row?.manager_commission_sum)
-    ), 0);
+    const margin = order.rows.reduce((sum, row) => sum + orderMarginBeforePayroll(row), 0);
     const completed = order.rows.length > 0
       && order.rows.every((row) => normalizedItemStatus(row?.item_status) === 'delivered');
 

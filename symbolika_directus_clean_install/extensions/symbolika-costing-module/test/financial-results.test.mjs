@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildMonthlyFinancialRows } from '../lib/financial-results.js';
+import {
+  buildMonthlyFinancialRows,
+  orderMarginBeforePayroll,
+  orderMarginPercentBeforePayroll,
+} from '../lib/financial-results.js';
 
 const monthKey = (value) => String(value || '').slice(0, 7);
 const monthLabel = (value) => value;
@@ -57,4 +61,23 @@ test('recognizes an order only after every active position is delivered', () => 
   assert.equal(row.completed_order_margin, 0);
   assert.equal(row.completed_orders_count_value, 0);
   assert.equal(row.completed_items_count, 0);
+});
+
+test('uses the same margin before payroll in order economics and monthly results', () => {
+  const item = {
+    order_sum: 1000,
+    profit_sum: 820,
+    manager_commission_sum: 30,
+  };
+
+  assert.equal(orderMarginBeforePayroll(item), 850);
+  assert.equal(orderMarginPercentBeforePayroll(item), 85);
+
+  const [month] = buildMonthlyFinancialRows({
+    costingRows: [{ ...item, id: 1, order: 10, date: '2026-09-02', item_status: 'delivered' }],
+    monthKey,
+    monthLabel,
+    orderKey,
+  });
+  assert.equal(month.order_margin, orderMarginBeforePayroll(item));
 });

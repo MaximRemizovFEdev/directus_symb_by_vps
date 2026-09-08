@@ -68,7 +68,11 @@ import {
   orderNumber as resolveOrderNumber,
   orderRowKey as resolveOrderRowKey,
 } from './lib/entity-context.js';
-import { buildMonthlyFinancialRows } from './lib/financial-results.js';
+import {
+  buildMonthlyFinancialRows,
+  orderMarginBeforePayroll,
+  orderMarginPercentBeforePayroll,
+} from './lib/financial-results.js';
 import {
   autoAllocateClientPayment,
   clientPaymentAllocationSummary,
@@ -2472,7 +2476,10 @@ export const CostingModule = {
         summary.cost += this.parseMoney(itemView ? row.total_cost : row.items_total_cost);
         summary.tax += this.parseMoney(itemView ? row.tax_sum : row.items_tax_sum);
         summary.commission += this.parseMoney(itemView ? row.manager_commission_sum : row.items_manager_commission_sum);
-        summary.profit += this.parseMoney(row.profit_sum);
+        summary.profit += orderMarginBeforePayroll({
+          profit_sum: row.profit_sum,
+          manager_commission_sum: itemView ? row.manager_commission_sum : row.items_manager_commission_sum,
+        });
         return summary;
       }, { orders: 0, items: 0, revenue: 0, cost: 0, tax: 0, commission: 0, profit: 0 });
     },
@@ -3176,6 +3183,8 @@ export const CostingModule = {
     },
 
     monthlyFinancialRows() {
+      const currentMonthKey = this.monthKey(new Date());
+      const futureExpenses = this.parseMoney(this.currentPremisesStatus.due);
       return buildMonthlyFinancialRows({
         costingRows: this.rows,
         expenseRows: this.expenseRows,
@@ -3183,6 +3192,13 @@ export const CostingModule = {
         monthKey: (value) => this.monthKey(value),
         monthLabel: (value) => this.monthLabel(value),
         orderKey: (row) => this.entityId(row?.order_link) || row?.order || row?.order_number || null,
+      }).map((row) => {
+        const knownFutureExpenses = row.key === currentMonthKey ? futureExpenses : 0;
+        return {
+          ...row,
+          known_future_expenses: knownFutureExpenses,
+          projected_result: row.result - knownFutureExpenses,
+        };
       });
     },
 
@@ -3194,7 +3210,7 @@ export const CostingModule = {
         summary.other_expenses += row.other_expenses;
         summary.completed_order_margin += row.completed_order_margin;
         summary.actual_result += row.actual_result;
-        summary.result += row.result;
+        summary.result += row.projected_result;
         return summary;
       }, {
         clean_profit: 0,
@@ -3230,8 +3246,15 @@ export const CostingModule = {
         completed_items_count: 0,
       };
 
-      const customerDebt = this.financeRows.reduce((sum, row) => sum + Math.max(this.parseMoney(row.payment_due), 0), 0);
-      const customerOverpay = this.financeRows.reduce((sum, row) => sum + Math.max(this.parseMoney(row.overpayment), 0), 0);
+      // A payer may have debts, advances and client operations at the same
+      // time. Use the payer's net master balance once instead of summing
+      // order rows, which would count the same payment more than once.
+      const payers = [
+        ...(this.companies || []),
+        ...(this.customers || []).filter((customer) => !this.entityId(customer.company)),
+      ];
+      const customerDebt = payers.reduce((sum, payer) => sum + Math.max(-this.parseMoney(payer.balance), 0), 0);
+      const customerOverpay = payers.reduce((sum, payer) => sum + Math.max(this.parseMoney(payer.balance), 0), 0);
       const contractorDebt = this.contractorRows.reduce((sum, row) => sum + Math.max(this.parseMoney(row.debt_to_contractor), 0), 0);
       const salaryDebt = this.salaryRows.reduce((sum, row) => sum + Math.max(this.parseMoney(row.salary_debt), 0), 0);
       const ourDebt = contractorDebt + salaryDebt + customerOverpay;
@@ -3245,7 +3268,9 @@ export const CostingModule = {
       const projectedExpenses = this.parseMoney(monthRow.other_expenses)
         + this.parseMoney(monthRow.salary_expenses)
         + unpaidPremises;
-      const projectedResult = this.parseMoney(monthRow.order_margin) - projectedExpenses;
+      const projectedResult = monthRow.projected_result === undefined
+        ? this.parseMoney(monthRow.order_margin) - projectedExpenses
+        : this.parseMoney(monthRow.projected_result);
 
       return {
         customerDebt,
@@ -3257,6 +3282,7 @@ export const CostingModule = {
           ...monthRow,
           operational_expenses_to_date: this.parseMoney(monthRow.other_expenses),
           future_operational_expenses: unpaidPremises,
+          projected_other_expenses: this.parseMoney(monthRow.other_expenses) + unpaidPremises,
           result_to_date: this.parseMoney(monthRow.actual_result),
           projected_expenses: projectedExpenses,
           projected_result: projectedResult,
@@ -3624,6 +3650,21 @@ export const CostingModule = {
   },
 
   methods: {
+    orderEconomicsMargin(row, itemView = false) {
+      return orderMarginBeforePayroll({
+        profit_sum: row?.profit_sum,
+        manager_commission_sum: itemView ? row?.manager_commission_sum : row?.items_manager_commission_sum,
+      });
+    },
+
+    orderEconomicsMarginPercent(row, itemView = false) {
+      return orderMarginPercentBeforePayroll({
+        order_sum: row?.order_sum,
+        profit_sum: row?.profit_sum,
+        manager_commission_sum: itemView ? row?.manager_commission_sum : row?.items_manager_commission_sum,
+      });
+    },
+
     eventIsVisibleToCurrentUser(event) {
       if (this.currentRoleName !== 'Менеджер') return true;
       const currentUser = String(this.currentUserId || '');
@@ -5317,7 +5358,7 @@ export const CostingModule = {
       ) {
         tasks.push(this.loadRows({ silent: true }), this.loadContractors());
       }
-      if (allowed.has('admin_finance_dashboard') || allowed.has('expenses') || allowed.has('payroll') || allowed.has('contractor_settlements') || allowed.has('monthly_results')) tasks.push(this.loadFinanceRows(), this.loadExpenseRows(), this.loadContractorPaymentRows(), this.loadSalaryRows(), this.loadMonthlySalaryRows(), this.loadFinanceSettings(), this.loadEmployees(), this.loadPaymentTypes(), this.loadContractors(), this.loadRows(), this.loadContractorRows());
+      if (allowed.has('admin_finance_dashboard') || allowed.has('expenses') || allowed.has('payroll') || allowed.has('contractor_settlements') || allowed.has('monthly_results')) tasks.push(this.loadFinanceRows(), this.loadExpenseRows(), this.loadContractorPaymentRows(), this.loadSalaryRows(), this.loadMonthlySalaryRows(), this.loadFinanceSettings(), this.loadEmployees(), this.loadPaymentTypes(), this.loadContractors(), this.loadRows(), this.loadContractorRows(), this.loadCustomers(), this.loadCompanies());
       if (allowed.has('payroll')) tasks.push(this.loadManagerSummary(), this.loadPayrollSalaryRows());
       if (allowed.has('finance')) tasks.push(this.loadFinanceRows(), this.loadFinanceItemRows(), this.loadManagerFinanceSummary(), this.loadCustomers(), this.loadCompanies(), this.loadGiftCertificates(), this.loadPaymentTypes());
       if (allowed.has('gift_certificates')) tasks.push(this.loadGiftCertificates(), this.loadGiftCertificateTransactions(), this.loadCustomers(), this.loadCompanies());
@@ -5441,8 +5482,8 @@ export const CostingModule = {
         if (key === 'date') return this.sortDateValue(row.date);
         if (key === 'revenue') return this.parseMoney(row.order_sum);
         if (key === 'cost') return this.parseMoney(this.orderEconomicsView === 'items' ? row.total_cost : row.items_total_cost);
-        if (key === 'profit') return this.parseMoney(row.profit_sum);
-        if (key === 'margin') return this.parseMoney(row.margin_percent);
+        if (key === 'profit') return this.orderEconomicsMargin(row, this.orderEconomicsView === 'items');
+        if (key === 'margin') return this.orderEconomicsMarginPercent(row, this.orderEconomicsView === 'items');
         return this.orderNumber(row);
       };
       return [...rows].sort((left, right) => this.compareSortValues(value(left), value(right)) * direction);
@@ -14075,8 +14116,8 @@ export const CostingModule = {
           "Себестоимость1": row.contractor_1_cost,
           "Подрядчик2": this.relatedName(row.contractor_2),
           "Себестоимость2": row.contractor_2_cost,
-          "Прибыль": this.formatMoney(row.profit_sum),
-          "Маржа": `${this.formatMoney(row.margin_percent)}%`,
+          "Маржа до зарплат": this.formatMoney(this.orderEconomicsMargin(row, true)),
+          "Маржа, %": `${this.formatMoney(this.orderEconomicsMarginPercent(row, true))}%`,
         }));
       }
 
@@ -14095,8 +14136,8 @@ export const CostingModule = {
             "Себестоимость": this.formatMoney(row.total_cost),
             "Процент менеджера": this.formatMoney(row.manager_commission_sum),
             "Налоги": this.formatMoney(row.tax_sum),
-            "Прибыль": this.formatMoney(row.profit_sum),
-            "Маржа": `${this.formatMoney(row.margin_percent)}%`,
+            "Маржа до зарплат": this.formatMoney(this.orderEconomicsMargin(row, true)),
+            "Маржа, %": `${this.formatMoney(this.orderEconomicsMarginPercent(row, true))}%`,
           }));
         }
         return this.visibleOrderEconomicsRows.map((row) => ({
@@ -14111,8 +14152,8 @@ export const CostingModule = {
           "Себестоимость": this.formatMoney(row.items_total_cost),
           "Процент менеджера": this.formatMoney(row.items_manager_commission_sum),
           "Налоги": this.formatMoney(row.items_tax_sum),
-          "Прибыль": this.formatMoney(row.profit_sum),
-          "Маржа": `${this.formatMoney(row.margin_percent)}%`,
+          "Маржа до зарплат": this.formatMoney(this.orderEconomicsMargin(row)),
+          "Маржа, %": `${this.formatMoney(this.orderEconomicsMarginPercent(row))}%`,
         }));
       }
 
@@ -14144,8 +14185,8 @@ export const CostingModule = {
           "Статус": row.item_status,
           "Сумма": this.formatMoney(row.order_sum),
           "Себестоимость": this.formatMoney(row.total_cost),
-          "Прибыль": this.formatMoney(row.profit_sum),
-          "Маржа": `${this.formatMoney(row.margin_percent)}%`,
+          "Маржа до зарплат": this.formatMoney(this.orderEconomicsMargin(row, true)),
+          "Маржа, %": `${this.formatMoney(this.orderEconomicsMarginPercent(row, true))}%`,
         }));
       }
 
@@ -14265,7 +14306,8 @@ export const CostingModule = {
           "ЗарплатаНачислена": this.formatMoney(row.salary_expenses),
           "ПрочиеРасходы": this.formatMoney(row.other_expenses),
           "ФактическийРезультат": this.formatMoney(row.actual_result),
-          "Прогноз": this.formatMoney(row.result),
+          "ПланДоКонцаМесяца": this.formatMoney(row.known_future_expenses),
+          "Прогноз": this.formatMoney(row.projected_result),
         }));
       }
 
@@ -31023,8 +31065,8 @@ export const CostingModule = {
                 <td v-if="canSeeCostingTotals">
                   <div class="symbolika-costing-money-stack">
                     <span>Себест. <strong>{{ formatMoney(row.total_cost) }}</strong></span>
-                    <span>Прибыль <strong>{{ formatMoney(row.profit_sum) }}</strong></span>
-                    <span>Маржа <strong>{{ formatMoney(row.margin_percent) }}%</strong></span>
+                    <span>Маржа до ЗП <strong>{{ formatMoney(orderEconomicsMargin(row, true)) }}</strong></span>
+                    <span>Маржа <strong>{{ formatMoney(orderEconomicsMarginPercent(row, true)) }}%</strong></span>
                   </div>
                 </td>
               </tr>
@@ -31195,7 +31237,7 @@ export const CostingModule = {
               <option value="date_asc">Сначала старые</option>
               <option value="revenue_desc">Выручка: по убыванию</option>
               <option value="cost_desc">Себестоимость: по убыванию</option>
-              <option value="profit_desc">Прибыль: по убыванию</option>
+              <option value="profit_desc">Маржа: по убыванию</option>
               <option value="margin_desc">Маржа: по убыванию</option>
             </select>
           </label>
@@ -31216,10 +31258,10 @@ export const CostingModule = {
             <span>Себестоимость</span><strong>{{ formatMoney(orderEconomicsSummary.cost) }} ₽</strong>
           </div>
           <div class="symbolika-economics-card">
-            <span>Налоги и % менеджеров</span><strong>{{ formatMoney(orderEconomicsSummary.tax + orderEconomicsSummary.commission) }} ₽</strong>
+            <span>Налоги</span><strong>{{ formatMoney(orderEconomicsSummary.tax) }} ₽</strong>
           </div>
           <div class="symbolika-economics-card" :class="orderEconomicsSummary.profit < 0 ? 'is-negative' : 'is-profit'">
-            <span>Прибыль</span><strong>{{ formatMoney(orderEconomicsSummary.profit) }} ₽</strong>
+            <span>Маржа до зарплат</span><strong>{{ formatMoney(orderEconomicsSummary.profit) }} ₽</strong>
           </div>
         </div>
 
@@ -31233,7 +31275,7 @@ export const CostingModule = {
                 <th class="symbolika-costing-num">Выручка</th>
                 <th class="symbolika-costing-num">Себестоимость</th>
                 <th class="symbolika-costing-num">Налоги / %</th>
-                <th class="symbolika-costing-num">Прибыль</th>
+                <th class="symbolika-costing-num">Маржа до зарплат</th>
               </tr>
             </thead>
             <tbody v-if="visibleOrderEconomicsRows.length">
@@ -31267,21 +31309,21 @@ export const CostingModule = {
                   </div>
                 </td>
                 <td class="symbolika-costing-num">
-                  <strong :class="parseMoney(row.profit_sum) < 0 ? 'symbolika-economics-negative' : 'symbolika-economics-profit'">{{ formatMoney(row.profit_sum) }}</strong>
-                  <div class="symbolika-costing-cell-meta">{{ formatMoney(row.margin_percent) }}%</div>
+                  <strong :class="orderEconomicsMargin(row) < 0 ? 'symbolika-economics-negative' : 'symbolika-economics-profit'">{{ formatMoney(orderEconomicsMargin(row)) }}</strong>
+                  <div class="symbolika-costing-cell-meta">{{ formatMoney(orderEconomicsMarginPercent(row)) }}%</div>
                 </td>
               </tr>
             </tbody>
           </table>
           <div v-if="!visibleOrderEconomicsRows.length" class="symbolika-costing-empty">Заказы не найдены</div>
-          <div class="symbolika-economics-note">Прибыль = выручка − себестоимость − процент менеджера − налог. Нажмите строку, чтобы открыть заказ.</div>
+          <div class="symbolika-economics-note">Маржа до зарплат = выручка − полная себестоимость − налог. Процент менеджера уже входит в начисленную зарплату и здесь повторно не вычитается.</div>
         </div>
 
         <div v-if="activeTab === 'order_economics' && orderEconomicsView === 'items'" class="symbolika-costing-table-wrap symbolika-economics-table-wrap">
           <table class="symbolika-costing-table symbolika-costing-table-compact symbolika-economics-table">
             <thead><tr>
               <th>Заказ</th><th>Позиция</th><th>Заказчик / менеджер</th><th>Контрагенты</th>
-              <th class="symbolika-costing-num">Выручка</th><th class="symbolika-costing-num">Себестоимость</th><th class="symbolika-costing-num">Налоги / %</th><th class="symbolika-costing-num">Прибыль</th>
+              <th class="symbolika-costing-num">Выручка</th><th class="symbolika-costing-num">Себестоимость</th><th class="symbolika-costing-num">Налоги / %</th><th class="symbolika-costing-num">Маржа до зарплат</th>
             </tr></thead>
             <tbody v-if="visibleOrderEconomicsItemRows.length">
               <tr v-for="row in visibleOrderEconomicsItemRows" :key="'economics-item-' + row.id" class="symbolika-costing-row-clickable" @click="openRowDetail('orders_items', row, $event)">
@@ -31292,12 +31334,12 @@ export const CostingModule = {
                 <td class="symbolika-costing-num"><strong>{{ formatMoney(row.order_sum) }}</strong></td>
                 <td class="symbolika-costing-num">{{ formatMoney(row.total_cost) }}</td>
                 <td class="symbolika-costing-num"><div class="symbolika-costing-money-stack"><span>Налог <strong>{{ formatMoney(row.tax_sum) }}</strong></span><span>Менеджер <strong>{{ formatMoney(row.manager_commission_sum) }}</strong></span></div></td>
-                <td class="symbolika-costing-num"><strong :class="parseMoney(row.profit_sum) < 0 ? 'symbolika-economics-negative' : 'symbolika-economics-profit'">{{ formatMoney(row.profit_sum) }}</strong><div class="symbolika-costing-cell-meta">{{ formatMoney(row.margin_percent) }}%</div></td>
+                <td class="symbolika-costing-num"><strong :class="orderEconomicsMargin(row, true) < 0 ? 'symbolika-economics-negative' : 'symbolika-economics-profit'">{{ formatMoney(orderEconomicsMargin(row, true)) }}</strong><div class="symbolika-costing-cell-meta">{{ formatMoney(orderEconomicsMarginPercent(row, true)) }}%</div></td>
               </tr>
             </tbody>
           </table>
           <div v-if="!visibleOrderEconomicsItemRows.length" class="symbolika-costing-empty">Позиции не найдены</div>
-          <div class="symbolika-economics-note">Прибыль позиции = сумма позиции − себестоимость − процент менеджера − налог.</div>
+          <div class="symbolika-economics-note">Маржа позиции до зарплат = сумма позиции − полная себестоимость − налог.</div>
         </div>
 
         <div v-if="activeTab === 'costing'" class="symbolika-costing-filter-bar">
@@ -31539,8 +31581,8 @@ export const CostingModule = {
                 <td v-if="canSeeCostingTotals">
                   <div class="symbolika-costing-money-stack">
                     <span>Себест. <strong>{{ formatMoney(row.total_cost) }}</strong></span>
-                    <span>Прибыль <strong>{{ formatMoney(row.profit_sum) }}</strong></span>
-                    <span>Маржа <strong>{{ formatMoney(row.margin_percent) }}%</strong></span>
+                    <span>Маржа до ЗП <strong>{{ formatMoney(orderEconomicsMargin(row, true)) }}</strong></span>
+                    <span>Маржа <strong>{{ formatMoney(orderEconomicsMarginPercent(row, true)) }}%</strong></span>
                   </div>
                 </td>
               </tr>
@@ -31739,6 +31781,10 @@ export const CostingModule = {
             <article class="symbolika-finance-breakdown-card is-upcoming">
               <span class="symbolika-finance-breakdown-icon"><v-icon name="event_upcoming" /></span>
               <div><small>Прочие расходы</small><strong>{{ formatMoney(financeDashboardMetrics.currentMonth.other_expenses) }} <small>₽</small></strong><p>Аренда, коммунальные услуги, доставка, материалы, обслуживание и прочее</p></div>
+            </article>
+            <article v-if="parseMoney(financeDashboardMetrics.currentMonth.future_operational_expenses)" class="symbolika-finance-breakdown-card is-upcoming">
+              <span class="symbolika-finance-breakdown-icon"><v-icon name="calendar_clock" /></span>
+              <div><small>План до конца месяца</small><strong>{{ formatMoney(financeDashboardMetrics.currentMonth.future_operational_expenses) }} <small>₽</small></strong><p>Известные постоянные расходы, срок которых ещё не наступил; учитываются только в прогнозе</p></div>
             </article>
             <article class="symbolika-finance-breakdown-card is-overpay">
               <span class="symbolika-finance-breakdown-icon"><v-icon name="savings" /></span>
@@ -32378,7 +32424,7 @@ export const CostingModule = {
                     <div class="symbolika-costing-subtle">завершено {{ row.completed_items_count }}</div>
                   </td>
                   <td class="symbolika-costing-num"><div>{{ formatMoney(row.order_margin) }}</div><div class="symbolika-costing-subtle">завершено {{ formatMoney(row.completed_order_margin) }}</div></td>
-                  <td class="symbolika-costing-num">{{ formatMoney(row.other_expenses) }}</td>
+                  <td class="symbolika-costing-num"><div>{{ formatMoney(row.other_expenses) }}</div><div v-if="row.known_future_expenses" class="symbolika-costing-subtle">план {{ formatMoney(row.known_future_expenses) }}</div></td>
                   <td class="symbolika-costing-num"><div>{{ formatMoney(row.salary_expenses) }}</div><div class="symbolika-costing-subtle">оклад {{ formatMoney(row.salary_fixed) }} · % {{ formatMoney(row.salary_commission) }} · премии {{ formatMoney(row.salary_bonus) }}</div></td>
                   <td class="symbolika-costing-num">
                     <span class="symbolika-costing-pill" :class="row.actual_result >= 0 ? 'symbolika-costing-pill-green' : 'symbolika-costing-pill-danger'">
@@ -32386,8 +32432,8 @@ export const CostingModule = {
                     </span>
                   </td>
                   <td class="symbolika-costing-num">
-                    <span class="symbolika-costing-pill" :class="row.result >= 0 ? 'symbolika-costing-pill-green' : 'symbolika-costing-pill-danger'">
-                      {{ formatMoney(row.result) }}
+                    <span class="symbolika-costing-pill" :class="row.projected_result >= 0 ? 'symbolika-costing-pill-green' : 'symbolika-costing-pill-danger'">
+                      {{ formatMoney(row.projected_result) }}
                     </span>
                   </td>
                 </tr>
