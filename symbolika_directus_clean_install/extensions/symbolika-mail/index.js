@@ -786,9 +786,10 @@ export default {
       return saved;
     };
 
-    const upsertIncomingMessage = async (folder, parsed, actor) => {
+    const upsertIncomingMessage = async (folder, parsed, actor, ownSenderAddresses = new Set()) => {
       const from = addressList(parsed.from)[0] || { name: '', email: 'unknown@symb62.ru' };
       const to = addressList(parsed.to);
+      const isOwnSender = ownSenderAddresses.has(cleanText(from.email, 500).toLowerCase());
       const references = Array.isArray(parsed.references) ? parsed.references : (parsed.references ? [parsed.references] : []);
       const externalThreadId = cleanText(references[0] || parsed.inReplyTo || `${normalizeSubject(parsed.subject)}|${from.email}`, 500);
       const messageId = cleanText(parsed.messageId, 1000) || null;
@@ -800,15 +801,24 @@ export default {
           .join('symbolika_mail_threads as thread', 'thread.id', 'message.thread_id')
           .where('message.message_id', messageId)
           .where('thread.folder_id', folder.id)
-          .first('message.id', 'message.attachments');
+          .first('message.id', 'message.attachments', 'message.direction', 'message.is_read', 'message.sender_alias');
         if (exists) {
           const currentAttachments = jsonArray(exists.attachments);
           const needsFiles = (parsed.attachments || []).length > 0
             && (!currentAttachments.length || currentAttachments.some((item) => !item.storage_name));
+          const desiredDirection = isOwnSender ? 'outbound' : 'inbound';
+          const update = {};
           if (needsFiles) {
-            const attachments = await persistAttachments(parsed);
-            await database('symbolika_mail_messages').where('id', exists.id).update({ attachments: JSON.stringify(attachments) });
+            update.attachments = JSON.stringify(await persistAttachments(parsed));
           }
+          if (exists.direction !== desiredDirection) {
+            update.direction = desiredDirection;
+            update.sender_alias = isOwnSender ? from.email : null;
+            // Messages from another connected company mailbox were previously
+            // marked outbound/read merely because they used the same domain.
+            update.is_read = isOwnSender ? true : false;
+          }
+          if (Object.keys(update).length) await database('symbolika_mail_messages').where('id', exists.id).update(update);
           return false;
         }
       }
@@ -855,17 +865,17 @@ export default {
         thread_id: thread.id,
         message_id: messageId,
         in_reply_to: cleanText(parsed.inReplyTo, 1000) || null,
-        direction: from.email.endsWith('@symb62.ru') ? 'outbound' : 'inbound',
+        direction: isOwnSender ? 'outbound' : 'inbound',
         from_email: from.email,
         from_name: from.name || null,
         to_emails: JSON.stringify(to.map((row) => row.email)),
         cc_emails: JSON.stringify(addressList(parsed.cc).map((row) => row.email)),
-        sender_alias: from.email.endsWith('@symb62.ru') ? from.email : null,
+        sender_alias: isOwnSender ? from.email : null,
         subject: threadInsert.subject,
         body_text: cleanText(parsed.text || '', 200000),
         body_html: cleanText(parsed.html || '', 500000),
         attachments: JSON.stringify(attachments),
-        is_read: from.email.endsWith('@symb62.ru'),
+        is_read: isOwnSender,
         is_test: false,
         author_user: actor?.user_id || null,
         sent_at: sentAt,
@@ -900,6 +910,15 @@ export default {
           }
           if (!settings.configured) continue;
           configuredAccounts += 1;
+          const aliases = await database('symbolika_mail_aliases')
+            .where('mail_account', account.id)
+            .where('is_active', true)
+            .select('email');
+          const ownSenderAddresses = new Set(
+            [account.email, ...aliases.map((row) => row.email)]
+              .map((email) => cleanText(email, 500).toLowerCase())
+              .filter(Boolean),
+          );
           const client = new ImapFlow({
             host: settings.host,
             port: settings.port,
@@ -930,7 +949,7 @@ export default {
               for await (const message of client.fetch(range, { source: true, uid: true, internalDate: true })) {
                 const parsed = await simpleParser(message.source);
                 if (!parsed.date && message.internalDate) parsed.date = message.internalDate;
-                if (await upsertIncomingMessage(folder, parsed, actor)) synced += 1;
+                if (await upsertIncomingMessage(folder, parsed, actor, ownSenderAddresses)) synced += 1;
               }
             } catch (error) {
               logger.warn({ folder: folder.imap_name, error: error?.message }, '[Symbolika Mail] folder sync failed');
