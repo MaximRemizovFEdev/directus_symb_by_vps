@@ -8395,6 +8395,7 @@ export const CostingModule = {
         let value = this.adminForm[column.key];
         if (column.type === 'relation') value = value && value !== '__other__' ? value : null;
         if (['number', 'money'].includes(column.type)) value = value === '' || value === null ? null : Number(value);
+        if (column.type === 'date') value = value || null;
         if (column.type === 'boolean') value = !!value;
         payload[column.key] = value;
       });

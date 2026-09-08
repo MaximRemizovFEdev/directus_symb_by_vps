@@ -284,6 +284,13 @@ export default {
         .first();
       if (!employee) return null;
 
+      const compensation = await database('employee_compensation_rates')
+        .where('employee', employeeId)
+        .where('effective_month', '<=', period.start)
+        .orderBy('effective_month', 'desc')
+        .first('salary_fixed', 'order_percent')
+        .catch(() => null);
+
       const orderTotals = await database('orders as o')
         .whereRaw('COALESCE(o.commission_manager_employee, o.manager_employee) = ?', [employeeId])
         .where('o.date', '>=', period.start)
@@ -308,8 +315,8 @@ export default {
       const sumType = (type) => payouts
         .filter((row) => row.expense_type === type)
         .reduce((sum, row) => sum + Number(row.amount || 0), 0);
-      const salaryFixed = Number(employee.salary_fixed || 0);
-      const orderPercent = Number(employee.order_percent || 0);
+      const salaryFixed = Number(compensation?.salary_fixed ?? employee.salary_fixed ?? 0);
+      const orderPercent = Number(compensation?.order_percent ?? employee.order_percent ?? 0);
       const paidOrders = Number(orderTotals?.paid_orders_sum || 0);
       const commissionAccrued = Math.round(paidOrders * orderPercent) / 100;
       const salaryPaid = sumType('salary_payment');

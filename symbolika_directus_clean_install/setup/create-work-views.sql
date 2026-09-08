@@ -1084,6 +1084,55 @@ CREATE TABLE IF NOT EXISTS employee_salary_monthly (
 ALTER TABLE employee_salary_monthly ADD COLUMN IF NOT EXISTS bonus_paid numeric(14,2) DEFAULT 0;
 ALTER TABLE employee_salary_monthly ADD COLUMN IF NOT EXISTS position_name character varying(255);
 
+CREATE TABLE IF NOT EXISTS employee_compensation_rates (
+  id bigserial PRIMARY KEY,
+  employee integer NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  effective_month date NOT NULL,
+  salary_fixed numeric(14,2) NOT NULL DEFAULT 0,
+  order_percent numeric(14,2) NOT NULL DEFAULT 0,
+  date_created timestamptz NOT NULL DEFAULT now(),
+  date_updated timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (employee, effective_month),
+  CHECK (effective_month = date_trunc('month', effective_month)::date)
+);
+
+INSERT INTO employee_compensation_rates (employee, effective_month, salary_fixed, order_percent)
+SELECT employee, month_start, COALESCE(salary_fixed, 0), COALESCE(order_percent, 0)
+FROM employee_salary_monthly
+WHERE employee IS NOT NULL AND month_start IS NOT NULL
+ON CONFLICT (employee, effective_month) DO NOTHING;
+
+INSERT INTO employee_compensation_rates (employee, effective_month, salary_fixed, order_percent)
+SELECT id, date_trunc('month', current_date)::date, COALESCE(salary_fixed, 0), COALESCE(order_percent, 0)
+FROM employees
+ON CONFLICT (employee, effective_month) DO UPDATE SET
+  salary_fixed = EXCLUDED.salary_fixed,
+  order_percent = EXCLUDED.order_percent,
+  date_updated = now();
+
+CREATE OR REPLACE FUNCTION capture_employee_compensation_rate()
+RETURNS trigger AS $$
+BEGIN
+  INSERT INTO employee_compensation_rates (employee, effective_month, salary_fixed, order_percent)
+  VALUES (
+    NEW.id,
+    date_trunc('month', current_date)::date,
+    COALESCE(NEW.salary_fixed, 0),
+    COALESCE(NEW.order_percent, 0)
+  )
+  ON CONFLICT (employee, effective_month) DO UPDATE SET
+    salary_fixed = EXCLUDED.salary_fixed,
+    order_percent = EXCLUDED.order_percent,
+    date_updated = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS employees_00_capture_compensation ON employees;
+CREATE TRIGGER employees_00_capture_compensation
+AFTER INSERT OR UPDATE OF salary_fixed, order_percent ON employees
+FOR EACH ROW EXECUTE FUNCTION capture_employee_compensation_rate();
+
 CREATE OR REPLACE FUNCTION refresh_employee_salary_tables()
 RETURNS void AS $$
 DECLARE
@@ -1104,15 +1153,15 @@ BEGIN
     e.full_name,
     ep.name,
     month_begin,
-    COALESCE(e.salary_fixed, 0),
-    COALESCE(e.order_percent, 0),
+    COALESCE(rate.salary_fixed, e.salary_fixed, 0),
+    COALESCE(rate.order_percent, e.order_percent, 0),
     COALESCE(SUM(o.order_sum), 0),
     COALESCE(SUM(o.paid_amount), 0),
     COALESCE(SUM(GREATEST(o.payment_due, 0)), 0),
-    ROUND(COALESCE(SUM(o.paid_amount), 0) * COALESCE(e.order_percent, 0) / 100, 2),
+    ROUND(COALESCE(SUM(o.paid_amount), 0) * COALESCE(rate.order_percent, e.order_percent, 0) / 100, 2),
     ROUND(
-      COALESCE(e.salary_fixed, 0)
-      + COALESCE(SUM(o.paid_amount), 0) * COALESCE(e.order_percent, 0) / 100
+      COALESCE(rate.salary_fixed, e.salary_fixed, 0)
+      + COALESCE(SUM(o.paid_amount), 0) * COALESCE(rate.order_percent, e.order_percent, 0) / 100
       + COALESCE((
         SELECT SUM(be.amount)
         FROM business_expenses be
@@ -1144,8 +1193,8 @@ BEGIN
         AND COALESCE(be.accounting_month, date_trunc('month', be.expense_date)::date) = month_begin
     ), 0),
     ROUND(
-      COALESCE(e.salary_fixed, 0)
-      + COALESCE(SUM(o.paid_amount), 0) * COALESCE(e.order_percent, 0) / 100
+      COALESCE(rate.salary_fixed, e.salary_fixed, 0)
+      + COALESCE(SUM(o.paid_amount), 0) * COALESCE(rate.order_percent, e.order_percent, 0) / 100
       + COALESCE((
         SELECT SUM(be.amount)
         FROM business_expenses be
@@ -1171,12 +1220,19 @@ BEGIN
     )
   FROM employees e
   LEFT JOIN employee_positions ep ON ep.id = e.position
+  LEFT JOIN LATERAL (
+    SELECT history.salary_fixed, history.order_percent
+    FROM employee_compensation_rates history
+    WHERE history.employee = e.id AND history.effective_month <= month_begin
+    ORDER BY history.effective_month DESC
+    LIMIT 1
+  ) rate ON true
   LEFT JOIN orders o
     ON COALESCE(o.commission_manager_employee, o.manager_employee) = e.id
    AND o.date >= month_begin
    AND o.date < (month_begin + interval '1 month')::date
   WHERE COALESCE(e.is_active, true) = true
-  GROUP BY e.id, e.full_name, ep.name, e.salary_fixed, e.order_percent;
+  GROUP BY e.id, e.full_name, ep.name, e.salary_fixed, e.order_percent, rate.salary_fixed, rate.order_percent;
 
   DELETE FROM employee_salary_monthly;
 
@@ -1199,20 +1255,27 @@ BEGIN
       ep.name AS position_name,
       m.month_start,
       to_char(m.month_start, 'MM.YY') AS month_label,
-      COALESCE(e.salary_fixed, 0) AS salary_fixed,
-      COALESCE(e.order_percent, 0) AS order_percent,
+      COALESCE(rate.salary_fixed, e.salary_fixed, 0) AS salary_fixed,
+      COALESCE(rate.order_percent, e.order_percent, 0) AS order_percent,
       COALESCE(SUM(o.order_sum), 0) AS orders_sum,
       COALESCE(SUM(o.paid_amount), 0) AS paid_orders_sum,
       COALESCE(SUM(GREATEST(o.payment_due, 0)), 0) AS unpaid_orders_sum
     FROM employees e
     LEFT JOIN employee_positions ep ON ep.id = e.position
     CROSS JOIN months m
+    LEFT JOIN LATERAL (
+      SELECT history.salary_fixed, history.order_percent
+      FROM employee_compensation_rates history
+      WHERE history.employee = e.id AND history.effective_month <= m.month_start
+      ORDER BY history.effective_month DESC
+      LIMIT 1
+    ) rate ON true
     LEFT JOIN orders o
       ON COALESCE(o.commission_manager_employee, o.manager_employee) = e.id
      AND o.date >= m.month_start
      AND o.date < (m.month_start + interval '1 month')::date
     WHERE COALESCE(e.is_active, true) = true
-    GROUP BY e.id, e.full_name, ep.name, m.month_start, e.salary_fixed, e.order_percent
+    GROUP BY e.id, e.full_name, ep.name, m.month_start, e.salary_fixed, e.order_percent, rate.salary_fixed, rate.order_percent
   )
   SELECT
     row_number() OVER (ORDER BY b.month_start DESC, b.employee)::integer,
@@ -1291,6 +1354,40 @@ END;
 $$ LANGUAGE plpgsql;
 
 SELECT refresh_employee_salary_tables();
+
+CREATE OR REPLACE FUNCTION apply_employee_compensation_history()
+RETURNS void AS $$
+BEGIN
+  UPDATE employee_salary_monthly monthly
+  SET salary_fixed = COALESCE(rate.salary_fixed, monthly.salary_fixed, 0),
+      order_percent = COALESCE(rate.order_percent, monthly.order_percent, 0),
+      commission_accrued = ROUND(monthly.paid_orders_sum * COALESCE(rate.order_percent, monthly.order_percent, 0) / 100, 2),
+      salary_accrued = ROUND(
+        COALESCE(rate.salary_fixed, monthly.salary_fixed, 0)
+        + monthly.paid_orders_sum * COALESCE(rate.order_percent, monthly.order_percent, 0) / 100
+        + COALESCE(monthly.bonus_paid, 0),
+        2
+      ),
+      salary_debt = ROUND(
+        COALESCE(rate.salary_fixed, monthly.salary_fixed, 0)
+        + monthly.paid_orders_sum * COALESCE(rate.order_percent, monthly.order_percent, 0) / 100
+        + COALESCE(monthly.bonus_paid, 0)
+        - COALESCE(monthly.salary_paid, 0)
+        - COALESCE(monthly.advances_paid, 0),
+        2
+      )
+  FROM employee_compensation_rates rate
+  WHERE rate.employee = monthly.employee
+    AND rate.effective_month = (
+      SELECT MAX(history.effective_month)
+      FROM employee_compensation_rates history
+      WHERE history.employee = monthly.employee
+        AND history.effective_month <= monthly.month_start
+    );
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT apply_employee_compensation_history();
 
 CREATE TABLE IF NOT EXISTS manager_finance_summary (
   id integer PRIMARY KEY,
@@ -1389,6 +1486,7 @@ DECLARE
   business_expenses_year numeric(14,2) := 0;
 BEGIN
   PERFORM refresh_employee_salary_tables();
+  PERFORM apply_employee_compensation_history();
   PERFORM refresh_manager_finance_summary();
 
   SELECT COALESCE(SUM(amount), 0)
@@ -1600,7 +1698,9 @@ CREATE OR REPLACE FUNCTION refresh_salary_and_finance_trigger()
 RETURNS trigger AS $$
 BEGIN
   PERFORM refresh_employee_salary_tables();
+  PERFORM apply_employee_compensation_history();
   PERFORM refresh_finance_dashboard_metrics();
+  PERFORM apply_employee_compensation_history();
   RETURN COALESCE(NEW, OLD);
 END;
 $$ LANGUAGE plpgsql;
