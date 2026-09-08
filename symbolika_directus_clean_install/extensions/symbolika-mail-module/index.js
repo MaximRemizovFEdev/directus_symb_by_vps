@@ -755,7 +755,11 @@ const MailWorkspace = {
       if (!silent) this.notice = '';
       if (!silent) this.error = '';
       try {
-        const result = await this.request('/symbolika-mail/sync', { method: 'POST', body: '{}' });
+        const folderId = this.mailboxScope === 'folder' ? Number(this.selectedFolderId || 0) : 0;
+        const result = await this.request('/symbolika-mail/sync', {
+          method: 'POST',
+          body: JSON.stringify(folderId ? { folder_id: folderId } : {}),
+        });
         if (!silent) this.notice = result.message || `Синхронизация завершена. Новых писем: ${result.synced || 0}.`;
         await this.loadMailbox(false, true);
       } catch (error) {

@@ -14081,8 +14081,10 @@ CREATE TABLE IF NOT EXISTS symbolika_mail_messages (
   date_created timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS symbolika_mail_messages_message_id_uidx
-  ON symbolika_mail_messages(message_id);
+DROP INDEX IF EXISTS symbolika_mail_messages_message_id_uidx;
+DROP INDEX IF EXISTS symbolika_mail_messages_thread_message_id_uidx;
+CREATE UNIQUE INDEX IF NOT EXISTS symbolika_mail_messages_thread_message_id_uidx
+  ON symbolika_mail_messages(thread_id, message_id);
 CREATE INDEX IF NOT EXISTS symbolika_mail_threads_folder_date_idx
   ON symbolika_mail_threads(folder_id, last_message_at DESC);
 CREATE INDEX IF NOT EXISTS symbolika_mail_threads_links_idx

@@ -793,7 +793,14 @@ export default {
       const externalThreadId = cleanText(references[0] || parsed.inReplyTo || `${normalizeSubject(parsed.subject)}|${from.email}`, 500);
       const messageId = cleanText(parsed.messageId, 1000) || null;
       if (messageId) {
-        const exists = await database('symbolika_mail_messages').where('message_id', messageId).first('id', 'attachments');
+        // The same RFC Message-ID legitimately exists in several mailboxes: for
+        // example, in the sender's Sent folder and in the recipient's Inbox.
+        // De-duplicate only inside the folder currently being synchronized.
+        const exists = await database('symbolika_mail_messages as message')
+          .join('symbolika_mail_threads as thread', 'thread.id', 'message.thread_id')
+          .where('message.message_id', messageId)
+          .where('thread.folder_id', folder.id)
+          .first('message.id', 'message.attachments');
         if (exists) {
           const currentAttachments = jsonArray(exists.attachments);
           const needsFiles = (parsed.attachments || []).length > 0
@@ -862,7 +869,7 @@ export default {
         is_test: false,
         author_user: actor?.user_id || null,
         sent_at: sentAt,
-      }).onConflict('message_id').ignore();
+      }).onConflict(['thread_id', 'message_id']).ignore();
       await notifyIncomingMail(folder, thread, from);
       return true;
     };
@@ -1407,7 +1414,13 @@ export default {
         const actor = await actorContext(req, res);
         if (!actor) return;
         if (mailMode() !== 'imap') return res.json({ data: { mode: 'mock', synced: 0, message: 'Демо-режим: тестовые письма уже загружены.' } });
-        const folders = (await folderRows(actor)).filter((folder) => folder.imap_name);
+        let folders = (await folderRows(actor)).filter((folder) => folder.imap_name);
+        const requestedFolderId = Number(req.body?.folder_id || 0);
+        if (requestedFolderId) {
+          const requestedFolder = folders.find((folder) => Number(folder.id) === requestedFolderId);
+          if (!requestedFolder) return apiError(res, 403, 'Эта почтовая папка недоступна для синхронизации.');
+          folders = [requestedFolder];
+        }
         if (!folders.length) return apiError(res, 503, 'У доступных почтовых аккаунтов не настроены папки IMAP.');
         const perFolder = Math.min(Math.max(Number(req.body?.limit || 60), 1), 200);
         const result = await synchronizeImapFolders(folders, { actor, limit: perFolder });
