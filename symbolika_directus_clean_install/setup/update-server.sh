@@ -102,6 +102,12 @@ trap restart_on_error ERR
 log "Установка воспроизводимых зависимостей расширений"
 docker compose stop directus >/dev/null 2>&1 || true
 docker run --rm -v "${PROJECT_DIR}/extensions/symbolika-calculations:/app" -w /app node:20-alpine npm ci --omit=dev
+if ! test -f "${PROJECT_DIR}/extensions/symbolika-calculations/node_modules/web-push/package.json"; then
+  log "Повторная установка зависимостей расчетов после неполного npm ci"
+  docker run --rm -v "${PROJECT_DIR}/extensions/symbolika-calculations:/app" -w /app node:20-alpine npm ci --omit=dev
+fi
+test -f "${PROJECT_DIR}/extensions/symbolika-calculations/node_modules/web-push/package.json" \
+  || fail "Зависимость web-push расширения расчетов не установлена"
 docker run --rm -v "${PROJECT_DIR}/extensions/symbolika-mail:/app" -w /app node:20-alpine npm ci --omit=dev
 if ! test -f "${PROJECT_DIR}/extensions/symbolika-mail/node_modules/imapflow/package.json"; then
   log "Повторная установка зависимостей почты после неполного npm ci"
