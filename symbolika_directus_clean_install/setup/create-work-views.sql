@@ -16888,5 +16888,20 @@ VALUES
   ('directus_notifications', 'update', '{"recipient":{"_eq":"$CURRENT_USER"}}'::json, NULL, NULL,
     'status', '00000000-0000-4000-8000-000000000205');
 
+-- Managers request the unified screen-printing cost together with the rest of
+-- the editable item costs. Keep both the active manager policy (...201) and
+-- the legacy compatibility policy (...202) aligned on clean installations.
+UPDATE directus_permissions
+SET fields = concat_ws(',', NULLIF(fields, ''), 'screen_printing_cost_per_unit')
+WHERE collection = 'orders_items'
+  AND action IN ('create', 'read', 'update')
+  AND fields IS NOT NULL
+  AND fields <> '*'
+  AND NOT ('screen_printing_cost_per_unit' = ANY(string_to_array(fields, ',')))
+  AND policy IN (
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202'
+  );
+
 COMMIT;
 

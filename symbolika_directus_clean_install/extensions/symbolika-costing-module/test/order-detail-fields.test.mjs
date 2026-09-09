@@ -46,5 +46,11 @@ test('fallback mask remains independent from nested relation masks', () => {
   assert.ok(orderItemSafeFields.includes('order_link'));
   assert.ok(orderItemSafeFields.includes('contractor_1'));
   assert.equal(orderItemSafeFields.includes('contractor_1.name'), false);
+  assert.ok(orderItemSafeFields.includes('layout_disk_path'));
+  assert.ok(orderItemSafeFields.includes('layout_disk_name'));
+  assert.ok(orderItemSafeFields.includes('layout_preview_url'));
+  assert.equal(orderItemSafeFields.includes('contractor_1_cost'), false);
+  assert.equal(orderItemSafeFields.includes('contractor_2_cost'), false);
+  assert.equal(orderItemSafeFields.includes('screen_printing_cost_per_unit'), false);
   assert.equal(new Set(orderItemSafeFields).size, orderItemSafeFields.length);
 });
