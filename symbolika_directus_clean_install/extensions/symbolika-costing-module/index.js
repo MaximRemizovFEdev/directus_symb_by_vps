@@ -122,6 +122,7 @@ const workFields = [
   'id',
   'order',
   'order.order_number',
+  'order.deadline',
   'order_number',
   'order_link',
   'date',
@@ -4803,17 +4804,18 @@ export const CostingModule = {
     matchesWorkFilter(row) {
       let matchesStatus = true;
       let matchesDeadline = true;
+      const deadline = this.effectiveDeadline(row);
       if (this.workProductionStatusFilter) {
         matchesStatus = String(this.contractorId(row.production_status) || '') === String(this.workProductionStatusFilter);
       }
-      if (this.workDeadlinePreset === 'today') matchesDeadline = this.isToday(row.deadline);
-      if (this.workDeadlinePreset === 'overdue') matchesDeadline = this.isOverdue(row.deadline);
-      if (this.workDeadlinePreset === 'this_week') matchesDeadline = this.isCurrentWeek(row.deadline);
-      if (this.workDeadlinePreset === 'next_week') matchesDeadline = this.isNextWeek(row.deadline);
-      if (this.workDeadlinePreset === 'this_month') matchesDeadline = this.isCurrentMonth(row.deadline);
-      if (this.workDeadlinePreset === 'next_month') matchesDeadline = this.isNextMonth(row.deadline);
+      if (this.workDeadlinePreset === 'today') matchesDeadline = this.isToday(deadline);
+      if (this.workDeadlinePreset === 'overdue') matchesDeadline = this.isOverdue(deadline);
+      if (this.workDeadlinePreset === 'this_week') matchesDeadline = this.isCurrentWeek(deadline);
+      if (this.workDeadlinePreset === 'next_week') matchesDeadline = this.isNextWeek(deadline);
+      if (this.workDeadlinePreset === 'this_month') matchesDeadline = this.isCurrentMonth(deadline);
+      if (this.workDeadlinePreset === 'next_month') matchesDeadline = this.isNextMonth(deadline);
       if (!matchesStatus || !matchesDeadline) return false;
-      return this.matchesDateRange(row.deadline, this.workDeadlineFrom, this.workDeadlineTo);
+      return this.matchesDateRange(deadline, this.workDeadlineFrom, this.workDeadlineTo);
     },
 
     queueItem(type, row, section, reason, filters = []) {
@@ -4830,7 +4832,7 @@ export const CostingModule = {
         manager_name: row.manager_name || this.relatedName(row.manager_employee, 'full_name'),
         product_name: row.product_name,
         quantity: row.quantity,
-        deadline: row.deadline || row.date,
+        deadline: this.effectiveDeadline(row) || row.date,
         technical_task_text: row.technical_task_text,
         production_comment: row.production_comment,
       };
@@ -6129,7 +6131,7 @@ export const CostingModule = {
       if (!row) return '';
       if (key === 'order_number') return this.orderNumber(row);
       if (key === 'date') return this.sortDateValue(row.date);
-      if (key === 'deadline') return this.sortDateValue(row.deadline);
+      if (key === 'deadline') return this.sortDateValue(this.effectiveDeadline(row));
       if (key === 'customer') return this.detailCustomerName(row) || row.customer_display || '';
       if (key === 'company') return this.detailCompanyName(row);
       if (key === 'manager') return row.manager_name || this.detailManagerName(row);
@@ -6148,6 +6150,14 @@ export const CostingModule = {
       if (key === 'technical_task') return row.technical_task_text || row.url || '';
       if (key === 'work_area') return row.work_area || '';
       return row[key];
+    },
+
+    effectiveDeadline(row) {
+      return row?.deadline
+        || row?.order_deadline
+        || row?.order?.deadline
+        || row?.order_context?.deadline
+        || null;
     },
 
     sortDateValue(value) {
@@ -33846,7 +33856,7 @@ export const CostingModule = {
                 <td>
                   <span class="symbolika-costing-order">{{ orderNumber(row) }}</span>
                   <div class="symbolika-costing-subtle">{{ formatDate(row.date) }}</div>
-                  <span class="symbolika-costing-date" :class="deadlineClass(row.deadline)"><v-icon :name="deadlineIcon(row.deadline)" small />{{ formatDate(row.deadline) }}</span>
+                  <span class="symbolika-costing-date" :class="deadlineClass(effectiveDeadline(row))"><v-icon :name="deadlineIcon(effectiveDeadline(row))" small />{{ formatDate(effectiveDeadline(row)) }}</span>
                 </td>
                 <td>
                   <div class="symbolika-costing-cell-main">{{ row.customer_company_name || row.customer_name || relatedName(row.customer_company) || relatedName(row.customer) || '-' }}</div>

@@ -24,3 +24,11 @@ test('positions of the same order keep their creation sequence', () => {
   assert.match(orderItems, /positionCreationSortValue\(left\)/);
   assert.doesNotMatch(orderItems, /product_name \|\| ''\)\.localeCompare/);
 });
+
+test('work rows inherit the parent order deadline in display, filtering, and sorting', () => {
+  assert.match(source, /'order\.deadline'/);
+  assert.match(source, /effectiveDeadline\(row\) \{[\s\S]*?row\?\.deadline[\s\S]*?row\?\.order_deadline[\s\S]*?row\?\.order\?\.deadline/);
+  assert.match(source, /const deadline = this\.effectiveDeadline\(row\)/);
+  assert.match(source, /if \(key === 'deadline'\) return this\.sortDateValue\(this\.effectiveDeadline\(row\)\)/);
+  assert.match(source, /deadlineClass\(effectiveDeadline\(row\)\)/);
+});

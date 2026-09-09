@@ -24,6 +24,11 @@ const unpaidOrderTaxMigrationPath = new URL(
   import.meta.url,
 );
 const unpaidOrderTaxMigration = await readFile(unpaidOrderTaxMigrationPath, 'utf8');
+const inheritedItemDeadlineMigrationPath = new URL(
+  '../../../setup/migrations/20260909_inherit_order_item_deadlines.sql',
+  import.meta.url,
+);
+const inheritedItemDeadlineMigration = await readFile(inheritedItemDeadlineMigrationPath, 'utf8');
 
 const extractFunction = (source, name) => source.match(
   new RegExp(`CREATE OR REPLACE FUNCTION ${name.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b[\\s\\S]*?\\n\\$\\$;`, 'i'),
@@ -200,5 +205,25 @@ test('taxes unpaid order balances by the selected order payment type', () => {
     assert.match(source, /nominal_tax_percent/i);
     assert.match(source, /paid_balance/i);
     assert.match(source, /AFTER UPDATE OF payment_on_receipt, payment_type ON orders/i);
+  }
+});
+
+test('persists inherited order deadlines on positions and preserves explicit overrides', () => {
+  for (const functionName of [
+    'symbolika_inherit_order_item_deadline',
+    'symbolika_sync_order_deadline_to_items',
+  ]) {
+    assert.equal(
+      normalizeSqlDefinition(extractFunction(inheritedItemDeadlineMigration, functionName)),
+      normalizeSqlDefinition(extractFunction(sql, functionName)),
+      `${functionName} differs between migration and canonical SQL`,
+    );
+  }
+
+  for (const source of [sql, inheritedItemDeadlineMigration]) {
+    assert.match(source, /BEFORE INSERT OR UPDATE OF "order", deadline ON orders_items/i);
+    assert.match(source, /AFTER UPDATE OF deadline ON orders/i);
+    assert.match(source, /deadline::date IS NOT DISTINCT FROM OLD\.deadline::date/i);
+    assert.match(source, /oi\.deadline IS NULL[\s\S]*o\.deadline IS NOT NULL/i);
   }
 });
