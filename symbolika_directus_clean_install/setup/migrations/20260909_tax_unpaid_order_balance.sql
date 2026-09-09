@@ -263,6 +263,12 @@ AFTER UPDATE OF payment_on_receipt, payment_type ON orders
 FOR EACH ROW
 EXECUTE FUNCTION recalc_order_payment_on_order_trigger();
 
+-- Tax/profit fields are not part of orders_overview or customer
+-- reconciliation. Suppress their expensive full refresh while this one-time
+-- backfill touches every order; the triggers are restored before commit.
+ALTER TABLE orders DISABLE TRIGGER symbolika_sync_orders_overview_order;
+ALTER TABLE orders_items DISABLE TRIGGER symbolika_sync_orders_overview_item;
+
 DO $$
 DECLARE
   existing_order_id integer;
@@ -274,5 +280,8 @@ BEGIN
   END LOOP;
 END;
 $$;
+
+ALTER TABLE orders_items ENABLE TRIGGER symbolika_sync_orders_overview_item;
+ALTER TABLE orders ENABLE TRIGGER symbolika_sync_orders_overview_order;
 
 COMMIT;
