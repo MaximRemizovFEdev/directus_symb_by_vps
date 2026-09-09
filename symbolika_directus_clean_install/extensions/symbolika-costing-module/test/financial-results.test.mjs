@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -10,6 +11,7 @@ import {
 const monthKey = (value) => String(value || '').slice(0, 7);
 const monthLabel = (value) => value;
 const orderKey = (row) => row.order;
+const moduleSource = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
 
 test('separates order margin, accrued payroll and other expenses without double counting', () => {
   const [row] = buildMonthlyFinancialRows({
@@ -81,4 +83,21 @@ test('uses the same margin before payroll in order economics and monthly results
     orderKey,
   });
   assert.equal(month.order_margin, orderMarginBeforePayroll(item));
+});
+
+test('separates external contractor debt from internal payroll debt on the dashboard', () => {
+  const dashboard = moduleSource.match(
+    /<section class="symbolika-finance-balance-grid">(?<body>[\s\S]*?)<\/section>/,
+  )?.groups?.body || '';
+  const exportRows = moduleSource.match(
+    /if \(this\.activeTab === 'admin_finance_dashboard'\) \{(?<body>[\s\S]*?)\n      \}/,
+  )?.groups?.body || '';
+
+  assert.match(dashboard, /Долг контрагентам[\s\S]*financeDashboardMetrics\.contractorDebt/);
+  assert.match(dashboard, /Долг сотрудникам[\s\S]*financeDashboardMetrics\.salaryDebt/);
+  assert.match(dashboard, /Переплаты клиентов[\s\S]*financeDashboardMetrics\.customerOverpay/);
+  assert.doesNotMatch(dashboard, /financeDashboardMetrics\.ourDebt|Контрагенты, зарплата и переплаты/);
+  assert.match(exportRows, /metrics\.contractorDebt/);
+  assert.match(exportRows, /metrics\.salaryDebt/);
+  assert.match(exportRows, /metrics\.customerOverpay/);
 });

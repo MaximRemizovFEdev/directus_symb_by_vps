@@ -3258,7 +3258,6 @@ export const CostingModule = {
       const customerOverpay = payers.reduce((sum, payer) => sum + Math.max(this.parseMoney(payer.balance), 0), 0);
       const contractorDebt = this.contractorRows.reduce((sum, row) => sum + Math.max(this.parseMoney(row.debt_to_contractor), 0), 0);
       const salaryDebt = this.salaryRows.reduce((sum, row) => sum + Math.max(this.parseMoney(row.salary_debt), 0), 0);
-      const ourDebt = contractorDebt + salaryDebt + customerOverpay;
 
       const yearRows = this.monthlyFinancialRows.filter((row) => Number(String(row.key).slice(0, 4)) === currentYear);
       const previousYearRows = this.monthlyFinancialRows.filter((row) => Number(String(row.key).slice(0, 4)) === previousYear);
@@ -3278,7 +3277,6 @@ export const CostingModule = {
         customerOverpay,
         contractorDebt,
         salaryDebt,
-        ourDebt,
         currentMonth: {
           ...monthRow,
           operational_expenses_to_date: this.parseMoney(monthRow.other_expenses),
@@ -14250,9 +14248,19 @@ export const CostingModule = {
             "Комментарий": 'остаток по заказчикам',
           },
           {
-            "Показатель": 'Мы должны',
-            "Сумма": this.formatMoney(metrics.ourDebt),
-            "Комментарий": 'контрагенты + ЗП + переплаты',
+            "Показатель": 'Долг контрагентам',
+            "Сумма": this.formatMoney(metrics.contractorDebt),
+            "Комментарий": 'внешние расчёты: работы и закупки минус оплаты',
+          },
+          {
+            "Показатель": 'Долг сотрудникам',
+            "Сумма": this.formatMoney(metrics.salaryDebt),
+            "Комментарий": 'внутренние расчёты: начисленная зарплата минус выплаты',
+          },
+          {
+            "Показатель": 'Переплаты клиентов',
+            "Сумма": this.formatMoney(metrics.customerOverpay),
+            "Комментарий": 'внешние расчёты: сумма к возврату или зачёту',
           },
           {
             "Показатель": 'Текущий результат месяца',
@@ -26172,7 +26180,7 @@ export const CostingModule = {
 
         .symbolika-finance-balance-grid {
           display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns: repeat(3, minmax(0, 1fr));
           gap: 10px;
         }
 
@@ -26188,6 +26196,8 @@ export const CostingModule = {
 
         .symbolika-finance-balance-card.is-receivable { --finance-accent: #fb7185; }
         .symbolika-finance-balance-card.is-payable { --finance-accent: #fb923c; }
+        .symbolika-finance-balance-card.is-internal { --finance-accent: #c084fc; }
+        .symbolika-finance-balance-card.is-overpay { --finance-accent: #2dd4bf; }
         .symbolika-finance-balance-card.is-year { --finance-accent: #34d399; }
         .symbolika-finance-balance-card.is-negative { --finance-accent: #fb7185; }
         .symbolika-finance-balance-card.is-previous { --finance-accent: #94a3b8; }
@@ -31760,9 +31770,19 @@ export const CostingModule = {
               <p>Нам должны заказчики</p>
             </article>
             <article class="symbolika-finance-balance-card is-payable">
-              <header><span><v-icon name="call_made" small /></span><small>Обязательства</small></header>
-              <strong>{{ formatMoney(financeDashboardMetrics.ourDebt) }} <small>₽</small></strong>
-              <p>Контрагенты, зарплата и переплаты</p>
+              <header><span><v-icon name="business_center" small /></span><small>Долг контрагентам</small></header>
+              <strong>{{ formatMoney(financeDashboardMetrics.contractorDebt) }} <small>₽</small></strong>
+              <p>Внешние расчёты: работы и закупки минус оплаты</p>
+            </article>
+            <article class="symbolika-finance-balance-card is-internal">
+              <header><span><v-icon name="badge" small /></span><small>Долг сотрудникам</small></header>
+              <strong>{{ formatMoney(financeDashboardMetrics.salaryDebt) }} <small>₽</small></strong>
+              <p>Внутренние расчёты: начисленная зарплата минус выплаты</p>
+            </article>
+            <article class="symbolika-finance-balance-card is-overpay">
+              <header><span><v-icon name="savings" small /></span><small>Переплаты клиентов</small></header>
+              <strong>{{ formatMoney(financeDashboardMetrics.customerOverpay) }} <small>₽</small></strong>
+              <p>Внешние расчёты: к возврату или зачёту</p>
             </article>
             <article class="symbolika-finance-balance-card" :class="parseMoney(financeDashboardMetrics.currentYearResult) < 0 ? 'is-negative' : 'is-year'">
               <header><span><v-icon name="calendar_month" small /></span><small>Текущий год</small></header>
@@ -31799,10 +31819,6 @@ export const CostingModule = {
             <article v-if="parseMoney(financeDashboardMetrics.currentMonth.future_operational_expenses)" class="symbolika-finance-breakdown-card is-upcoming">
               <span class="symbolika-finance-breakdown-icon"><v-icon name="calendar_clock" /></span>
               <div><small>План до конца месяца</small><strong>{{ formatMoney(financeDashboardMetrics.currentMonth.future_operational_expenses) }} <small>₽</small></strong><p>Известные постоянные расходы, срок которых ещё не наступил; учитываются только в прогнозе</p></div>
-            </article>
-            <article class="symbolika-finance-breakdown-card is-overpay">
-              <span class="symbolika-finance-breakdown-icon"><v-icon name="savings" /></span>
-              <div><small>Переплаты клиентов</small><strong>{{ formatMoney(financeDashboardMetrics.customerOverpay) }} <small>₽</small></strong><p>Сумма к возврату или зачёту</p></div>
             </article>
           </section>
 
