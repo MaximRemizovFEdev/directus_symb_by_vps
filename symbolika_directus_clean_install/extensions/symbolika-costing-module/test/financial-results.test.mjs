@@ -39,7 +39,7 @@ test('separates order margin, accrued payroll and other expenses without double 
   assert.equal(row.salary_expenses, 55);
   assert.equal(row.operational_expenses, 105);
   assert.equal(row.result, 195);
-  assert.equal(row.actual_result, -5);
+  assert.equal(row.actual_result, 195);
   assert.equal(row.orders_count_value, 2);
   assert.equal(row.completed_orders_count_value, 1);
   assert.equal(row.items_count, 2);
@@ -61,6 +61,7 @@ test('recognizes an order only after every active position is delivered', () => 
   assert.equal(row.completed_order_margin, 0);
   assert.equal(row.completed_orders_count_value, 0);
   assert.equal(row.completed_items_count, 0);
+  assert.equal(row.actual_result, 150);
 });
 
 test('uses the same margin before payroll in order economics and monthly results', () => {

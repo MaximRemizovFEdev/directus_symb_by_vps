@@ -101,7 +101,11 @@ export function buildMonthlyFinancialRows({
       operational_expenses: month.other_expenses + month.salary_expenses,
       clean_profit: month.order_margin,
       result: month.order_margin - month.other_expenses - month.salary_expenses,
-      actual_result: month.completed_order_margin - month.other_expenses - month.salary_expenses,
+      // Compare like with like: monthly payroll and operating expenses belong
+      // to the complete monthly order margin. The completed-order margin stays
+      // available as a separate progress indicator, not as the income side of
+      // a result that subtracts the whole month's expenses.
+      actual_result: month.order_margin - month.other_expenses - month.salary_expenses,
     }))
     .sort((left, right) => right.key.localeCompare(left.key));
 }

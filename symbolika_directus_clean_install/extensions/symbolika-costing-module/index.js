@@ -14245,9 +14245,9 @@ export const CostingModule = {
             "Комментарий": 'контрагенты + ЗП + переплаты',
           },
           {
-            "Показатель": 'Фактический результат месяца',
+            "Показатель": 'Текущий результат месяца',
             "Сумма": this.formatMoney(metrics.currentMonth.result_to_date),
-            "Комментарий": 'завершённые заказы минус начисленная зарплата и прочие расходы',
+            "Комментарий": 'маржа всех заказов минус начисленная зарплата и прочие расходы',
           },
           {
             "Показатель": 'Прогноз месяца',
@@ -14305,7 +14305,7 @@ export const CostingModule = {
           "МаржаЗавершенныхЗаказов": this.formatMoney(row.completed_order_margin),
           "ЗарплатаНачислена": this.formatMoney(row.salary_expenses),
           "ПрочиеРасходы": this.formatMoney(row.other_expenses),
-          "ФактическийРезультат": this.formatMoney(row.actual_result),
+          "ТекущийРезультат": this.formatMoney(row.actual_result),
           "ПланДоКонцаМесяца": this.formatMoney(row.known_future_expenses),
           "Прогноз": this.formatMoney(row.projected_result),
         }));
@@ -31728,10 +31728,10 @@ export const CostingModule = {
             <article class="symbolika-finance-hero-card" :class="parseMoney(financeDashboardMetrics.currentMonth.result_to_date) < 0 ? 'is-negative' : 'is-positive'">
               <header>
                 <span class="symbolika-finance-metric-icon"><v-icon name="account_balance_wallet" /></span>
-                <div><small>Фактический результат</small><strong>По завершённым заказам</strong></div>
+                <div><small>Текущий результат</small><strong>По всем заказам месяца</strong></div>
               </header>
               <div class="symbolika-finance-hero-value">{{ formatMoney(financeDashboardMetrics.currentMonth.result_to_date) }} <small>₽</small></div>
-              <p>Маржа завершённых заказов минус начисленные зарплаты и прочие расходы месяца.</p>
+              <p>Маржа всех заказов месяца минус начисленные зарплаты и прочие расходы месяца.</p>
             </article>
             <article class="symbolika-finance-hero-card is-forecast" :class="parseMoney(financeDashboardMetrics.currentMonth.projected_result) < 0 ? 'is-negative' : 'is-positive'">
               <header>
@@ -31757,12 +31757,12 @@ export const CostingModule = {
             <article class="symbolika-finance-balance-card" :class="parseMoney(financeDashboardMetrics.currentYearResult) < 0 ? 'is-negative' : 'is-year'">
               <header><span><v-icon name="calendar_month" small /></span><small>Текущий год</small></header>
               <strong>{{ formatMoney(financeDashboardMetrics.currentYearResult) }} <small>₽</small></strong>
-              <p>Фактический результат по завершённым заказам за {{ financeDashboardMetrics.currentYear }}</p>
+              <p>Расчётный результат по всем заказам за {{ financeDashboardMetrics.currentYear }}</p>
             </article>
             <article class="symbolika-finance-balance-card is-previous">
               <header><span><v-icon name="history" small /></span><small>Прошлый год</small></header>
               <strong>{{ formatMoney(financeDashboardMetrics.previousYearResult) }} <small>₽</small></strong>
-              <p>Фактический результат по завершённым заказам за {{ financeDashboardMetrics.previousYear }}</p>
+              <p>Расчётный результат по всем заказам за {{ financeDashboardMetrics.previousYear }}</p>
             </article>
           </section>
 
@@ -31773,6 +31773,10 @@ export const CostingModule = {
             <article class="symbolika-finance-breakdown-card is-income">
               <span class="symbolika-finance-breakdown-icon"><v-icon name="trending_up" /></span>
               <div><small>Маржа всех заказов</small><strong>{{ formatMoney(financeDashboardMetrics.currentMonth.order_margin) }} <small>₽</small></strong><p>Выручка минус себестоимость и налоги; проценты менеджеров находятся в зарплате</p></div>
+            </article>
+            <article class="symbolika-finance-breakdown-card">
+              <span class="symbolika-finance-breakdown-icon"><v-icon name="task_alt" /></span>
+              <div><small>Маржа завершённых заказов</small><strong>{{ formatMoney(financeDashboardMetrics.currentMonth.completed_order_margin) }} <small>₽</small></strong><p>Справочно: часть общей маржи по полностью выданным или доставленным заказам</p></div>
             </article>
             <article class="symbolika-finance-breakdown-card is-spent">
               <span class="symbolika-finance-breakdown-icon"><v-icon name="payments" /></span>
@@ -32374,9 +32378,9 @@ export const CostingModule = {
               <div class="symbolika-costing-card-note">оклады, проценты и премии</div>
             </div>
             <div class="symbolika-costing-card green">
-              <div class="symbolika-costing-card-title">Фактический результат</div>
+              <div class="symbolika-costing-card-title">Текущий результат</div>
               <div class="symbolika-costing-card-value">{{ formatMoney(monthlyFinancialSummary.actual_result) }}</div>
-              <div class="symbolika-costing-card-note">завершённые заказы минус зарплаты и прочие расходы</div>
+              <div class="symbolika-costing-card-note">все заказы минус зарплаты и прочие расходы</div>
             </div>
             <div class="symbolika-costing-card green">
               <div class="symbolika-costing-card-title">Прогноз</div>
@@ -32405,7 +32409,7 @@ export const CostingModule = {
                   <th class="symbolika-costing-num">Маржа заказов</th>
                   <th class="symbolika-costing-num">Прочие расходы</th>
                   <th class="symbolika-costing-num">Зарплата начислена</th>
-                  <th class="symbolika-costing-num">Фактический результат</th>
+                  <th class="symbolika-costing-num">Текущий результат</th>
                   <th class="symbolika-costing-num">Прогноз</th>
                 </tr>
               </thead>
