@@ -3958,6 +3958,26 @@ BEGIN
     LEFT JOIN payment_types pt ON pt.id = op.payment_type
     WHERE pa."order" = order_id
   ),
+  order_tax_context AS (
+    SELECT
+      COALESCE(nominal_type.tax_percent, 0)::numeric AS nominal_tax_percent,
+      GREATEST(
+        COALESCE(SUM(
+          CASE
+            WHEN paid.payment_direction = 'outgoing_refund' OR paid.allocation_mode = 'refund'
+              THEN -COALESCE(allocation.amount, 0)
+            ELSE COALESCE(allocation.amount, 0)
+          END
+        ), 0),
+        0
+      )::numeric AS paid_balance
+    FROM orders selected_order
+    LEFT JOIN payment_types nominal_type ON nominal_type.id = selected_order.payment_type
+    LEFT JOIN payment_allocations allocation ON allocation."order" = selected_order.id
+    LEFT JOIN order_payments paid ON paid.id = allocation.payment
+    WHERE selected_order.id = order_id
+    GROUP BY nominal_type.tax_percent
+  ),
   item_taxes AS (
     SELECT
       ir.id,
@@ -3971,14 +3991,18 @@ BEGIN
               0
             )
           * ps.tax_percent / 100
-        ), 0),
+        ), 0)
+        + GREATEST(ir.range_end - GREATEST(ir.range_start, otc.paid_balance), 0)
+          * otc.nominal_tax_percent / 100,
         2
       ) AS tax_sum
     FROM item_ranges ir
+    CROSS JOIN order_tax_context otc
     LEFT JOIN payment_steps ps
       ON GREATEST(ps.balance_before, ps.balance_after) > ir.range_start
      AND LEAST(ps.balance_before, ps.balance_after) < ir.range_end
-    GROUP BY ir.id, ir.item_sum
+    GROUP BY ir.id, ir.item_sum, ir.range_start, ir.range_end,
+      otc.paid_balance, otc.nominal_tax_percent
   )
   UPDATE orders_items oi
      SET tax_sum = GREATEST(it.tax_sum, 0),
@@ -4165,7 +4189,7 @@ FOR EACH ROW
 EXECUTE FUNCTION recalc_order_payment_on_item_trigger();
 
 CREATE TRIGGER symbolika_recalc_order_payment_on_order
-AFTER UPDATE OF payment_on_receipt ON orders
+AFTER UPDATE OF payment_on_receipt, payment_type ON orders
 FOR EACH ROW
 EXECUTE FUNCTION recalc_order_payment_on_order_trigger();
 

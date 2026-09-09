@@ -19,6 +19,11 @@ const activeManagerScreenCostPermissionMigrationPath = new URL(
   import.meta.url,
 );
 const activeManagerScreenCostPermissionMigration = await readFile(activeManagerScreenCostPermissionMigrationPath, 'utf8');
+const unpaidOrderTaxMigrationPath = new URL(
+  '../../../setup/migrations/20260909_tax_unpaid_order_balance.sql',
+  import.meta.url,
+);
+const unpaidOrderTaxMigration = await readFile(unpaidOrderTaxMigrationPath, 'utf8');
 
 const extractFunction = (source, name) => source.match(
   new RegExp(`CREATE OR REPLACE FUNCTION ${name.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b[\\s\\S]*?\\n\\$\\$;`, 'i'),
@@ -181,4 +186,19 @@ test('grants managers the persisted screen-printing cost without widening row ac
   assert.match(managerScreenCostPermissionMigration, /00000000-0000-4000-8000-000000000202/);
   assert.doesNotMatch(activeManagerScreenCostPermissionMigration, /SET\s+permissions\s*=/i);
   assert.doesNotMatch(activeManagerScreenCostPermissionMigration, /fields\s*=\s*'\*'/i);
+});
+
+test('taxes unpaid order balances by the selected order payment type', () => {
+  const functionName = 'recalc_order_payment_totals';
+  assert.equal(
+    normalizeSqlDefinition(extractFunction(unpaidOrderTaxMigration, functionName)),
+    normalizeSqlDefinition(extractFunction(sql, functionName)),
+  );
+
+  for (const source of [sql, unpaidOrderTaxMigration]) {
+    assert.match(source, /order_tax_context\s+AS/i);
+    assert.match(source, /nominal_tax_percent/i);
+    assert.match(source, /paid_balance/i);
+    assert.match(source, /AFTER UPDATE OF payment_on_receipt, payment_type ON orders/i);
+  }
 });
