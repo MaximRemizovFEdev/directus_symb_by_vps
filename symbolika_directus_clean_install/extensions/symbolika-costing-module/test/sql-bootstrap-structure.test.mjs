@@ -29,6 +29,11 @@ const inheritedItemDeadlineMigrationPath = new URL(
   import.meta.url,
 );
 const inheritedItemDeadlineMigration = await readFile(inheritedItemDeadlineMigrationPath, 'utf8');
+const incrementalReconciliationMigrationPath = new URL(
+  '../../../setup/migrations/20260909_incremental_customer_reconciliation.sql',
+  import.meta.url,
+);
+const incrementalReconciliationMigration = await readFile(incrementalReconciliationMigrationPath, 'utf8');
 
 const extractFunction = (source, name) => source.match(
   new RegExp(`CREATE OR REPLACE FUNCTION ${name.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b[\\s\\S]*?\\n\\$\\$;`, 'i'),
@@ -226,4 +231,19 @@ test('persists inherited order deadlines on positions and preserves explicit ove
     assert.match(source, /deadline::date IS NOT DISTINCT FROM OLD\.deadline::date/i);
     assert.match(source, /oi\.deadline IS NULL[\s\S]*o\.deadline IS NOT NULL/i);
   }
+});
+
+test('updates reconciliation per order instead of rebuilding it on every status change', () => {
+  for (const source of [sql, incrementalReconciliationMigration]) {
+    assert.match(source, /CREATE OR REPLACE FUNCTION sync_customer_reconciliation_order\(target_order_id integer\)/i);
+    assert.match(source, /symbolika_customer_reconciliation_order/i);
+    assert.match(source, /PERFORM sync_customer_reconciliation_order\(order_id\)/i);
+    assert.match(source, /symbolika_customer_reconciliation_refresh/i);
+  }
+
+  assert.match(
+    incrementalReconciliationMigration,
+    /ALTER FUNCTION refresh_customer_reconciliation\(\)[\s\S]*RENAME TO symbolika_refresh_customer_reconciliation_body/i,
+  );
+  assert.match(incrementalReconciliationMigration, /pg_get_functiondef\('sync_orders_overview\(integer\)'::regprocedure\)/i);
 });
