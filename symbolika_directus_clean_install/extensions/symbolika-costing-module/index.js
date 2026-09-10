@@ -1238,6 +1238,7 @@ export const CostingModule = {
       officeIssueRows: [],
       officeArchiveRows: [],
       officeArchiveItems: [],
+      officeViewMode: 'orders',
       officeBucket: 'planned',
       officeSort: 'deadline',
       tableSorts: {
@@ -3421,12 +3422,7 @@ export const CostingModule = {
     },
 
     visibleOfficeIssueRows() {
-      const source = this.officeBucket === 'issued'
-        ? this.officeArchiveRows
-        : this.officeIssueRows.filter((row) => {
-          if (this.officeBucket === 'in_office') return row.office_status === 'in_office';
-          return row.office_status !== 'in_office' && row.office_status !== 'issued';
-        });
+      const source = this.officeOrderRowsForBucket(this.officeBucket);
 
       return this.sortOfficeRows(this.applySearchAndFilter(source, (row) => [
         row.order_number,
@@ -3436,6 +3432,17 @@ export const CostingModule = {
         row.manager_name,
         row.order_status_name,
         row.payment_comment,
+      ], () => true));
+    },
+
+    visibleOfficePositionRows() {
+      return this.sortOfficeRows(this.applySearchAndFilter(this.officePositionRowsForBucket(), (row) => [
+        row.order_number,
+        row.product_name,
+        row.customer_name,
+        row.customer_company_name,
+        row.manager_name,
+        this.officeStatusName(row.office_status),
       ], () => true));
     },
 
@@ -4745,6 +4752,42 @@ export const CostingModule = {
       this.officeBucket = bucket;
       this.activeFilter = 'all';
       this.expandedOfficeOrders = {};
+    },
+
+    officeOrderRowsForBucket(bucket = this.officeBucket) {
+      if (bucket === 'issued') return this.officeArchiveRows;
+      const orderIds = new Set(this.officePositionRowsForBucket(bucket)
+        .map((row) => Number(this.entityId(row.order_link) || this.entityId(row.office_issue) || this.entityId(row.order)))
+        .filter((id) => id > 0));
+      return this.officeIssueRows.filter((row) => orderIds.has(Number(row.id)));
+    },
+
+    officePositionRowsForBucket(bucket = this.officeBucket) {
+      const archived = bucket === 'issued';
+      const items = archived ? this.officeArchiveItems : this.officeRows;
+      const orders = archived ? this.officeArchiveRows : this.officeIssueRows;
+      const ordersById = new Map((orders || []).map((row) => [Number(row.id), row]));
+
+      return (items || []).filter((item) => {
+        if (bucket === 'issued') return item.office_status === 'issued';
+        if (bucket === 'in_office') return item.office_status === 'in_office';
+        return item.office_status !== 'in_office' && item.office_status !== 'issued';
+      }).map((item) => {
+        const issueId = Number(this.entityId(item.office_issue) || this.entityId(item.order) || this.entityId(item.order_link));
+        const order = ordersById.get(issueId) || {};
+        return {
+          ...order,
+          ...item,
+          id: item.id,
+          order_link: this.entityId(order.order_link) || issueId || null,
+          manager_name: order.manager_name || this.relatedName(item.manager_employee, 'full_name'),
+        };
+      });
+    },
+
+    officeBucketCount(bucket) {
+      if (this.officeViewMode === 'items') return this.officePositionRowsForBucket(bucket).length;
+      return this.officeOrderRowsForBucket(bucket).length;
     },
 
     filterRows(rows, archive = false) {
@@ -9230,9 +9273,9 @@ export const CostingModule = {
         const params = new URLSearchParams();
         params.set('fields', officeFields.join(','));
         params.set('sort', 'order_number,product_name,id');
-        await this.loadPagedCollection('office_rows', '/items/office_items_in_office', params, (rows, append) => {
+        await this.loadCompletePagedCollection('office_rows', '/items/office_items_in_office', params, (rows, append) => {
           this.officeRows = append ? this.mergePagedRows(this.officeRows, rows) : rows;
-        });
+        }, { pageSize: 500 });
       } catch (error) {
         this.error = error.message;
       }
@@ -12084,12 +12127,12 @@ export const CostingModule = {
         const params = new URLSearchParams();
         params.set('fields', officeIssueFields.join(','));
         params.set('sort', 'deadline,order_number,id');
-        await this.loadPagedCollection('office_issue', '/items/office_issue', params, (rows, append) => {
+        await this.loadCompletePagedCollection('office_issue', '/items/office_issue', params, (rows, append) => {
           this.officeIssueRows = append ? this.mergePagedRows(this.officeIssueRows, rows) : rows;
         }, { mapRows: (rows) => rows.map((row) => ({
           ...row,
           add_payment: this.moneyInput(row.add_payment),
-        })) });
+        })), pageSize: 500 });
       } catch (error) {
         this.error = error.message;
         this.officeIssueRows = [];
@@ -12101,12 +12144,12 @@ export const CostingModule = {
         const params = new URLSearchParams();
         params.set('fields', officeArchiveFields.join(','));
         params.set('sort', '-date,order_number,id');
-        await this.loadPagedCollection('office_archive', '/items/office_issue_archive', params, (rows, append) => {
+        await this.loadCompletePagedCollection('office_archive', '/items/office_issue_archive', params, (rows, append) => {
           this.officeArchiveRows = append ? this.mergePagedRows(this.officeArchiveRows, rows) : rows;
         }, { mapRows: (rows) => rows.map((row) => ({
           ...row,
           add_payment: this.moneyInput(row.add_payment),
-        })) });
+        })), pageSize: 500 });
       } catch (error) {
         this.error = error.message;
         this.officeArchiveRows = [];
@@ -12118,9 +12161,9 @@ export const CostingModule = {
         const params = new URLSearchParams();
         params.set('fields', officeArchiveItemFields.join(','));
         params.set('sort', 'office_issue,product_name,id');
-        await this.loadPagedCollection('office_archive_items', '/items/office_issue_archive_items', params, (rows, append) => {
+        await this.loadCompletePagedCollection('office_archive_items', '/items/office_issue_archive_items', params, (rows, append) => {
           this.officeArchiveItems = append ? this.mergePagedRows(this.officeArchiveItems, rows) : rows;
-        });
+        }, { pageSize: 500 });
       } catch (error) {
         this.error = error.message;
         this.officeArchiveItems = [];
@@ -14502,6 +14545,18 @@ export const CostingModule = {
       }
 
       if (this.activeTab === 'office') {
+        if (this.officeViewMode === 'items') {
+          return this.visibleOfficePositionRows.map((row) => ({
+            "Раздел": officeBuckets.find((bucket) => bucket.id === this.officeBucket)?.title,
+            "Заказ": row.order_number,
+            "Позиция": row.product_name,
+            "Количество": row.quantity,
+            "Клиент": row.customer_name,
+            "Компания": row.customer_company_name,
+            "Менеджер": row.manager_name,
+            "СтатусОфиса": this.officeStatusName(row.office_status),
+          }));
+        }
         return this.visibleOfficeIssueRows.map((row) => ({
           "Раздел": officeBuckets.find((bucket) => bucket.id === this.officeBucket)?.title,
           "Заказ": row.order_number,
@@ -34421,6 +34476,10 @@ export const CostingModule = {
         <div v-if="activeTab === 'office'" class="symbolika-costing-table-wrap symbolika-costing-office-workspace">
             <div class="symbolika-costing-subtoolbar">
               <div class="symbolika-costing-segments">
+                <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': officeViewMode === 'orders' }" @click="officeViewMode = 'orders'">По заказам</button>
+                <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': officeViewMode === 'items' }" @click="officeViewMode = 'items'">По позициям</button>
+              </div>
+              <div class="symbolika-costing-segments">
                 <button
                   v-for="bucket in officeBuckets"
                   :key="bucket.id"
@@ -34430,15 +34489,7 @@ export const CostingModule = {
                   @click="setOfficeBucket(bucket.id)"
                 >
                   {{ bucket.title }}
-                  <span class="symbolika-costing-segment-count">
-                    {{
-                      bucket.id === 'issued'
-                        ? officeArchiveRows.length
-                        : officeIssueRows.filter((row) => bucket.id === 'in_office'
-                          ? row.office_status === 'in_office'
-                          : row.office_status !== 'in_office' && row.office_status !== 'issued').length
-                    }}
-                  </span>
+                  <span class="symbolika-costing-segment-count">{{ officeBucketCount(bucket.id) }}</span>
                 </button>
               </div>
 
@@ -34452,7 +34503,7 @@ export const CostingModule = {
               </label>
             </div>
 
-            <table class="symbolika-costing-table symbolika-costing-table-office">
+            <table v-if="officeViewMode === 'orders'" class="symbolika-costing-table symbolika-costing-table-office">
               <colgroup>
                 <col style="width: 42px" />
                 <col style="width: 96px" />
@@ -34560,7 +34611,53 @@ export const CostingModule = {
             </tbody>
           </table>
 
-          <div v-if="!visibleOfficeIssueRows.length" class="symbolika-costing-empty">Нет заказов в выбранном разделе</div>
+          <table v-else class="symbolika-costing-table symbolika-costing-table-office">
+            <thead>
+              <tr>
+                <th>Заказ</th>
+                <th>Позиция</th>
+                <th>Клиент / менеджер</th>
+                <th>Статус офиса</th>
+                <th>Действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in visibleOfficePositionRows" :key="'office-position-' + row.id" class="symbolika-costing-row-clickable" @click="openRowDetail('orders_items', row, $event)">
+                <td>
+                  <div class="symbolika-costing-cell-stack">
+                    <span class="symbolika-costing-order">{{ row.order_number }}</span>
+                    <span class="symbolika-costing-subtle">{{ formatDate(row.date) }}</span>
+                  </div>
+                </td>
+                <td>
+                  <div class="symbolika-costing-cell-stack">
+                    <span class="symbolika-costing-product">{{ row.product_name || 'Позиция' }}</span>
+                    <span class="symbolika-costing-subtle">{{ formatQuantity(row.quantity) }} шт.</span>
+                  </div>
+                </td>
+                <td>
+                  <div>{{ row.customer_name || row.customer_company_name || '-' }}</div>
+                  <div class="symbolika-costing-subtle">{{ [row.customer_company_name, row.manager_name].filter(Boolean).join(' · ') || '-' }}</div>
+                </td>
+                <td @click.stop>
+                  <select
+                    v-if="officeBucket !== 'issued'"
+                    class="symbolika-costing-select"
+                    :class="[savingWorkClass('office_items_in_office', row, 'office_status'), officeSelectClass(row.office_status)]"
+                    :value="row.office_status"
+                    @change="saveOfficeField(row, $event.target.value)"
+                  >
+                    <option v-for="status in officeStatusChoices" :key="status.value" :value="status.value">{{ status.text }}</option>
+                  </select>
+                  <span v-else class="symbolika-costing-pill symbolika-costing-pill-green">{{ officeStatusName(row.office_status) }}</span>
+                </td>
+                <td><button type="button" class="symbolika-costing-mini-button" @click.stop="openRowDetail('orders_items', row, $event)"><v-icon name="open_in_new" small />Открыть</button></td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div v-if="officeViewMode === 'orders' && !visibleOfficeIssueRows.length" class="symbolika-costing-empty">Нет заказов в выбранном разделе</div>
+          <div v-if="officeViewMode === 'items' && !visibleOfficePositionRows.length" class="symbolika-costing-empty">Нет позиций в выбранном разделе</div>
         </div>
 
         <div v-if="contractorProposalOpen" class="symbolika-costing-modal-backdrop" @click.self="closeContractorProposal">
