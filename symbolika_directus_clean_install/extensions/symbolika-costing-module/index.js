@@ -4760,7 +4760,6 @@ export const CostingModule = {
     },
 
     matchesWorkArchiveMode(row) {
-      if (this.workProductionStatusFilter) return true;
       if (this.workArchiveMode === 'archive') return this.isWorkArchived(row);
       if (this.workArchiveMode === 'all') return true;
       return !this.isWorkArchived(row);
