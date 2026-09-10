@@ -634,6 +634,8 @@ const notificationTopicChoices = [
 ];
 
 const tableSortOptions = [
+  { id: 'created_desc', key: 'created', direction: 'desc', title: 'Добавление: сначала новые' },
+  { id: 'created_asc', key: 'created', direction: 'asc', title: 'Добавление: сначала старые' },
   { id: 'deadline_asc', key: 'deadline', direction: 'asc', title: 'Срок: по возрастанию' },
   { id: 'deadline_desc', key: 'deadline', direction: 'desc', title: 'Срок: по убыванию' },
   { id: 'date', title: 'По дате' },
@@ -2330,9 +2332,9 @@ export const CostingModule = {
       });
 
       this.myOrderRows.forEach((row) => {
-        if (this.isOverdue(row.deadline)) {
+        if (this.isDeadlineOverdue(row, row.deadline)) {
           rows.push(this.queueItem('my_orders', row, 'Просрочен срок', row.order_status_name || 'Проверить заказ', ['overdue']));
-        } else if (this.isToday(row.deadline)) {
+        } else if (!this.isReadyInOffice(row) && this.isToday(row.deadline)) {
           rows.push(this.queueItem('my_orders', row, 'Срок сегодня', row.order_status_name || 'Проверить заказ', ['today']));
         }
       });
@@ -6127,6 +6129,7 @@ export const CostingModule = {
 
     sortValue(row, key) {
       if (!row) return '';
+      if (key === 'created') return Number(this.entityId(row.id) || this.entityId(this.orderId(row)) || 0);
       if (key === 'order_number') return this.orderNumber(row);
       if (key === 'date') return this.sortDateValue(row.date);
       if (key === 'deadline') return this.sortDateValue(this.effectiveDeadline(row));
@@ -14599,14 +14602,24 @@ export const CostingModule = {
       return presentationOfficeSelectClass(value);
     },
 
-    deadlineClass(value) {
-      if (this.isOverdue(value)) return 'symbolika-costing-date-danger';
-      if (this.isToday(value)) return 'symbolika-costing-date-hot';
+    isReadyInOffice(row) {
+      if (!row || this.detailOfficeStatus(row) !== 'in_office') return false;
+      const orderStatus = this.normalizeStatus(this.detailOrderStatus(row));
+      return orderStatus.includes('готов');
+    },
+
+    isDeadlineOverdue(row, value = row?.deadline) {
+      return !this.isReadyInOffice(row) && this.isOverdue(value);
+    },
+
+    deadlineClass(value, row = null) {
+      if (this.isDeadlineOverdue(row, value)) return 'symbolika-costing-date-danger';
+      if (!this.isReadyInOffice(row) && this.isToday(value)) return 'symbolika-costing-date-hot';
       return 'symbolika-costing-date-normal';
     },
 
-    deadlineIcon(value) {
-      if (this.isOverdue(value) || this.isToday(value)) return 'local_fire_department';
+    deadlineIcon(value, row = null) {
+      if (this.isDeadlineOverdue(row, value) || (!this.isReadyInOffice(row) && this.isToday(value))) return 'local_fire_department';
       return 'event';
     },
 
@@ -14737,9 +14750,24 @@ export const CostingModule = {
 
     rowStateClass(row) {
       return {
-        'symbolika-costing-row-overdue': this.isOverdue(row?.deadline),
-        'symbolika-costing-row-today': this.isToday(row?.deadline),
+        'symbolika-costing-row-overdue': this.isDeadlineOverdue(row, this.effectiveDeadline(row)),
+        'symbolika-costing-row-today': !this.isReadyInOffice(row) && this.isToday(this.effectiveDeadline(row)),
+        'symbolika-costing-row-unpaid': this.orderPaymentDue(row) > 0,
       };
+    },
+
+    orderPaymentDue(row) {
+      if (!row) return 0;
+      const context = this.detailOrderContext(row) || row;
+      const explicit = row.payment_due ?? row.office_payment_due
+        ?? context.payment_due ?? context.office_payment_due;
+      if (explicit !== undefined && explicit !== null && explicit !== '') {
+        return Math.max(this.parseMoney(explicit), 0);
+      }
+      const orderSum = row.order_sum ?? context.order_sum;
+      const paidAmount = row.paid_amount ?? context.paid_amount;
+      if (orderSum === undefined || paidAmount === undefined) return 0;
+      return Math.max(this.parseMoney(orderSum) - this.parseMoney(paidAmount), 0);
     },
 
     officePaymentDue(row) {
@@ -20168,6 +20196,14 @@ export const CostingModule = {
         .symbolika-costing-date-danger {
           background: color-mix(in srgb, var(--theme--danger) 20%, transparent);
           color: color-mix(in srgb, var(--theme--danger) 76%, white);
+        }
+
+        .symbolika-costing-row-unpaid td {
+          background: color-mix(in srgb, var(--theme--warning, #f5b942) 5%, transparent);
+        }
+
+        .symbolika-costing-row-unpaid td:last-child {
+          box-shadow: inset -3px 0 0 color-mix(in srgb, var(--theme--warning, #f5b942) 88%, var(--theme--primary));
         }
 
         .symbolika-costing-row-overdue td {
@@ -30077,9 +30113,9 @@ export const CostingModule = {
               <span v-for="item in entry.meta" :key="item">{{ item }}</span>
             </div>
             <div class="symbolika-costing-work-card-foot">
-              <span v-if="entry.deadline" class="symbolika-costing-date" :class="deadlineClass(entry.deadline)">
+              <span v-if="entry.deadline" class="symbolika-costing-date" :class="deadlineClass(entry.deadline, entry.row)">
                 <span class="symbolika-costing-deadline-label">Срок</span>
-                <v-icon :name="deadlineIcon(entry.deadline)" small />{{ formatDate(entry.deadline) }}
+                <v-icon :name="deadlineIcon(entry.deadline, entry.row)" small />{{ formatDate(entry.deadline) }}
               </span>
               <strong v-if="entry.amount" class="symbolika-costing-amount-badge">{{ formatMoney(entry.amount) }} ₽</strong>
             </div>
@@ -30138,9 +30174,9 @@ export const CostingModule = {
                 >
                   <span>{{ orderCompletionLabel() }}</span><strong>{{ orderCompletionPercent(entry.row) }}%</strong><i></i>
                 </div>
-                <span v-if="entry.deadline" class="symbolika-costing-date" :class="deadlineClass(entry.deadline)">
+                <span v-if="entry.deadline" class="symbolika-costing-date" :class="deadlineClass(entry.deadline, entry.row)">
                   <span class="symbolika-costing-deadline-label">Срок</span>
-                  <v-icon :name="deadlineIcon(entry.deadline)" small />{{ formatDate(entry.deadline) }}
+                  <v-icon :name="deadlineIcon(entry.deadline, entry.row)" small />{{ formatDate(entry.deadline) }}
                 </span>
                 <strong v-if="entry.amount" class="symbolika-costing-amount-badge">{{ formatMoney(entry.amount) }} ₽</strong>
                 <select
@@ -30208,8 +30244,8 @@ export const CostingModule = {
                     <div class="symbolika-costing-cell-stack">
                       <span class="symbolika-costing-order">{{ row.estimate_number }}</span>
                       <span class="symbolika-costing-cell-meta">{{ formatDate(row.date) }}</span>
-                      <span v-if="row.deadline" class="symbolika-costing-date" :class="deadlineClass(row.deadline)">
-                        <v-icon :name="deadlineIcon(row.deadline)" small />{{ formatDate(row.deadline) }}
+                      <span v-if="row.deadline" class="symbolika-costing-date" :class="deadlineClass(row.deadline, row)">
+                        <v-icon :name="deadlineIcon(row.deadline, row)" small />{{ formatDate(row.deadline) }}
                       </span>
                     </div>
                   </td>
@@ -30309,7 +30345,7 @@ export const CostingModule = {
                     <div class="symbolika-costing-cell-stack">
                       <span class="symbolika-costing-order">{{ item.order_number }}</span>
                       <span class="symbolika-costing-cell-meta">{{ formatDate(item.row?.date) }}</span>
-                      <span class="symbolika-costing-date" :class="deadlineClass(item.deadline)"><v-icon :name="deadlineIcon(item.deadline)" small />{{ formatDate(item.deadline) }}</span>
+                      <span class="symbolika-costing-date" :class="deadlineClass(item.deadline, item.row)"><v-icon :name="deadlineIcon(item.deadline, item.row)" small />{{ formatDate(item.deadline) }}</span>
                     </div>
                   </td>
                   <td>
@@ -30359,7 +30395,7 @@ export const CostingModule = {
                   <div class="symbolika-costing-cell-stack">
                     <span class="symbolika-costing-order">{{ item.order_number }}</span>
                     <span class="symbolika-costing-cell-meta">{{ formatDate(item.row?.date) }}</span>
-                    <span class="symbolika-costing-date" :class="deadlineClass(item.deadline)"><v-icon :name="deadlineIcon(item.deadline)" small />{{ formatDate(item.deadline) }}</span>
+                    <span class="symbolika-costing-date" :class="deadlineClass(item.deadline, item.row)"><v-icon :name="deadlineIcon(item.deadline, item.row)" small />{{ formatDate(item.deadline) }}</span>
                   </div>
                 </td>
                 <td>
@@ -30421,7 +30457,7 @@ export const CostingModule = {
                   <div class="symbolika-costing-cell-stack">
                     <span class="symbolika-costing-product">{{ row.product_name || '-' }}</span>
                     <span class="symbolika-costing-cell-meta">{{ formatDate(row.date) }}</span>
-                    <span class="symbolika-costing-date" :class="deadlineClass(row.deadline)"><v-icon :name="deadlineIcon(row.deadline)" small />{{ formatDate(row.deadline) }}</span>
+                    <span class="symbolika-costing-date" :class="deadlineClass(row.deadline, row)"><v-icon :name="deadlineIcon(row.deadline, row)" small />{{ formatDate(row.deadline) }}</span>
                   </div>
                 </td>
                 <td>
@@ -30514,7 +30550,7 @@ export const CostingModule = {
                     <span class="symbolika-costing-cell-meta">{{ formatDate(row.date) }}</span>
                     <input
                       class="symbolika-costing-table-date"
-                      :class="[savingWorkClass('orders', row, 'deadline'), deadlineClass(row.deadline)]"
+                      :class="[savingWorkClass('orders', row, 'deadline'), deadlineClass(row.deadline, row)]"
                       type="date"
                       :value="dateInput(row.deadline)"
                       @change="saveOrderField(row, 'deadline', $event.target.value)"
@@ -30616,9 +30652,9 @@ export const CostingModule = {
                         <div class="symbolika-costing-product">{{ item.product_name || '-' }}</div>
                         <div class="symbolika-costing-position-info-line">
                           <span class="symbolika-costing-position-order-date">{{ formatDate(item.date || row.date) }}</span>
-                          <span class="symbolika-costing-date symbolika-costing-position-deadline" :class="deadlineClass(item.deadline)">
+                          <span class="symbolika-costing-date symbolika-costing-position-deadline" :class="deadlineClass(item.deadline, item)">
                             <span class="symbolika-costing-position-deadline-label">Срок</span>
-                            <span class="symbolika-costing-position-deadline-icon"><v-icon :name="deadlineIcon(item.deadline)" small /></span>
+                            <span class="symbolika-costing-position-deadline-icon"><v-icon :name="deadlineIcon(item.deadline, item)" small /></span>
                             <span class="symbolika-costing-position-deadline-value">{{ formatDate(item.deadline) }}</span>
                           </span>
                           <span class="symbolika-costing-position-number" title="Количество"><strong>{{ formatQuantity(item.quantity) }} шт.</strong></span>
@@ -30721,7 +30757,7 @@ export const CostingModule = {
                     <span class="symbolika-costing-cell-meta">{{ formatDate(row.date) }}</span>
                     <input
                       class="symbolika-costing-table-date"
-                      :class="[savingWorkClass('orders', row, 'deadline'), deadlineClass(row.deadline)]"
+                      :class="[savingWorkClass('orders', row, 'deadline'), deadlineClass(row.deadline, row)]"
                       type="date"
                       :value="dateInput(row.deadline)"
                       @change="saveOrderField(row, 'deadline', $event.target.value)"
@@ -30821,9 +30857,9 @@ export const CostingModule = {
                         <div class="symbolika-costing-product">{{ item.product_name || '-' }}</div>
                         <div class="symbolika-costing-position-info-line">
                           <span class="symbolika-costing-position-order-date">{{ formatDate(item.date || row.date) }}</span>
-                          <span class="symbolika-costing-date symbolika-costing-position-deadline" :class="deadlineClass(item.deadline)">
+                          <span class="symbolika-costing-date symbolika-costing-position-deadline" :class="deadlineClass(item.deadline, item)">
                             <span class="symbolika-costing-position-deadline-label">Срок</span>
-                            <span class="symbolika-costing-position-deadline-icon"><v-icon :name="deadlineIcon(item.deadline)" small /></span>
+                            <span class="symbolika-costing-position-deadline-icon"><v-icon :name="deadlineIcon(item.deadline, item)" small /></span>
                             <span class="symbolika-costing-position-deadline-value">{{ formatDate(item.deadline) }}</span>
                           </span>
                           <span class="symbolika-costing-position-number" title="Количество"><strong>{{ formatQuantity(item.quantity) }} шт.</strong></span>
@@ -30889,7 +30925,7 @@ export const CostingModule = {
                   <div class="symbolika-costing-cell-stack">
                     <span class="symbolika-costing-order">{{ row.order_number }}</span>
                     <span class="symbolika-costing-cell-meta">{{ formatDate(row.date) }}</span>
-                    <span class="symbolika-costing-date" :class="deadlineClass(row.deadline)"><v-icon :name="deadlineIcon(row.deadline)" small />{{ formatDate(row.deadline) }}</span>
+                    <span class="symbolika-costing-date" :class="deadlineClass(row.deadline, row)"><v-icon :name="deadlineIcon(row.deadline, row)" small />{{ formatDate(row.deadline) }}</span>
                     <div v-if="showsOrderCompletion(row)" class="symbolika-costing-order-completion" :class="orderCompletionClass(row)" :style="orderCompletionStyle(row)" :title="orderCompletionTitle(row)">
                       <span>{{ orderCompletionLabel() }}</span><strong>{{ orderCompletionPercent(row) }}%</strong><i></i>
                     </div>
@@ -30976,9 +31012,9 @@ export const CostingModule = {
                         <div class="symbolika-costing-product">{{ item.product_name || '-' }}</div>
                         <div class="symbolika-costing-position-info-line">
                           <span class="symbolika-costing-position-order-date">{{ formatDate(item.date || row.date) }}</span>
-                          <span class="symbolika-costing-date symbolika-costing-position-deadline" :class="deadlineClass(item.deadline)">
+                          <span class="symbolika-costing-date symbolika-costing-position-deadline" :class="deadlineClass(item.deadline, item)">
                             <span class="symbolika-costing-position-deadline-label">Срок</span>
-                            <span class="symbolika-costing-position-deadline-icon"><v-icon :name="deadlineIcon(item.deadline)" small /></span>
+                            <span class="symbolika-costing-position-deadline-icon"><v-icon :name="deadlineIcon(item.deadline, item)" small /></span>
                             <span class="symbolika-costing-position-deadline-value">{{ formatDate(item.deadline) }}</span>
                           </span>
                           <span class="symbolika-costing-position-number" title="Количество"><strong>{{ formatQuantity(item.quantity) }} шт.</strong></span>
@@ -31039,9 +31075,9 @@ export const CostingModule = {
                   <div class="symbolika-costing-archive-position-main">
                     <div class="symbolika-costing-product">{{ row.product_name || '-' }}</div>
                     <div class="symbolika-costing-archive-position-metrics">
-                      <span class="symbolika-costing-date symbolika-costing-position-deadline" :class="deadlineClass(row.deadline)">
+                      <span class="symbolika-costing-date symbolika-costing-position-deadline" :class="deadlineClass(row.deadline, row)">
                         <span class="symbolika-costing-position-deadline-label">Срок</span>
-                        <span class="symbolika-costing-position-deadline-icon"><v-icon :name="deadlineIcon(row.deadline)" small /></span>
+                        <span class="symbolika-costing-position-deadline-icon"><v-icon :name="deadlineIcon(row.deadline, row)" small /></span>
                         <span class="symbolika-costing-position-deadline-value">{{ formatDate(row.deadline) }}</span>
                       </span>
                       <span class="symbolika-costing-position-number" title="Количество"><strong>{{ formatQuantity(row.quantity) }} шт.</strong></span>
@@ -31136,7 +31172,7 @@ export const CostingModule = {
                       <span class="symbolika-costing-cell-meta">{{ formatDate(row.date) }}</span>
                       <input
                         class="symbolika-costing-table-date"
-                        :class="[savingWorkClass('orders', row, 'deadline'), deadlineClass(row.deadline)]"
+                        :class="[savingWorkClass('orders', row, 'deadline'), deadlineClass(row.deadline, row)]"
                         type="date"
                         :value="dateInput(row.deadline)"
                         @change="saveOrderField(row, 'deadline', $event.target.value)"
@@ -31196,7 +31232,7 @@ export const CostingModule = {
                   <div class="symbolika-costing-cell-stack">
                     <span class="symbolika-costing-order">{{ item.order_number }}</span>
                     <span class="symbolika-costing-cell-meta">{{ formatDate(item.row?.date) }}</span>
-                    <span class="symbolika-costing-date" :class="deadlineClass(item.deadline)"><v-icon :name="deadlineIcon(item.deadline)" small />{{ formatDate(item.deadline) }}</span>
+                    <span class="symbolika-costing-date" :class="deadlineClass(item.deadline, item.row)"><v-icon :name="deadlineIcon(item.deadline, item.row)" small />{{ formatDate(item.deadline) }}</span>
                   </div>
                 </td>
                 <td>
@@ -33075,7 +33111,7 @@ export const CostingModule = {
                     <span class="symbolika-costing-order">{{ row.entry_type === 'operation' ? clientOperationTypeName(row.operation_type) : row.order_number }}</span>
                     <div class="symbolika-costing-subtle">{{ formatDate(row.date) }}</div>
                     <div v-if="row.entry_type === 'operation'" class="symbolika-costing-subtle">{{ row.order_number }} · {{ row.description }}</div>
-                    <span v-else class="symbolika-costing-date" :class="deadlineClass(row.deadline)"><v-icon :name="deadlineIcon(row.deadline)" small />{{ formatDate(row.deadline) }}</span>
+                    <span v-else class="symbolika-costing-date" :class="deadlineClass(row.deadline, row)"><v-icon :name="deadlineIcon(row.deadline, row)" small />{{ formatDate(row.deadline) }}</span>
                   </td>
                   <td>
                     <div>{{ row.counterparty_name || row.customer_name || '-' }}</div>
@@ -33134,7 +33170,7 @@ export const CostingModule = {
                   <td>
                     <span class="symbolika-costing-order">{{ row.order_number }}</span>
                     <div class="symbolika-costing-subtle">{{ formatDate(row.date) }}</div>
-                    <span class="symbolika-costing-date" :class="deadlineClass(row.deadline)"><v-icon :name="deadlineIcon(row.deadline)" small />{{ formatDate(row.deadline) }}</span>
+                    <span class="symbolika-costing-date" :class="deadlineClass(row.deadline, row)"><v-icon :name="deadlineIcon(row.deadline, row)" small />{{ formatDate(row.deadline) }}</span>
                   </td>
                   <td>
                     <div>{{ row.counterparty_name || row.customer_name || '-' }}</div>
@@ -33872,7 +33908,7 @@ export const CostingModule = {
                 <td>
                   <span class="symbolika-costing-order">{{ orderNumber(row) }}</span>
                   <div class="symbolika-costing-subtle">{{ formatDate(row.date) }}</div>
-                  <span class="symbolika-costing-date" :class="deadlineClass(effectiveDeadline(row))"><v-icon :name="deadlineIcon(effectiveDeadline(row))" small />{{ formatDate(effectiveDeadline(row)) }}</span>
+                  <span class="symbolika-costing-date" :class="deadlineClass(effectiveDeadline(row), row)"><v-icon :name="deadlineIcon(effectiveDeadline(row), row)" small />{{ formatDate(effectiveDeadline(row)) }}</span>
                 </td>
                 <td>
                   <div class="symbolika-costing-cell-main">{{ row.customer_company_name || row.customer_name || relatedName(row.customer_company) || relatedName(row.customer) || '-' }}</div>
@@ -33963,8 +33999,8 @@ export const CostingModule = {
                   @click="openRowDetail('screen', row, $event)"
                 >
                   <td>
-                    <span class="symbolika-costing-date" :class="deadlineClass(row.deadline)">
-                      <v-icon :name="deadlineIcon(row.deadline)" small />
+                    <span class="symbolika-costing-date" :class="deadlineClass(row.deadline, row)">
+                      <v-icon :name="deadlineIcon(row.deadline, row)" small />
                       {{ formatDate(row.deadline) }}
                     </span>
                   </td>
@@ -34066,8 +34102,8 @@ export const CostingModule = {
                     <div class="symbolika-costing-subtle">{{ formatQuantity(row.quantity) }} шт.</div>
                   </td>
                   <td>
-                    <span class="symbolika-costing-date symbolika-contractor-overview-deadline" :class="deadlineClass(row.deadline)">
-                      <v-icon :name="deadlineIcon(row.deadline)" small />
+                    <span class="symbolika-costing-date symbolika-contractor-overview-deadline" :class="deadlineClass(row.deadline, row)">
+                      <v-icon :name="deadlineIcon(row.deadline, row)" small />
                       {{ row.deadline ? formatDate(row.deadline) : 'Не указан' }}
                     </span>
                   </td>
@@ -34165,8 +34201,8 @@ export const CostingModule = {
                     <div class="symbolika-costing-subtle">{{ relatedName(row.manager_employee, 'full_name') || 'Менеджер не указан' }}</div>
                   </td>
                   <td>
-                    <span class="symbolika-costing-date symbolika-contractor-overview-deadline" :class="deadlineClass(row.deadline)">
-                      <v-icon :name="deadlineIcon(row.deadline)" small />
+                    <span class="symbolika-costing-date symbolika-contractor-overview-deadline" :class="deadlineClass(row.deadline, row)">
+                      <v-icon :name="deadlineIcon(row.deadline, row)" small />
                       {{ row.deadline ? formatDate(row.deadline) : 'Не указан' }}
                     </span>
                   </td>
@@ -34204,8 +34240,8 @@ export const CostingModule = {
               <tr v-for="row in visibleContractorWorkRows" :key="row.id" :class="[rowStateClass(row), 'symbolika-costing-row-clickable']" @click="openRowDetail('contractor_work', row, $event)">
                 <td>
                   <button type="button" class="symbolika-costing-order-button" title="Открыть заказ" @click.stop="openOrderFromPosition(row, $event)">{{ orderNumber(row) }}</button>
-                  <span class="symbolika-costing-date" :class="deadlineClass(row.deadline)">
-                    <v-icon :name="deadlineIcon(row.deadline)" small />
+                  <span class="symbolika-costing-date" :class="deadlineClass(row.deadline, row)">
+                    <v-icon :name="deadlineIcon(row.deadline, row)" small />
                     {{ formatDate(row.deadline) }}
                   </span>
                 </td>
@@ -34271,7 +34307,7 @@ export const CostingModule = {
                 <td>
                   <span class="symbolika-costing-order">{{ orderNumber(row) }}</span>
                   <div class="symbolika-costing-subtle">{{ formatDate(row.date) }}</div>
-                  <span class="symbolika-costing-date" :class="deadlineClass(row.deadline)"><v-icon :name="deadlineIcon(row.deadline)" small />{{ formatDate(row.deadline) }}</span>
+                  <span class="symbolika-costing-date" :class="deadlineClass(row.deadline, row)"><v-icon :name="deadlineIcon(row.deadline, row)" small />{{ formatDate(row.deadline) }}</span>
                 </td>
                 <td>
                   <div>{{ relatedName(row.customer) || '-' }}</div>
@@ -36911,7 +36947,7 @@ export const CostingModule = {
               <div class="symbolika-costing-detail-value">
                 <input
                   class="symbolika-costing-table-date"
-                  :class="[savingWorkClass('orders', detail.row, 'deadline'), deadlineClass(detail.row.deadline)]"
+                  :class="[savingWorkClass('orders', detail.row, 'deadline'), deadlineClass(detail.row.deadline, detail.row)]"
                   type="date"
                   :value="dateInput(detail.row.deadline)"
                   @change="saveOrderField(detail.row, 'deadline', $event.target.value)"
@@ -37415,7 +37451,7 @@ export const CostingModule = {
                   <div class="symbolika-costing-detail-value">
                     <input
                       class="symbolika-costing-table-date"
-                      :class="[savingWorkClass('orders_items', detail.row, 'deadline'), deadlineClass(detail.row.deadline)]"
+                      :class="[savingWorkClass('orders_items', detail.row, 'deadline'), deadlineClass(detail.row.deadline, detail.row)]"
                       type="date"
                       :value="dateInput(detail.row.deadline)"
                       @change="saveOrderItemField(detail.row, 'deadline', $event.target.value)"
