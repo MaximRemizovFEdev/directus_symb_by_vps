@@ -920,6 +920,18 @@ UPDATE contractors
 SET can_mount = true
 WHERE name ILIKE '%монтаж%';
 
+-- Quantity is mandatory context for every production task. Keep this final
+-- guard so future constructor templates cannot silently omit the item run.
+UPDATE tz_constructor_specs
+SET template = CASE
+      WHEN template LIKE '%{{product_name}}%'
+        THEN replace(template, '{{product_name}}', '{{product_name}}, {{quantity}} шт.')
+      ELSE '{{quantity}} шт., ' || template
+    END,
+    updated_at = now()
+WHERE active IS TRUE
+  AND template NOT LIKE '%{{quantity}}%';
+
 SELECT
   (SELECT count(*) FROM tz_constructor_specs) AS tz_constructor_specs,
   (SELECT count(*) FROM product_categories WHERE name IN ('Постеры', 'Изделия из акрила и фанеры')) AS new_categories,

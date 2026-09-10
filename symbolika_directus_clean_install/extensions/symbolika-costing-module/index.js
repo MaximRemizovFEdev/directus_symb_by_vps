@@ -11159,6 +11159,14 @@ export const CostingModule = {
       this.updateTzConstructor(item, persist, true);
     },
 
+    updateTzAfterQuantityChange(item, persist = false) {
+      if (!item || !this.tzConstructorSpecFor(item)) return;
+      // Rebuild only while the constructor is actively being used. A bare
+      // quantity edit must not create an incomplete task or overwrite a
+      // manually entered technical task.
+      if (item.tz_constructor_expanded === true) this.updateTzConstructor(item, persist, true);
+    },
+
     hasTzText(item) {
       return String(item?.technical_task_text || '').trim().length > 0;
     },
@@ -11318,7 +11326,7 @@ export const CostingModule = {
       if (!spec?.template) return '';
       const context = this.buildTzContext(item);
       let template = String(spec.template || '');
-      if (spec.route_area === 'screen_printing' && !template.includes('{{quantity}}')) {
+      if (!template.includes('{{quantity}}')) {
         template = template.includes('{{product_name}}')
           ? template.replace('{{product_name}}', '{{product_name}}, {{quantity}} шт.')
           : `{{quantity}} шт., ${template}`;
@@ -12664,6 +12672,11 @@ export const CostingModule = {
         delete next[key];
         this.saving = next;
       }
+    },
+
+    async saveOrderItemQuantity(row, value) {
+      await this.saveOrderItemField(row, 'quantity', value);
+      this.updateTzAfterQuantityChange(row, true);
     },
 
     async saveOrderItemCost(row, field, value) {
@@ -35041,7 +35054,7 @@ export const CostingModule = {
 
                 <label class="symbolika-costing-label">
                   Кол-во *
-                  <input v-model="item.quantity" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'quantity', $event)" />
+                  <input v-model="item.quantity" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'quantity', $event)" @change="updateTzAfterQuantityChange(item)" />
                 </label>
 
                 <label class="symbolika-costing-label">
@@ -35527,7 +35540,7 @@ export const CostingModule = {
 
                 <label class="symbolika-costing-label symbolika-costing-new-order-quantity">
                   Кол-во *
-                  <input v-model="item.quantity" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'quantity', $event)" />
+                  <input v-model="item.quantity" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(item, 'quantity', $event)" @change="updateTzAfterQuantityChange(item)" />
                 </label>
 
                 <label class="symbolika-costing-label symbolika-costing-new-order-price symbolika-mobile-item-extra">
@@ -37306,7 +37319,7 @@ export const CostingModule = {
 
                   <label class="symbolika-costing-label">
                     Кол-во *
-                    <input v-model="detailItemForm.quantity" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(detailItemForm, 'quantity', $event)" />
+                    <input v-model="detailItemForm.quantity" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="clearZeroInput(detailItemForm, 'quantity', $event)" @change="updateTzAfterQuantityChange(detailItemForm)" />
                   </label>
 
                   <label class="symbolika-costing-label">
@@ -37590,7 +37603,7 @@ export const CostingModule = {
                   inputmode="decimal"
                   :value="detail.row.quantity"
                   @focus="clearZeroInput(detail.row, 'quantity', $event)"
-                  @change="saveOrderItemField(detail.row, 'quantity', $event.target.value)"
+                  @change="saveOrderItemQuantity(detail.row, $event.target.value)"
                 />
               </div>
             </div>
