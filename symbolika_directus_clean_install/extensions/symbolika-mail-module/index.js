@@ -180,6 +180,14 @@ const MailWorkspace = {
       if (this.threadScope === 'starred') return this.threads.filter((thread) => thread.is_starred);
       return this.threads;
     },
+    displayMessages() {
+      return [...this.messages].sort((left, right) => {
+        const leftTime = new Date(left?.sent_at || 0).getTime() || 0;
+        const rightTime = new Date(right?.sent_at || 0).getTime() || 0;
+        if (leftTime !== rightTime) return rightTime - leftTime;
+        return Number(right?.id || 0) - Number(left?.id || 0);
+      });
+    },
     unreadThreadCount() {
       return this.threads.filter((thread) => thread.is_unread).length;
     },
@@ -1675,7 +1683,7 @@ const MailWorkspace = {
                 </header>
 
                 <div class="symbolika-mail-messages">
-                  <article v-for="message in messages" :key="message.id" class="symbolika-mail-message" :class="{ 'is-outbound': message.direction === 'outbound' }">
+                  <article v-for="message in displayMessages" :key="message.id" class="symbolika-mail-message" :class="{ 'is-outbound': message.direction === 'outbound' }">
                     <header class="symbolika-mail-message-head">
                       <span class="symbolika-mail-avatar">{{ initials(message.from_name || message.from_email) }}</span>
                       <div class="symbolika-mail-message-from">
