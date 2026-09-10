@@ -13582,6 +13582,10 @@ ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS date_created timestampt
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS date_updated timestamptz NOT NULL DEFAULT now();
 
 ALTER TABLE payment_allocations ALTER COLUMN "order" DROP NOT NULL;
+UPDATE directus_fields
+SET required = false
+WHERE collection = 'payment_allocations'
+  AND field = 'order';
 ALTER TABLE payment_allocations ADD COLUMN IF NOT EXISTS customer_operation integer REFERENCES customer_operations(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS payment_allocations_customer_operation_idx ON payment_allocations(customer_operation);
 ALTER TABLE payment_allocations DROP CONSTRAINT IF EXISTS payment_allocations_one_target_check;

@@ -6797,6 +6797,7 @@ export const CostingModule = {
     openPaymentDialog(row, options = {}) {
       this.paymentDialog = {
         row,
+        orderId: this.paymentOrderId(row, options.orderIssueOrderId),
         editingPaymentId: null,
         originalAmount: 0,
         mode: 'money',
@@ -6813,6 +6814,23 @@ export const CostingModule = {
         orderIssueOrderId: options.orderIssueOrderId || null,
         saving: false,
       };
+    },
+
+    paymentOrderId(row, explicitOrderId = null) {
+      const candidates = [
+        explicitOrderId,
+        this.orderId(row),
+        row?.order_id,
+        row?.order_link,
+        row?.order,
+        !row?.product_name ? row?.id : null,
+        this.detailIsOrder(this.detail?.row) ? this.detail?.row?.id : null,
+      ];
+      for (const candidate of candidates) {
+        const id = Number(this.entityId(candidate));
+        if (Number.isInteger(id) && id > 0) return id;
+      }
+      return 0;
     },
 
     openEditPaymentDialog(payment) {
@@ -7426,7 +7444,7 @@ export const CostingModule = {
       const { row, amount, paymentDate, paymentType, comment, returnToOrderIssue, orderIssueOrderId, mode, editingPaymentId } = this.paymentDialog;
       const isOfficeIssue = this.paymentDialog.source === 'office_issue'
         || (row?.office_payment_due !== undefined && (this.activeTab === 'office' || row?.office_issue !== undefined));
-      const orderId = this.entityId(this.orderId(row));
+      const orderId = this.paymentOrderId(row, this.paymentDialog.orderId || orderIssueOrderId);
       const key = `${editingPaymentId ? 'order_payment_edit' : (isOfficeIssue ? 'office_issue' : 'order_payments')}:${editingPaymentId || row.id || orderId}:payment`;
       this.saving = { ...this.saving, [key]: true };
       this.paymentDialog.saving = true;
@@ -7471,11 +7489,11 @@ export const CostingModule = {
             }),
           });
         } else {
-          if (!orderId) throw new Error('Не удалось определить заказ для оплаты.');
+          if (!orderId) throw new Error('Не удалось определить заказ для оплаты. Обновите карточку заказа.');
           await this.request('/items/order_payments', {
             method: 'POST',
             body: JSON.stringify({
-              order: Number(orderId),
+              order: orderId,
               customer: this.entityId(row.customer) ? Number(this.entityId(row.customer)) : null,
               customer_company: this.entityId(row.customer_company) ? Number(this.entityId(row.customer_company)) : null,
               amount: paymentAmount,
