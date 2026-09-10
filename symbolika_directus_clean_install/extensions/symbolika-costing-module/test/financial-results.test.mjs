@@ -85,6 +85,15 @@ test('uses the same margin before payroll in order economics and monthly results
   assert.equal(month.order_margin, orderMarginBeforePayroll(item));
 });
 
+test('monthly finance uses a dedicated fully loaded costing dataset', () => {
+  assert.match(moduleSource, /costingRows: this\.financialCostingRows/);
+  assert.match(moduleSource, /loadCompletePagedCollection\('financial_costing', '\/items\/contractor_costing'/);
+  assert.match(moduleSource, /\{ pageSize: 500 \}/);
+  assert.doesNotMatch(moduleSource, /costingRows: this\.rows/);
+  assert.match(moduleSource, /monthlyExpenseBreakdown\(row\.key\)/);
+  assert.match(moduleSource, /monthlyResultExplanation\(row\)/);
+});
+
 test('separates external contractor debt from internal payroll debt on the dashboard', () => {
   const dashboard = moduleSource.match(
     /<section class="symbolika-finance-balance-grid">(?<body>[\s\S]*?)<\/section>/,

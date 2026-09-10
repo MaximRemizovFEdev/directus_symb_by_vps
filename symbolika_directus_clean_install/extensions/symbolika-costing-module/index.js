@@ -398,6 +398,17 @@ const salaryFields = [
   'salary_debt',
 ];
 
+const financialCostingFields = [
+  'id',
+  'order',
+  'order_link',
+  'order_number',
+  'date',
+  'item_status',
+  'profit_sum',
+  'manager_commission_sum',
+];
+
 const managerFinanceFields = [
   'id',
   'employee',
@@ -1329,6 +1340,7 @@ export const CostingModule = {
       orderEconomicsManagerFilter: '',
       orderEconomicsContractorFilter: '',
       orderEconomicsSort: 'date_desc',
+      financialCostingRows: [],
       salaryRows: [],
       payrollSalaryRows: [],
       monthlySalaryRows: [],
@@ -3189,7 +3201,7 @@ export const CostingModule = {
       const currentMonthKey = this.monthKey(new Date());
       const futureExpenses = this.parseMoney(this.currentPremisesStatus.due);
       return buildMonthlyFinancialRows({
-        costingRows: this.rows,
+        costingRows: this.financialCostingRows,
         expenseRows: this.expenseRows,
         salaryRows: this.monthlySalaryRows,
         monthKey: (value) => this.monthKey(value),
@@ -3534,6 +3546,7 @@ export const CostingModule = {
         'all_orders', 'my_orders', 'orders_archive',
         'deadlines', 'costing', 'items_archive', 'office', 'finance',
         'order_economics',
+        'admin_finance_dashboard', 'payroll', 'expenses', 'contractor_settlements', 'monthly_results',
         'production', 'screen', 'contractor_work', 'work_launch', 'contractor_overview', 'production_archive',
         'admin_procurement',
         'tasks', 'tasks_archive',
@@ -5359,7 +5372,7 @@ export const CostingModule = {
       ) {
         tasks.push(this.loadRows({ silent: true }), this.loadContractors());
       }
-      if (allowed.has('admin_finance_dashboard') || allowed.has('expenses') || allowed.has('payroll') || allowed.has('contractor_settlements') || allowed.has('monthly_results')) tasks.push(this.loadFinanceRows(), this.loadExpenseRows(), this.loadContractorPaymentRows(), this.loadSalaryRows(), this.loadMonthlySalaryRows(), this.loadFinanceSettings(), this.loadEmployees(), this.loadPaymentTypes(), this.loadContractors(), this.loadRows(), this.loadContractorRows(), this.loadCustomers(), this.loadCompanies());
+      if (allowed.has('admin_finance_dashboard') || allowed.has('expenses') || allowed.has('payroll') || allowed.has('contractor_settlements') || allowed.has('monthly_results')) tasks.push(this.loadFinanceRows(), this.loadExpenseRows(), this.loadContractorPaymentRows(), this.loadSalaryRows(), this.loadMonthlySalaryRows(), this.loadFinanceSettings(), this.loadEmployees(), this.loadPaymentTypes(), this.loadContractors(), this.loadFinancialCostingRows(), this.loadContractorRows(), this.loadCustomers(), this.loadCompanies());
       if (allowed.has('payroll')) tasks.push(this.loadManagerSummary(), this.loadPayrollSalaryRows());
       if (allowed.has('finance')) tasks.push(this.loadFinanceRows(), this.loadFinanceItemRows(), this.loadManagerFinanceSummary(), this.loadCustomers(), this.loadCompanies(), this.loadGiftCertificates(), this.loadPaymentTypes());
       if (allowed.has('gift_certificates')) tasks.push(this.loadGiftCertificates(), this.loadGiftCertificateTransactions(), this.loadCustomers(), this.loadCompanies());
@@ -5435,6 +5448,15 @@ export const CostingModule = {
           ]);
         } else if (this.activeTab === 'order_economics') {
           await Promise.all([this.loadOrderEconomicsRows(), this.loadRows({ silent: true }), this.loadContractors()]);
+        } else if (['admin_finance_dashboard', 'payroll', 'expenses', 'contractor_settlements', 'monthly_results'].includes(this.activeTab)) {
+          await Promise.all([
+            this.loadFinancialCostingRows(),
+            this.loadExpenseRows(),
+            this.loadMonthlySalaryRows(),
+            this.loadContractorRows(),
+            this.loadCustomers(),
+            this.loadCompanies(),
+          ]);
         } else if (this.activeTab === 'production') {
           await this.loadWorkRows('production_work');
         } else if (this.activeTab === 'screen') {
@@ -9034,6 +9056,20 @@ export const CostingModule = {
         if (!silent) this.error = error.message;
       } finally {
         if (!silent) this.loading = false;
+      }
+    },
+
+    async loadFinancialCostingRows() {
+      try {
+        const params = new URLSearchParams();
+        params.set('fields', financialCostingFields.join(','));
+        params.set('sort', '-date,order_number,id');
+        await this.loadCompletePagedCollection('financial_costing', '/items/contractor_costing', params, (rows, append) => {
+          this.financialCostingRows = append ? this.mergePagedRows(this.financialCostingRows, rows) : rows;
+        }, { pageSize: 500 });
+      } catch (error) {
+        this.error = error.message;
+        this.financialCostingRows = [];
       }
     },
 
@@ -14827,6 +14863,24 @@ export const CostingModule = {
 
     expenseTypeName(value) {
       return expenseTypes.find((choice) => choice.value === value)?.text || 'Прочие расходы';
+    },
+
+    monthlyExpenseBreakdown(month) {
+      const excluded = new Set(['contractor_payment', 'salary_payment', 'employee_advance', 'employee_bonus']);
+      const totals = new Map();
+      (this.expenseRows || []).forEach((row) => {
+        if (excluded.has(row.expense_type)) return;
+        if (this.monthKey(row.accounting_month || row.expense_date) !== month) return;
+        totals.set(row.expense_type, (totals.get(row.expense_type) || 0) + this.parseMoney(row.amount));
+      });
+      return [...totals.entries()]
+        .filter(([, amount]) => amount !== 0)
+        .map(([type, amount]) => `${this.expenseTypeName(type)} ${this.formatMoney(amount)}`)
+        .join(' · ');
+    },
+
+    monthlyResultExplanation(row) {
+      return `${this.formatMoney(row.order_margin)} − ${this.formatMoney(row.other_expenses)} − ${this.formatMoney(row.salary_expenses)} = ${this.formatMoney(row.actual_result)}`;
     },
 
     expenseCashDate(row) {
@@ -32489,10 +32543,10 @@ export const CostingModule = {
                     <div class="symbolika-costing-subtle">завершено {{ row.completed_items_count }}</div>
                   </td>
                   <td class="symbolika-costing-num"><div>{{ formatMoney(row.order_margin) }}</div><div class="symbolika-costing-subtle">завершено {{ formatMoney(row.completed_order_margin) }}</div></td>
-                  <td class="symbolika-costing-num"><div>{{ formatMoney(row.other_expenses) }}</div><div v-if="row.known_future_expenses" class="symbolika-costing-subtle">план {{ formatMoney(row.known_future_expenses) }}</div></td>
+                  <td class="symbolika-costing-num"><div>{{ formatMoney(row.other_expenses) }}</div><div v-if="monthlyExpenseBreakdown(row.key)" class="symbolika-costing-subtle">{{ monthlyExpenseBreakdown(row.key) }}</div><div v-if="row.known_future_expenses" class="symbolika-costing-subtle">план {{ formatMoney(row.known_future_expenses) }}</div></td>
                   <td class="symbolika-costing-num"><div>{{ formatMoney(row.salary_expenses) }}</div><div class="symbolika-costing-subtle">оклад {{ formatMoney(row.salary_fixed) }} · % {{ formatMoney(row.salary_commission) }} · премии {{ formatMoney(row.salary_bonus) }}</div></td>
                   <td class="symbolika-costing-num">
-                    <span class="symbolika-costing-pill" :class="row.actual_result >= 0 ? 'symbolika-costing-pill-green' : 'symbolika-costing-pill-danger'">
+                    <span class="symbolika-costing-pill" :class="row.actual_result >= 0 ? 'symbolika-costing-pill-green' : 'symbolika-costing-pill-danger'" :title="monthlyResultExplanation(row)">
                       {{ formatMoney(row.actual_result) }}
                     </span>
                   </td>
