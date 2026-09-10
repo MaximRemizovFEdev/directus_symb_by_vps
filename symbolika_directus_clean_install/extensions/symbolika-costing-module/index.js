@@ -409,6 +409,10 @@ const financialCostingFields = [
   'manager_commission_sum',
 ];
 
+// The order economics screen must never reuse the paged costing table rows:
+// its totals, contractor filter and item view all describe the complete result set.
+const orderEconomicsItemFields = fields;
+
 const managerFinanceFields = [
   'id',
   'employee',
@@ -1340,6 +1344,7 @@ export const CostingModule = {
       orderEconomicsManagerFilter: '',
       orderEconomicsContractorFilter: '',
       orderEconomicsSort: 'date_desc',
+      orderEconomicsItemRows: [],
       financialCostingRows: [],
       salaryRows: [],
       payrollSalaryRows: [],
@@ -2443,7 +2448,7 @@ export const CostingModule = {
 
     visibleOrderEconomicsItemRows() {
       const query = String(this.search || '').trim().toLowerCase();
-      const rows = (this.rows || []).filter((row) => {
+      const rows = (this.orderEconomicsItemRows || []).filter((row) => {
         if (this.orderEconomicsArchiveMode === 'active' && this.isItemArchived(row)) return false;
         if (this.orderEconomicsArchiveMode === 'archive' && !this.isItemArchived(row)) return false;
         if (!this.matchesDateRange(row.date, this.orderEconomicsDateFrom, this.orderEconomicsDateTo)) return false;
@@ -5362,7 +5367,7 @@ export const CostingModule = {
         this.loadAllOrderRows(),
       );
       if (allowed.has('estimates')) tasks.push(this.loadEstimateRows(), this.loadEstimateItemRows(), this.loadCustomers(), this.loadCompanies(), this.loadContractors(), this.loadCreateOrderDictionaries());
-      if (allowed.has('order_economics')) tasks.push(this.loadOrderEconomicsRows());
+      if (allowed.has('order_economics')) tasks.push(this.loadOrderEconomicsRows(), this.loadOrderEconomicsItemRows(), this.loadContractors());
       const canReadAllItemRowsForLabels = allowed.has('labels') && ['Administrator', 'Управляющий'].includes(this.currentRoleName);
       if (allowed.has('costing') || allowed.has('purchasing') || allowed.has('items_archive') || canReadAllItemRowsForLabels) {
         tasks.push(this.loadRows(), this.loadContractors());
@@ -5447,7 +5452,7 @@ export const CostingModule = {
             this.loadManagerFinanceSummary(),
           ]);
         } else if (this.activeTab === 'order_economics') {
-          await Promise.all([this.loadOrderEconomicsRows(), this.loadRows({ silent: true }), this.loadContractors()]);
+          await Promise.all([this.loadOrderEconomicsRows(), this.loadOrderEconomicsItemRows(), this.loadContractors()]);
         } else if (['admin_finance_dashboard', 'payroll', 'expenses', 'contractor_settlements', 'monthly_results'].includes(this.activeTab)) {
           await Promise.all([
             this.loadFinancialCostingRows(),
@@ -9106,9 +9111,23 @@ export const CostingModule = {
       }
     },
 
+    async loadOrderEconomicsItemRows(options = {}) {
+      try {
+        const params = new URLSearchParams();
+        params.set('fields', orderEconomicsItemFields.join(','));
+        params.set('sort', '-date,order_number,id');
+        await this.loadCompletePagedCollection('order_economics_items', '/items/contractor_costing', params, (rows, append) => {
+          this.orderEconomicsItemRows = append ? this.mergePagedRows(this.orderEconomicsItemRows, rows) : rows;
+        }, { pageSize: 500 });
+      } catch (error) {
+        if (!options.silent) this.error = error.message;
+        this.orderEconomicsItemRows = [];
+      }
+    },
+
     orderEconomicsItems(row) {
       const orderId = Number(this.entityId(row?.id));
-      return (this.rows || []).filter((item) => Number(this.entityId(item.order) || this.entityId(item.order_link)) === orderId);
+      return (this.orderEconomicsItemRows || []).filter((item) => Number(this.entityId(item.order) || this.entityId(item.order_link)) === orderId);
     },
 
     orderEconomicsContractors(row) {
