@@ -12418,16 +12418,34 @@ export const CostingModule = {
       const key = `${collection}:${row.id}:${field}`;
       this.saving = { ...this.saving, [key]: true };
       this.error = '';
+      const previousValue = row?.[field];
+      const normalized = value || null;
+      const optimisticValue = field === 'production_status' && normalized
+        ? (this.productionStatuses.find((status) => String(status.id) === String(normalized)) || normalized)
+        : normalized;
 
       try {
-        Object.assign(row, { [field]: value || null });
-        await this.request(`/items/${collection}/${row.id}`, {
+        Object.assign(row, { [field]: optimisticValue });
+        const contractorWork = collection === 'contractor_work';
+        const responseFields = field === 'production_status'
+          ? (contractorWork
+            ? 'id,production_status.id,production_status.name,production_comment,order_item.id,order_item.item_status'
+            : 'id,production_status.id,production_status.name,production_comment,item_status,office_status')
+          : `id,${field}${contractorWork ? ',order_item.id' : ''}`;
+        const payload = await this.request(`/items/${collection}/${row.id}?fields=${encodeURIComponent(responseFields)}`, {
           method: 'PATCH',
-          body: JSON.stringify({ [field]: value || null }),
+          body: JSON.stringify({ [field]: normalized }),
         });
-        this.scheduleBackgroundAreaRefresh();
+        const refreshed = payload?.data || {};
+        const savedValue = Object.prototype.hasOwnProperty.call(refreshed, field)
+          ? refreshed[field]
+          : normalized;
+        Object.assign(row, { [field]: savedValue });
+        const itemId = this.entityId(refreshed?.order_item) || this.entityId(row?.order_item) || this.entityId(row?.id);
+        if (itemId) this.updateOrderItemCaches(itemId, { [field]: savedValue });
         return true;
       } catch (error) {
+        Object.assign(row, { [field]: previousValue });
         this.error = error.message;
         this.scheduleBackgroundAreaRefresh(0);
         return false;
@@ -34090,7 +34108,8 @@ export const CostingModule = {
                     class="symbolika-costing-select"
                     :class="[savingWorkClass(activeTab === 'production' ? 'production_work' : 'screen_printing_work', row, 'production_status'), statusToneClass(row.production_status)]"
                     :value="contractorId(row.production_status)"
-                    @change="saveWorkField(activeTab === 'production' ? 'production_work' : 'screen_printing_work', row, 'production_status', $event.target.value)"
+                    @click.stop
+                    @change.stop="saveWorkField(activeTab === 'production' ? 'production_work' : 'screen_printing_work', row, 'production_status', $event.target.value)"
                   >
                     <option value="">Не выбран</option>
                     <option v-for="status in productionStatuses" :key="status.id" :value="status.id">
@@ -34101,7 +34120,8 @@ export const CostingModule = {
                     class="symbolika-costing-comment"
                     :class="savingWorkClass(activeTab === 'production' ? 'production_work' : 'screen_printing_work', row, 'production_comment')"
                     :value="row.production_comment"
-                    @change="saveWorkField(activeTab === 'production' ? 'production_work' : 'screen_printing_work', row, 'production_comment', $event.target.value)"
+                    @click.stop
+                    @change.stop="saveWorkField(activeTab === 'production' ? 'production_work' : 'screen_printing_work', row, 'production_comment', $event.target.value)"
                   ></textarea>
                 </td>
               </tr>
