@@ -386,6 +386,14 @@ const salaryFields = [
   'position_name',
   'month_start',
   'salary_fixed',
+  'salary_fixed_earned',
+  'norm_days',
+  'credited_days',
+  'norm_hours',
+  'credited_hours',
+  'worked_hours',
+  'overtime_hours',
+  'timesheet_status',
   'order_percent',
   'orders_sum',
   'paid_orders_sum',
@@ -1351,6 +1359,11 @@ export const CostingModule = {
       payrollSalaryRows: [],
       monthlySalaryRows: [],
       payrollMonth: new Date().toISOString().slice(0, 7),
+      timesheetEmployeeId: '',
+      timesheetLoading: false,
+      timesheetSaving: false,
+      timesheetData: { period: null, schedule: null, entries: [] },
+      timesheetDayDialog: null,
       financeSettings: {
         id: 1,
         monthly_rent: 160000,
@@ -5382,7 +5395,7 @@ export const CostingModule = {
         body{font:14px Arial,sans-serif;color:#172033;margin:34px}h1{margin:0 0 6px;font-size:26px}h2{font-size:17px;margin:28px 0 10px}.muted{color:#687386}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:22px 0}.card{border:1px solid #d9dee8;border-radius:10px;padding:14px}.card span{display:block;color:#687386;font-size:12px;margin-bottom:7px}.card strong{font-size:19px}table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid #e5e8ee;text-align:left}.num{text-align:right}tfoot td{font-weight:700}.signature{margin-top:40px;display:flex;justify-content:space-between}@media print{body{margin:18mm}.no-print{display:none}}
       </style></head><body><h1>Расчётный лист</h1><div class="muted">${this.escapeHtml(this.profileMonthName(`${slip.month}-01`))} · ${this.escapeHtml(slip.employee.name)}${slip.employee.position ? ` · ${this.escapeHtml(slip.employee.position)}` : ''}</div>
       <div class="grid"><div class="card"><span>Сумма заказов</span><strong>${money(slip.orders_sum)}</strong></div><div class="card"><span>Оплачено</span><strong>${money(slip.paid_orders_sum)}</strong></div><div class="card"><span>Не оплачено</span><strong>${money(slip.unpaid_orders_sum)}</strong></div></div>
-      <h2>Ваши начисления и выплаты</h2><table><tbody><tr><td>Оклад</td><td class="num">${money(slip.salary_fixed)}</td></tr><tr><td>Процентная часть (${this.escapeHtml(this.formatMoney(slip.order_percent))}%)</td><td class="num">${money(slip.commission_accrued)}</td></tr><tr><td>Премиальная часть</td><td class="num">${money(slip.bonus_paid)}</td></tr><tr><td>Получено как зарплата</td><td class="num">${money(slip.salary_paid)}</td></tr><tr><td>Полученные авансы</td><td class="num">${money(slip.advances_paid)}</td></tr></tbody><tfoot><tr><td>Ваш доход за месяц</td><td class="num">${money(slip.total_accrued)}</td></tr><tr><td>Получено всего</td><td class="num">${money(slip.total_paid)}</td></tr><tr><td>К получению</td><td class="num">${money(slip.salary_due)}</td></tr></tfoot></table>
+      <h2>Ваши начисления и выплаты</h2><table><tbody><tr><td>Оклад по условиям</td><td class="num">${money(slip.salary_fixed)}</td></tr><tr><td>Оклад к начислению${slip.timesheet_status ? ' по табелю' : ''}</td><td class="num">${money(slip.salary_fixed_earned)}</td></tr>${slip.timesheet_status ? `<tr><td>Зачтено рабочего времени</td><td class="num">${this.escapeHtml(this.formatMoney(slip.credited_hours))} из ${this.escapeHtml(this.formatMoney(slip.norm_hours))} ч.</td></tr>` : ''}<tr><td>Процентная часть (${this.escapeHtml(this.formatMoney(slip.order_percent))}%)</td><td class="num">${money(slip.commission_accrued)}</td></tr><tr><td>Премиальная часть</td><td class="num">${money(slip.bonus_paid)}</td></tr><tr><td>Получено как зарплата</td><td class="num">${money(slip.salary_paid)}</td></tr><tr><td>Полученные авансы</td><td class="num">${money(slip.advances_paid)}</td></tr></tbody><tfoot><tr><td>Ваш доход за месяц</td><td class="num">${money(slip.total_accrued)}</td></tr><tr><td>Получено всего</td><td class="num">${money(slip.total_paid)}</td></tr><tr><td>К получению</td><td class="num">${money(slip.salary_due)}</td></tr></tfoot></table>
       ${bonuses ? `<h2>Премии</h2><table><thead><tr><th>Дата</th><th>За что</th><th class="num">Сумма</th></tr></thead><tbody>${bonuses}</tbody></table>` : ''}
       <div class="signature"><span>Сотрудник ____________________</span><span>Ответственный ____________________</span></div><script>window.onload=()=>window.print()<\/script></body></html>`);
       printWindow.document.close();
@@ -9412,6 +9425,148 @@ export const CostingModule = {
       }
     },
 
+    timesheetStatusName(status) {
+      return ({
+        worked: 'Рабочий день',
+        weekend: 'Выходной',
+        paid_leave: 'Оплачиваемый отпуск',
+        sick_leave: 'Больничный',
+        business_trip: 'Командировка',
+        unpaid_leave: 'Отпуск без оплаты',
+        day_off: 'Отгул',
+        absence: 'Отсутствие',
+      })[status] || status || 'Не указан';
+    },
+
+    timesheetPeriodStatusName(status) {
+      return ({ draft: 'Черновик', approved: 'Утверждён', closed: 'Закрыт' })[status] || 'Не создан';
+    },
+
+    timesheetScheduleName(type) {
+      return ({ five_two: '5/2', two_two: '2/2', individual: 'Индивидуальный' })[type] || '5/2';
+    },
+
+    timesheetDayClass(entry) {
+      return `is-${entry?.day_status || 'weekend'}`;
+    },
+
+    timesheetCalendarEntries() {
+      const entries = this.timesheetData?.entries || [];
+      if (!entries.length) return [];
+      const first = new Date(`${String(entries[0].work_date).slice(0, 10)}T12:00:00`);
+      const offset = (first.getDay() + 6) % 7;
+      return [...Array.from({ length: offset }, (_, index) => ({ _blank: true, id: `blank-${index}` })), ...entries];
+    },
+
+    async loadTimesheetMonth() {
+      if (!this.timesheetEmployeeId || !this.payrollMonth || !['Administrator', 'Управляющий'].includes(this.currentRoleName)) {
+        this.timesheetData = { period: null, schedule: null, entries: [] };
+        return;
+      }
+      this.timesheetLoading = true;
+      try {
+        const payload = await this.request(`/symbolika-timekeeping/month?employee=${encodeURIComponent(this.timesheetEmployeeId)}&month=${encodeURIComponent(this.payrollMonth)}`);
+        this.timesheetData = payload?.data || { period: null, schedule: null, entries: [] };
+      } catch (error) {
+        this.error = error.message;
+        this.timesheetData = { period: null, schedule: null, entries: [] };
+      } finally {
+        this.timesheetLoading = false;
+      }
+    },
+
+    async saveTimesheetSchedule() {
+      const schedule = this.timesheetData?.schedule;
+      if (!schedule || !this.timesheetEmployeeId || this.timesheetSaving) return;
+      this.timesheetSaving = true;
+      try {
+        await this.request('/symbolika-timekeeping/schedule', {
+          method: 'PUT',
+          body: JSON.stringify({
+            ...schedule,
+            employee: Number(this.timesheetEmployeeId),
+            effective_month: `${this.payrollMonth}-01`,
+          }),
+        });
+        await this.loadTimesheetMonth();
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.timesheetSaving = false;
+      }
+    },
+
+    async generateTimesheet() {
+      if (!this.timesheetEmployeeId || this.timesheetSaving) return;
+      this.timesheetSaving = true;
+      try {
+        await this.request('/symbolika-timekeeping/generate', {
+          method: 'POST',
+          body: JSON.stringify({ employee: Number(this.timesheetEmployeeId), month: this.payrollMonth }),
+        });
+        await Promise.all([this.loadTimesheetMonth(), this.loadPayrollSalaryRows()]);
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.timesheetSaving = false;
+      }
+    },
+
+    openTimesheetDay(entry) {
+      if (!entry || entry._blank) return;
+      this.timesheetDayDialog = {
+        ...entry,
+        started_at: String(entry.started_at || '').slice(0, 5),
+        ended_at: String(entry.ended_at || '').slice(0, 5),
+        saving: false,
+      };
+    },
+
+    closeTimesheetDay() {
+      if (!this.timesheetDayDialog?.saving) this.timesheetDayDialog = null;
+    },
+
+    async saveTimesheetDay() {
+      const dialog = this.timesheetDayDialog;
+      if (!dialog || dialog.saving) return;
+      dialog.saving = true;
+      try {
+        await this.request(`/symbolika-timekeeping/day/${dialog.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            day_status: dialog.day_status,
+            started_at: dialog.started_at || null,
+            ended_at: dialog.ended_at || null,
+            break_minutes: dialog.break_minutes,
+            worked_hours: dialog.worked_hours,
+            comment: dialog.comment,
+          }),
+        });
+        this.timesheetDayDialog = null;
+        await Promise.all([this.loadTimesheetMonth(), this.loadPayrollSalaryRows()]);
+      } catch (error) {
+        this.error = error.message;
+        dialog.saving = false;
+      }
+    },
+
+    async setTimesheetPeriodStatus(status) {
+      const period = this.timesheetData?.period;
+      if (!period?.id || this.timesheetSaving) return;
+      this.timesheetSaving = true;
+      try {
+        await this.request(`/symbolika-timekeeping/period/${period.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status }),
+        });
+        await Promise.all([this.loadTimesheetMonth(), this.loadPayrollSalaryRows()]);
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.timesheetSaving = false;
+      }
+    },
+
     async loadMonthlySalaryRows() {
       try {
         const params = new URLSearchParams();
@@ -9494,6 +9649,10 @@ export const CostingModule = {
         const activeFilter = this.currentRoleName === 'Дизайнер' ? '' : '&filter[is_active][_neq]=false';
         const payload = await this.request(`/items/employees?fields=${employeeFields}${activeFilter}&sort=full_name&limit=-1`);
         this.employees = payload.data || [];
+        if (this.activeTab === 'payroll' && ['Administrator', 'Управляющий'].includes(this.currentRoleName)) {
+          if (!this.timesheetEmployeeId && this.employees.length) this.timesheetEmployeeId = String(this.employees[0].id);
+          await this.loadTimesheetMonth();
+        }
       } catch {
         this.employees = [];
       }
@@ -27135,6 +27294,46 @@ export const CostingModule = {
 
         .symbolika-payroll-period { min-inline-size: 210px; }
         .symbolika-payroll-period .symbolika-costing-label { margin: 0; }
+        .symbolika-timesheet { display: grid; gap: 14px; margin-block: 4px 24px; padding: 18px; border: 1px solid var(--theme--border-color-subdued); border-radius: 16px; background: var(--theme--background-subdued); }
+        .symbolika-timesheet-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+        .symbolika-timesheet-head h3 { margin: 3px 0 0; color: var(--theme--foreground); font-size: 20px; }
+        .symbolika-timesheet-controls { display: flex; align-items: center; gap: 9px; }
+        .symbolika-timesheet-controls .symbolika-costing-select { min-inline-size: 250px; }
+        .symbolika-timesheet-schedule { display: grid; grid-template-columns: repeat(4, minmax(145px, 1fr)) auto auto; align-items: end; gap: 10px; padding: 13px; border: 1px solid var(--theme--border-color-subdued); border-radius: 12px; background: var(--theme--background-normal); }
+        .symbolika-timesheet-schedule .symbolika-costing-label { margin: 0; }
+        .symbolika-timesheet-workdays { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; grid-column: 1 / -1; color: var(--theme--foreground-subdued); font-size: 11px; }
+        .symbolika-timesheet-workdays > span { margin-inline-end: 4px; font-weight: 800; }
+        .symbolika-timesheet-workdays label { display: flex; align-items: center; gap: 3px; }
+        .symbolika-timesheet-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+        .symbolika-timesheet-summary article { display: grid; gap: 4px; padding: 11px 13px; border: 1px solid var(--theme--border-color-subdued); border-radius: 11px; background: var(--theme--background-normal); }
+        .symbolika-timesheet-summary span { color: var(--theme--foreground-subdued); font-size: 10px; font-weight: 750; }
+        .symbolika-timesheet-summary strong { color: var(--theme--foreground); font-size: 14px; font-variant-numeric: tabular-nums; }
+        .symbolika-timesheet-weekdays, .symbolika-timesheet-calendar { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+        .symbolika-timesheet-weekdays span { padding-inline: 8px; color: var(--theme--foreground-subdued); font-size: 10px; font-weight: 800; text-align: center; }
+        .symbolika-timesheet-day { display: grid; align-content: start; gap: 4px; min-block-size: 82px; padding: 9px; border: 1px solid var(--theme--border-color-subdued); border-radius: 10px; background: var(--theme--background-normal); color: var(--theme--foreground); text-align: start; cursor: pointer; }
+        .symbolika-timesheet-day:hover { border-color: var(--symbolika-accent); transform: translateY(-1px); }
+        .symbolika-timesheet-day strong { font-size: 15px; }
+        .symbolika-timesheet-day span { overflow: hidden; color: var(--theme--foreground-subdued); font-size: 10px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
+        .symbolika-timesheet-day small { color: #34d399; font-size: 10px; font-variant-numeric: tabular-nums; }
+        .symbolika-timesheet-day.is-weekend, .symbolika-timesheet-day.is-day_off { opacity: .62; }
+        .symbolika-timesheet-day.is-absence, .symbolika-timesheet-day.is-unpaid_leave { border-color: rgba(251,113,133,.45); background: rgba(251,113,133,.06); }
+        .symbolika-timesheet-day.is-paid_leave, .symbolika-timesheet-day.is-sick_leave, .symbolika-timesheet-day.is-business_trip { border-color: rgba(96,165,250,.42); background: rgba(96,165,250,.06); }
+        .symbolika-timesheet-day.is-blank { visibility: hidden; pointer-events: none; }
+        .symbolika-timesheet-actions { display: flex; justify-content: flex-end; gap: 8px; }
+        .symbolika-timesheet-dialog { max-inline-size: 620px; }
+        @media (max-width: 1000px) {
+          .symbolika-timesheet-schedule { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .symbolika-timesheet-day { min-block-size: 68px; padding: 6px; }
+          .symbolika-timesheet-day small { display: none; }
+        }
+        @media (max-width: 700px) {
+          .symbolika-timesheet-head, .symbolika-timesheet-controls { align-items: stretch; flex-direction: column; }
+          .symbolika-timesheet-controls .symbolika-costing-select { min-inline-size: 0; }
+          .symbolika-timesheet-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .symbolika-timesheet-calendar, .symbolika-timesheet-weekdays { gap: 3px; }
+          .symbolika-timesheet-day { min-block-size: 52px; }
+          .symbolika-timesheet-day span { display: none; }
+        }
         .symbolika-payroll-toolbar-actions,
         .symbolika-profile-payslip-actions { display: flex; align-items: center; gap: 8px; }
         .symbolika-payroll-row-actions {
@@ -32075,7 +32274,7 @@ export const CostingModule = {
           <div class="symbolika-costing-subtoolbar">
             <div class="symbolika-payroll-period">
               <label class="symbolika-costing-label">Расчётный месяц
-                <input v-model="payrollMonth" class="symbolika-costing-input" type="month" @change="loadManagerSummary(); loadPayrollSalaryRows()" />
+                <input v-model="payrollMonth" class="symbolika-costing-input" type="month" @change="loadManagerSummary(); loadPayrollSalaryRows(); loadTimesheetMonth()" />
               </label>
             </div>
             <div class="symbolika-payroll-toolbar-actions">
@@ -32083,6 +32282,118 @@ export const CostingModule = {
               <button type="button" class="symbolika-costing-button" @click="openExpenseDialog('salary_payment')"><v-icon name="payments" small />Добавить выплату</button>
             </div>
           </div>
+
+          <section class="symbolika-timesheet">
+            <div class="symbolika-timesheet-head">
+              <div>
+                <div class="symbolika-costing-subtle">Учёт рабочего времени</div>
+                <h3>Табель · {{ monthLabel(payrollMonth) }}</h3>
+              </div>
+              <div class="symbolika-timesheet-controls">
+                <select v-model="timesheetEmployeeId" class="symbolika-costing-select" @change="loadTimesheetMonth">
+                  <option value="">Выберите сотрудника</option>
+                  <option v-for="employee in employees" :key="'timesheet-employee-' + employee.id" :value="String(employee.id)">{{ employee.full_name }}</option>
+                </select>
+                <span class="symbolika-costing-pill" :class="timesheetData.period?.status === 'closed' ? 'symbolika-costing-pill-green' : 'symbolika-costing-pill-orange'">
+                  {{ timesheetPeriodStatusName(timesheetData.period?.status) }}
+                </span>
+              </div>
+            </div>
+
+            <div v-if="timesheetData.schedule" class="symbolika-timesheet-schedule">
+              <label class="symbolika-costing-label">График
+                <select v-model="timesheetData.schedule.schedule_type" class="symbolika-costing-select" :disabled="!!timesheetData.period">
+                  <option value="five_two">5/2</option>
+                  <option value="two_two">2/2</option>
+                  <option value="individual">Индивидуальный</option>
+                </select>
+              </label>
+              <label class="symbolika-costing-label">Расчёт оклада
+                <select v-model="timesheetData.schedule.calculation_unit" class="symbolika-costing-select" :disabled="!!timesheetData.period">
+                  <option value="hours">По часам</option>
+                  <option value="days">По дням</option>
+                </select>
+              </label>
+              <label class="symbolika-costing-label">Часов в смене
+                <input v-model="timesheetData.schedule.hours_per_day" class="symbolika-costing-input" type="number" min="0.25" max="24" step="0.25" :disabled="!!timesheetData.period" />
+              </label>
+              <label v-if="timesheetData.schedule.schedule_type === 'two_two'" class="symbolika-costing-label">Первый рабочий день цикла
+                <input v-model="timesheetData.schedule.cycle_anchor" class="symbolika-costing-input" type="date" :disabled="!!timesheetData.period" />
+              </label>
+              <div v-if="timesheetData.schedule.schedule_type === 'individual'" class="symbolika-timesheet-workdays">
+                <span>Рабочие дни</span>
+                <label v-for="day in [{v:1,t:'Пн'},{v:2,t:'Вт'},{v:3,t:'Ср'},{v:4,t:'Чт'},{v:5,t:'Пт'},{v:6,t:'Сб'},{v:7,t:'Вс'}]" :key="'schedule-day-' + day.v">
+                  <input v-model="timesheetData.schedule.workdays" type="checkbox" :value="day.v" :disabled="!!timesheetData.period" /> {{ day.t }}
+                </label>
+              </div>
+              <button v-if="!timesheetData.period" type="button" class="symbolika-costing-mini-button" :disabled="timesheetSaving" @click="saveTimesheetSchedule">Сохранить график</button>
+              <button v-if="!timesheetData.period" type="button" class="symbolika-costing-button" :disabled="timesheetSaving || !timesheetEmployeeId" @click="generateTimesheet">Создать табель</button>
+            </div>
+
+            <div v-if="timesheetData.period" class="symbolika-timesheet-summary">
+              <article><span>Норма</span><strong>{{ formatMoney(timesheetData.period.norm_days) }} дн. / {{ formatMoney(timesheetData.period.norm_hours) }} ч.</strong></article>
+              <article><span>Зачтено</span><strong>{{ formatMoney(timesheetData.period.credited_days) }} дн. / {{ formatMoney(timesheetData.period.credited_hours) }} ч.</strong></article>
+              <article><span>Отработано</span><strong>{{ formatMoney(timesheetData.period.worked_hours) }} ч.</strong></article>
+              <article><span>Сверхурочно</span><strong>{{ formatMoney(timesheetData.period.overtime_hours) }} ч.</strong></article>
+            </div>
+
+            <div v-if="timesheetLoading" class="symbolika-costing-empty">Загружаем табель…</div>
+            <template v-else-if="timesheetData.period">
+              <div class="symbolika-timesheet-weekdays"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div>
+              <div class="symbolika-timesheet-calendar">
+                <button
+                  v-for="entry in timesheetCalendarEntries()"
+                  :key="entry.id"
+                  type="button"
+                  class="symbolika-timesheet-day"
+                  :class="[entry._blank ? 'is-blank' : timesheetDayClass(entry)]"
+                  :disabled="entry._blank"
+                  @click="openTimesheetDay(entry)"
+                >
+                  <template v-if="!entry._blank">
+                    <strong>{{ Number(String(entry.work_date).slice(8, 10)) }}</strong>
+                    <span>{{ timesheetStatusName(entry.day_status) }}</span>
+                    <small v-if="parseMoney(entry.planned_hours)">{{ formatMoney(entry.worked_hours) }} / {{ formatMoney(entry.planned_hours) }} ч.</small>
+                  </template>
+                </button>
+              </div>
+              <div class="symbolika-timesheet-actions">
+                <button v-if="timesheetData.period.status !== 'draft'" type="button" class="symbolika-costing-mini-button" :disabled="timesheetSaving" @click="setTimesheetPeriodStatus('draft')">Вернуть в черновик</button>
+                <button v-if="timesheetData.period.status === 'draft'" type="button" class="symbolika-costing-mini-button" :disabled="timesheetSaving" @click="setTimesheetPeriodStatus('approved')">Утвердить</button>
+                <button v-if="timesheetData.period.status === 'approved'" type="button" class="symbolika-costing-button" :disabled="timesheetSaving" @click="setTimesheetPeriodStatus('closed')">Закрыть месяц</button>
+              </div>
+            </template>
+            <div v-else-if="timesheetEmployeeId" class="symbolika-costing-empty">Табель ещё не создан. Проверьте график и создайте месяц.</div>
+          </section>
+
+          <div v-if="timesheetDayDialog" class="symbolika-costing-modal-backdrop" @click.self="closeTimesheetDay">
+            <div class="symbolika-costing-modal symbolika-timesheet-dialog">
+              <div class="symbolika-costing-modal-title">
+                <div><div class="symbolika-costing-subtle">День табеля</div><h2>{{ formatDate(timesheetDayDialog.work_date) }}</h2></div>
+                <button type="button" class="symbolika-costing-close" :disabled="timesheetDayDialog.saving" @click="closeTimesheetDay"><v-icon name="close" /></button>
+              </div>
+              <div class="symbolika-costing-form-grid">
+                <label class="symbolika-costing-label symbolika-costing-field-wide">Статус
+                  <select v-model="timesheetDayDialog.day_status" class="symbolika-costing-select" :disabled="timesheetData.period?.status === 'closed'">
+                    <option value="worked">Рабочий день</option><option value="weekend">Выходной</option>
+                    <option value="paid_leave">Оплачиваемый отпуск</option><option value="sick_leave">Больничный</option>
+                    <option value="business_trip">Командировка</option><option value="unpaid_leave">Отпуск без оплаты</option>
+                    <option value="day_off">Отгул</option><option value="absence">Отсутствие</option>
+                  </select>
+                </label>
+                <label class="symbolika-costing-label">Начало<input v-model="timesheetDayDialog.started_at" class="symbolika-costing-input" type="time" :disabled="timesheetData.period?.status === 'closed'" /></label>
+                <label class="symbolika-costing-label">Окончание<input v-model="timesheetDayDialog.ended_at" class="symbolika-costing-input" type="time" :disabled="timesheetData.period?.status === 'closed'" /></label>
+                <label class="symbolika-costing-label">Перерыв, минут<input v-model="timesheetDayDialog.break_minutes" class="symbolika-costing-input" type="number" min="0" step="5" :disabled="timesheetData.period?.status === 'closed'" /></label>
+                <label class="symbolika-costing-label">Отработано вручную, ч.<input v-model="timesheetDayDialog.worked_hours" class="symbolika-costing-input" type="number" min="0" max="24" step="0.25" :disabled="timesheetData.period?.status === 'closed'" /></label>
+                <label class="symbolika-costing-label symbolika-costing-field-wide">Комментарий<textarea v-model="timesheetDayDialog.comment" class="symbolika-costing-textarea" rows="3" :disabled="timesheetData.period?.status === 'closed'"></textarea></label>
+              </div>
+              <div class="symbolika-costing-modal-actions">
+                <button type="button" class="symbolika-costing-mini-button" :disabled="timesheetDayDialog.saving" @click="closeTimesheetDay">Закрыть</button>
+                <button v-if="timesheetData.period?.status !== 'closed'" type="button" class="symbolika-costing-button" :disabled="timesheetDayDialog.saving" @click="saveTimesheetDay">{{ timesheetDayDialog.saving ? 'Сохраняю…' : 'Сохранить день' }}</button>
+              </div>
+            </div>
+          </div>
+
           <div class="symbolika-costing-section-title">Сводка по менеджерам · {{ monthLabel(payrollMonth) }}</div>
           <div class="symbolika-costing-dashboard symbolika-costing-dashboard-tight">
             <div class="symbolika-costing-card blue">
@@ -32165,6 +32476,10 @@ export const CostingModule = {
                       <div class="symbolika-costing-metric-line">
                         <span>Оклад</span>
                         <strong>{{ formatMoneyCompact(row.salary_fixed) }}</strong>
+                      </div>
+                      <div v-if="row.timesheet_status" class="symbolika-costing-metric-line">
+                        <span>По табелю</span>
+                        <strong>{{ formatMoneyCompact(row.salary_fixed_earned) }}</strong>
                       </div>
                       <div class="symbolika-costing-metric-line">
                         <span>Процент</span>
@@ -34788,7 +35103,8 @@ export const CostingModule = {
                 <article><span>Не оплачено</span><strong :class="parseMoney(payslipDialog.data.unpaid_orders_sum) > 0 ? 'symbolika-negative-text' : ''">{{ formatMoney(payslipDialog.data.unpaid_orders_sum) }} ₽</strong></article>
               </div>
               <div class="symbolika-payslip-breakdown">
-                <div><span>Оклад</span><strong>{{ formatMoney(payslipDialog.data.salary_fixed) }} ₽</strong></div>
+                <div><span>Оклад по условиям</span><strong>{{ formatMoney(payslipDialog.data.salary_fixed) }} ₽</strong></div>
+                <div><span>Оклад к начислению</span><strong>{{ formatMoney(payslipDialog.data.salary_fixed_earned) }} ₽</strong><small v-if="payslipDialog.data.timesheet_status">по табелю: {{ formatMoney(payslipDialog.data.credited_hours) }} из {{ formatMoney(payslipDialog.data.norm_hours) }} ч.</small></div>
                 <div><span>Процентная часть · {{ formatMoney(payslipDialog.data.order_percent) }}%</span><strong>{{ formatMoney(payslipDialog.data.commission_accrued) }} ₽</strong></div>
                 <div><span>Премиальная часть</span><strong>{{ formatMoney(payslipDialog.data.bonus_paid) }} ₽</strong></div>
                 <div class="is-total"><span>Ваш доход за месяц</span><strong>{{ formatMoney(payslipDialog.data.total_accrued) }} ₽</strong></div>

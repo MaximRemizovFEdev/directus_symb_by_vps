@@ -291,6 +291,11 @@ export default {
         .first('salary_fixed', 'order_percent')
         .catch(() => null);
 
+      const monthlySalary = await database('employee_salary_monthly')
+        .where({ employee: employeeId, month_start: period.start })
+        .first()
+        .catch(() => null);
+
       const orderTotals = await database('orders as o')
         .whereRaw('COALESCE(o.commission_manager_employee, o.manager_employee) = ?', [employeeId])
         .where('o.date', '>=', period.start)
@@ -316,13 +321,14 @@ export default {
         .filter((row) => row.expense_type === type)
         .reduce((sum, row) => sum + Number(row.amount || 0), 0);
       const salaryFixed = Number(compensation?.salary_fixed ?? employee.salary_fixed ?? 0);
+      const salaryFixedEarned = Number(monthlySalary?.salary_fixed_earned ?? salaryFixed);
       const orderPercent = Number(compensation?.order_percent ?? employee.order_percent ?? 0);
       const paidOrders = Number(orderTotals?.paid_orders_sum || 0);
       const commissionAccrued = Math.round(paidOrders * orderPercent) / 100;
       const salaryPaid = sumType('salary_payment');
       const advancesPaid = sumType('employee_advance');
       const bonusAccrued = sumType('employee_bonus');
-      const totalAccrued = salaryFixed + commissionAccrued + bonusAccrued;
+      const totalAccrued = salaryFixedEarned + commissionAccrued + bonusAccrued;
       const totalPaid = salaryPaid + advancesPaid;
 
       return {
@@ -333,6 +339,14 @@ export default {
           position: employee.position_name || '',
         },
         salary_fixed: salaryFixed,
+        salary_fixed_earned: salaryFixedEarned,
+        norm_days: Number(monthlySalary?.norm_days || 0),
+        credited_days: Number(monthlySalary?.credited_days || 0),
+        norm_hours: Number(monthlySalary?.norm_hours || 0),
+        credited_hours: Number(monthlySalary?.credited_hours || 0),
+        worked_hours: Number(monthlySalary?.worked_hours || 0),
+        overtime_hours: Number(monthlySalary?.overtime_hours || 0),
+        timesheet_status: monthlySalary?.timesheet_status || null,
         order_percent: orderPercent,
         orders_count: Number(orderTotals?.orders_count || 0),
         orders_sum: Number(orderTotals?.orders_sum || 0),
