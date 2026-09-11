@@ -2,6 +2,9 @@
   "name": "directus-extension-symbolika-support",
   "version": "0.1.0",
   "type": "module",
+  "dependencies": {
+    "pg": "8.16.3"
+  },
   "directus:extension": {
     "type": "endpoint",
     "path": "index.js",

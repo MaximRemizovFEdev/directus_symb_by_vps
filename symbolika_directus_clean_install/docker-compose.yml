@@ -39,6 +39,12 @@ services:
       DB_DATABASE: "${POSTGRES_DB:-directus}"
       DB_USER: "${POSTGRES_USER:-directus}"
       DB_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}"
+      # Applies only to Directus sessions. Maintenance psql/pg_dump sessions
+      # use their own connections and are intentionally not time-limited here.
+      DB_OPTIONS: "-c application_name=symbolika-directus -c statement_timeout=60000 -c lock_timeout=10000 -c idle_in_transaction_session_timeout=60000"
+      DB_POOL__MIN: "2"
+      DB_POOL__MAX: "12"
+      DB_POOL__ACQUIRE_TIMEOUT_MILLIS: "10000"
       WEBSOCKETS_ENABLED: "true"
       CORS_ENABLED: "true"
       CORS_ORIGIN: "${DIRECTUS_CORS_ORIGIN:-true}"

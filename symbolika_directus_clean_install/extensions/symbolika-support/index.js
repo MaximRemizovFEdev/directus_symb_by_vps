@@ -1,5 +1,66 @@
+import pg from 'pg';
+
+const { Client } = pg;
 const CONTROL_ROLES = new Set(['Administrator', 'Управляющий']);
 const REPORT_STATUSES = new Set(['new', 'in_progress', 'resolved']);
+const DIRECTUS_DATABASE_APP = 'symbolika-directus';
+
+function databaseRecoveryClient() {
+  return new Client({
+    host: process.env.DB_HOST,
+    port: Number(process.env.DB_PORT || 5432),
+    database: process.env.DB_DATABASE,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    application_name: 'symbolika-emergency-control',
+    connectionTimeoutMillis: 3000,
+    statement_timeout: 5000,
+    query_timeout: 6000,
+  });
+}
+
+async function withRecoveryDatabase(callback) {
+  const client = databaseRecoveryClient();
+  await client.connect();
+  try {
+    return await callback(client);
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+async function readDirectusDatabaseHealth(client) {
+  const result = await client.query(`
+    SELECT
+      pid,
+      state,
+      wait_event_type,
+      wait_event,
+      EXTRACT(EPOCH FROM (clock_timestamp() - query_start))::integer AS age_seconds,
+      query_start,
+      LEFT(REGEXP_REPLACE(COALESCE(query, ''), '\\s+', ' ', 'g'), 240) AS query_preview
+    FROM pg_stat_activity
+    WHERE datname = current_database()
+      AND application_name = $1
+      AND pid <> pg_backend_pid()
+      AND state IS DISTINCT FROM 'idle'
+    ORDER BY query_start
+  `, [DIRECTUS_DATABASE_APP]);
+
+  const sessions = result.rows.map((row) => ({
+    ...row,
+    pid: Number(row.pid),
+    age_seconds: Number(row.age_seconds || 0),
+  }));
+  return {
+    sessions,
+    active: sessions.filter((row) => row.state === 'active').length,
+    blocked: sessions.filter((row) => row.wait_event_type === 'Lock').length,
+    oldest_seconds: sessions.reduce((max, row) => Math.max(max, row.age_seconds), 0),
+    statement_timeout_seconds: 60,
+    lock_timeout_seconds: 10,
+  };
+}
 
 export default {
   id: 'symbolika-support',
@@ -29,6 +90,62 @@ export default {
       }
       return actor;
     }
+
+    async function requireAdministrator(req, res) {
+      if (!req.accountability?.user) {
+        res.status(401).json({ message: 'Необходима авторизация.' });
+        return null;
+      }
+      // Do not query through the ordinary Directus pool here: this endpoint
+      // must remain useful precisely when that pool is occupied by stalled
+      // work. Directus has already resolved the administrator flag.
+      if (req.accountability.admin !== true) {
+        res.status(403).json({ message: 'Аварийная остановка доступна только администратору.' });
+        return null;
+      }
+      return req.accountability;
+    }
+
+    router.get('/database-health', async (req, res) => {
+      try {
+        if (!await requireAdministrator(req, res)) return;
+        const health = await withRecoveryDatabase(readDirectusDatabaseHealth);
+        return res.json({ data: health });
+      } catch (error) {
+        logger.error(error);
+        return res.status(503).json({ message: 'Не удалось проверить состояние вычислений.' });
+      }
+    });
+
+    router.post('/database-health/cancel', async (req, res) => {
+      try {
+        if (!await requireAdministrator(req, res)) return;
+        if (req.body?.confirmation !== 'STOP_DIRECTUS_CALCULATIONS') {
+          return res.status(400).json({ message: 'Не подтверждена аварийная остановка.' });
+        }
+
+        const result = await withRecoveryDatabase(async (client) => client.query(`
+          SELECT pid, pg_cancel_backend(pid) AS cancelled
+          FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND application_name = $1
+            AND pid <> pg_backend_pid()
+            AND state = 'active'
+        `, [DIRECTUS_DATABASE_APP]));
+        const cancelled = result.rows.filter((row) => row.cancelled).map((row) => Number(row.pid));
+        logger.warn(`[Symbolika database guard] administrator cancelled ${cancelled.length} Directus database operation(s)`);
+        return res.json({
+          ok: true,
+          data: { cancelled_count: cancelled.length },
+          message: cancelled.length
+            ? `Остановлено операций: ${cancelled.length}. Их незавершённые транзакции откатятся.`
+            : 'Активных вычислений для остановки нет.',
+        });
+      } catch (error) {
+        logger.error(error);
+        return res.status(503).json({ message: 'Аварийная остановка не выполнена.' });
+      }
+    });
 
     router.post('/report', async (req, res) => {
       try {

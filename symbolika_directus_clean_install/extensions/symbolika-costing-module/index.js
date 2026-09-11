@@ -1449,6 +1449,16 @@ export const CostingModule = {
       automationHealth: { handlers: [], failures: [] },
       automationHealthLoading: false,
       automationRetryingKey: '',
+      databaseHealth: {
+        sessions: [],
+        active: 0,
+        blocked: 0,
+        oldest_seconds: 0,
+        statement_timeout_seconds: 60,
+        lock_timeout_seconds: 10,
+      },
+      databaseHealthLoading: false,
+      databaseRecoveryRunning: false,
       feedbackDialog: null,
       feedbackSaving: false,
       feedbackSavedMessage: '',
@@ -3906,6 +3916,7 @@ export const CostingModule = {
       if (tab === 'automation_control') {
         this.loadAutomationIssues({ silent: true });
         this.loadAutomationHealth({ silent: true });
+        this.loadDatabaseHealth({ silent: true });
         this.loadFeedbackReports({ silent: true });
       }
       if (tab === 'payroll') {
@@ -5436,6 +5447,7 @@ export const CostingModule = {
       if (allowed.has('automation_control')) tasks.push(
         this.loadAutomationIssues({ silent: true }),
         this.loadAutomationHealth({ silent: true }),
+        this.loadDatabaseHealth({ silent: true }),
         this.loadFeedbackReports({ silent: true }),
         this.loadTaskRows({ silent: true }),
         this.loadAllOrderRows(),
@@ -7678,6 +7690,62 @@ export const CostingModule = {
         return false;
       } finally {
         this.automationHealthLoading = false;
+      }
+    },
+
+    async loadDatabaseHealth(options = {}) {
+      if (this.currentRoleName !== 'Administrator') return false;
+      const { silent = false } = options;
+      this.databaseHealthLoading = true;
+      try {
+        const payload = await this.request('/symbolika-support/database-health');
+        this.databaseHealth = {
+          ...this.databaseHealth,
+          ...(payload?.data || {}),
+          sessions: payload?.data?.sessions || [],
+        };
+        return true;
+      } catch (error) {
+        if (!silent) this.error = error.message;
+        return false;
+      } finally {
+        this.databaseHealthLoading = false;
+      }
+    },
+
+    databaseHealthTone() {
+      if (this.databaseHealth.blocked > 0 || this.databaseHealth.oldest_seconds >= 30) return 'is-error';
+      if (this.databaseHealth.active > 0) return 'is-running';
+      return 'is-ok';
+    },
+
+    databaseSessionTitle(session) {
+      if (session?.wait_event_type === 'Lock') return 'Ожидает блокировку';
+      if (session?.state === 'active') return 'Выполняется';
+      return session?.state || 'Операция';
+    },
+
+    async cancelDatabaseCalculations() {
+      if (this.currentRoleName !== 'Administrator' || this.databaseRecoveryRunning) return;
+      const confirmed = window.confirm(
+        'Остановить все активные вычисления Directus? Незавершённые изменения этих операций будут отменены. Резервное копирование и миграции не затрагиваются.',
+      );
+      if (!confirmed) return;
+
+      this.databaseRecoveryRunning = true;
+      this.error = '';
+      try {
+        const payload = await this.request('/symbolika-support/database-health/cancel', {
+          method: 'POST',
+          body: JSON.stringify({ confirmation: 'STOP_DIRECTUS_CALCULATIONS' }),
+        });
+        this.feedbackSavedMessage = payload?.message || 'Вычисления остановлены.';
+        await new Promise((resolve) => window.setTimeout(resolve, 350));
+        await this.loadDatabaseHealth({ silent: true });
+      } catch (error) {
+        this.error = error.message;
+      } finally {
+        this.databaseRecoveryRunning = false;
       }
     },
 
@@ -26968,6 +27036,51 @@ export const CostingModule = {
         .symbolika-costing-health-failures article span { overflow-wrap: anywhere; color: #fb7185; font-size: 11px; }
         .symbolika-costing-health-failures article small { color: var(--theme--foreground-subdued); }
 
+        .symbolika-costing-database-guard {
+          display: grid;
+          gap: 13px;
+          padding: 15px;
+          border: 1px solid var(--theme--border-color-subdued);
+          border-inline-start: 4px solid #34d399;
+          border-radius: 15px;
+          background: var(--theme--background-subdued);
+        }
+        .symbolika-costing-database-guard.is-running { border-inline-start-color: #fbbf24; }
+        .symbolika-costing-database-guard.is-error { border-inline-start-color: #fb7185; }
+        .symbolika-costing-database-guard > header,
+        .symbolika-costing-database-guard-actions {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+        }
+        .symbolika-costing-database-guard > header > div { display: grid; gap: 4px; }
+        .symbolika-costing-database-guard > header strong { display: inline-flex; align-items: center; gap: 7px; color: var(--theme--foreground); font-size: 15px; }
+        .symbolika-costing-database-guard > header span,
+        .symbolika-costing-database-guard-actions > span { color: var(--theme--foreground-subdued); font-size: 11px; }
+        .symbolika-costing-database-guard-summary {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 9px;
+        }
+        .symbolika-costing-database-guard-summary > span {
+          display: grid;
+          gap: 4px;
+          padding: 11px 12px;
+          border: 1px solid var(--theme--border-color-subdued);
+          border-radius: 11px;
+          background: var(--theme--background-normal);
+        }
+        .symbolika-costing-database-guard-summary small { color: var(--theme--foreground-subdued); font-size: 10px; font-weight: 800; text-transform: uppercase; }
+        .symbolika-costing-database-guard-summary strong { color: var(--theme--foreground); font-size: 19px; }
+        .symbolika-costing-database-sessions { display: grid; gap: 7px; }
+        .symbolika-costing-database-sessions article { padding: 9px 11px; border: 1px solid rgba(251, 191, 36, .25); border-radius: 10px; background: rgba(251, 191, 36, .06); }
+        .symbolika-costing-database-sessions article > div { display: grid; gap: 3px; }
+        .symbolika-costing-database-sessions strong { color: #fbbf24; font-size: 11px; }
+        .symbolika-costing-database-sessions small { overflow-wrap: anywhere; color: var(--theme--foreground-subdued); font-family: monospace; font-size: 10px; }
+        .symbolika-costing-mini-button.is-danger { border-color: rgba(251, 113, 133, .5); color: #fb7185; }
+        .symbolika-costing-mini-button.is-danger:hover { background: #fb7185; color: #fff; }
+
         .symbolika-costing-feedback-inbox { margin-block-start: 14px; }
         .symbolika-costing-feedback-list article { display: grid; gap: 7px; }
         .symbolika-costing-feedback-report-head,
@@ -28214,8 +28327,11 @@ export const CostingModule = {
           .symbolika-costing-health-grid { grid-template-columns: 1fr; }
           .symbolika-costing-health-head,
           .symbolika-costing-health-failures article,
+          .symbolika-costing-database-guard > header,
+          .symbolika-costing-database-guard-actions,
           .symbolika-costing-feedback-report-head,
           .symbolika-costing-feedback-report-meta { align-items: stretch; flex-direction: column; }
+          .symbolika-costing-database-guard-summary { grid-template-columns: 1fr; }
           .symbolika-costing-feedback-report-meta select { inline-size: 100%; }
           .symbolika-costing-feedback-button { inset-inline-end: 10px; inset-block-end: 10px; inline-size: 44px; padding: 0; border-radius: 14px; }
           .symbolika-costing-feedback-button span { display: none; }
@@ -30403,6 +30519,37 @@ export const CostingModule = {
                   <v-icon name="replay" small />{{ automationRetryingKey === ('customer_notification:' + failure.id) ? 'Отправляем…' : 'Повторить' }}
                 </button>
               </article>
+            </div>
+          </section>
+
+          <section v-if="currentRoleName === 'Administrator'" class="symbolika-costing-database-guard" :class="databaseHealthTone()">
+            <header>
+              <div>
+                <strong><v-icon name="shield" small /> Защита вычислений</strong>
+                <span>Запросы Directus автоматически останавливаются через {{ databaseHealth.statement_timeout_seconds }} сек., ожидание блокировки — через {{ databaseHealth.lock_timeout_seconds }} сек.</span>
+              </div>
+              <button type="button" class="symbolika-costing-mini-button" :disabled="databaseHealthLoading || databaseRecoveryRunning" @click="loadDatabaseHealth()">
+                <v-icon name="monitor_heart" small />{{ databaseHealthLoading ? 'Проверяем…' : 'Проверить' }}
+              </button>
+            </header>
+            <div class="symbolika-costing-database-guard-summary">
+              <span><small>Активно</small><strong>{{ databaseHealth.active }}</strong></span>
+              <span><small>Заблокировано</small><strong>{{ databaseHealth.blocked }}</strong></span>
+              <span><small>Самая долгая операция</small><strong>{{ databaseHealth.oldest_seconds }} сек.</strong></span>
+            </div>
+            <div v-if="databaseHealth.sessions.length" class="symbolika-costing-database-sessions">
+              <article v-for="session in databaseHealth.sessions" :key="session.pid">
+                <div>
+                  <strong>{{ databaseSessionTitle(session) }} · {{ session.age_seconds }} сек.</strong>
+                  <small>{{ session.query_preview || 'Запрос без описания' }}</small>
+                </div>
+              </article>
+            </div>
+            <div class="symbolika-costing-database-guard-actions">
+              <span>Кнопка отменяет только текущие запросы приложения. Незавершённые транзакции откатываются.</span>
+              <button type="button" class="symbolika-costing-mini-button is-danger" :disabled="databaseRecoveryRunning" @click="cancelDatabaseCalculations">
+                <v-icon name="stop_circle" small />{{ databaseRecoveryRunning ? 'Останавливаем…' : 'Аварийно остановить вычисления' }}
+              </button>
             </div>
           </section>
 

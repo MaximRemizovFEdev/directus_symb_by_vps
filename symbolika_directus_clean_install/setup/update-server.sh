@@ -113,6 +113,9 @@ if ! test -f "${PROJECT_DIR}/extensions/symbolika-mail/node_modules/imapflow/pac
   log "Повторная установка зависимостей почты после неполного npm ci"
   docker run --rm -v "${PROJECT_DIR}/extensions/symbolika-mail:/app" -w /app node:20-alpine npm ci --omit=dev
 fi
+docker run --rm -v "${PROJECT_DIR}/extensions/symbolika-support:/app" -w /app node:20-alpine npm ci --omit=dev
+test -f "${PROJECT_DIR}/extensions/symbolika-support/node_modules/pg/package.json" \
+  || fail "PostgreSQL dependency for the emergency support endpoint is not installed"
 test -f "${PROJECT_DIR}/extensions/symbolika-mail/node_modules/imapflow/package.json" \
   || fail "Зависимость imapflow почтового расширения не установлена"
 
