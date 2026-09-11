@@ -34,6 +34,9 @@ test('item card fields preserve role-specific security masks', () => {
   assert.strictEqual(orderItemCardFields({ roleName: 'Производство' }), orderItemCardWorkerFields);
   assert.strictEqual(orderItemCardFields({ ownsOrder: true, canEditItemCosts: true }), orderItemManagerFields);
   assert.strictEqual(orderItemCardFields({ hasManagerWorkflowAccess: true, canEditItemCosts: true }), orderItemManagerFields);
+  assert.strictEqual(orderItemCardFields({ hasManagerOverrideAccess: true }), orderItemPrivilegedFields);
+  assert.ok(orderItemCardWorkerFields.includes('layout_preview_url'));
+  assert.ok(orderItemWorkerFields.includes('layout_preview_url'));
 });
 
 test('order item list fields preserve override and owner behavior', () => {

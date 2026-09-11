@@ -1895,6 +1895,11 @@ ALTER TABLE production_work ADD COLUMN IF NOT EXISTS product_subcategory integer
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS application_method integer;
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS contractor_1 integer;
 ALTER TABLE production_work ADD COLUMN IF NOT EXISTS contractor_1_cost numeric(14,2);
+ALTER TABLE production_work ADD COLUMN IF NOT EXISTS layout_preview_url text;
+ALTER TABLE production_work ADD COLUMN IF NOT EXISTS layout_preview_disk_name text;
+ALTER TABLE production_work ADD COLUMN IF NOT EXISTS layout_preview_disk_size bigint;
+ALTER TABLE production_work ADD COLUMN IF NOT EXISTS layout_preview_disk_mime_type character varying(255);
+ALTER TABLE production_work ADD COLUMN IF NOT EXISTS layout_preview_uploaded_at timestamptz;
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS order_number character varying(255);
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS customer_name character varying(255);
@@ -1915,9 +1920,49 @@ ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS contractor_1_cost nume
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS application_contractor_slot smallint;
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS application_cost_per_unit numeric(14,2);
 ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS application_cost_total numeric(14,2);
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS layout_preview_url text;
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS layout_preview_disk_name text;
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS layout_preview_disk_size bigint;
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS layout_preview_disk_mime_type character varying(255);
+ALTER TABLE screen_printing_work ADD COLUMN IF NOT EXISTS layout_preview_uploaded_at timestamptz;
 ALTER TABLE orders_items ADD COLUMN IF NOT EXISTS screen_printing_cost_per_unit numeric(14,2);
 ALTER TABLE contractor_work ADD COLUMN IF NOT EXISTS order_link integer;
 ALTER TABLE contractor_work ADD COLUMN IF NOT EXISTS production_comment text;
+
+CREATE OR REPLACE FUNCTION symbolika_fill_work_layout_preview()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  SELECT
+    oi.layout_preview_url,
+    oi.layout_preview_disk_name,
+    oi.layout_preview_disk_size,
+    oi.layout_preview_disk_mime_type,
+    oi.layout_preview_uploaded_at
+  INTO
+    NEW.layout_preview_url,
+    NEW.layout_preview_disk_name,
+    NEW.layout_preview_disk_size,
+    NEW.layout_preview_disk_mime_type,
+    NEW.layout_preview_uploaded_at
+  FROM orders_items oi
+  WHERE oi.id = NEW.id;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS symbolika_production_work_layout_preview ON production_work;
+CREATE TRIGGER symbolika_production_work_layout_preview
+BEFORE INSERT ON production_work
+FOR EACH ROW
+EXECUTE FUNCTION symbolika_fill_work_layout_preview();
+
+DROP TRIGGER IF EXISTS symbolika_screen_work_layout_preview ON screen_printing_work;
+CREATE TRIGGER symbolika_screen_work_layout_preview
+BEFORE INSERT ON screen_printing_work
+FOR EACH ROW
+EXECUTE FUNCTION symbolika_fill_work_layout_preview();
 
 CREATE OR REPLACE FUNCTION set_symbolika_order_link()
 RETURNS trigger
@@ -5483,12 +5528,12 @@ VALUES
 
   ('production_work', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
   ('production_work', 'update', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
-  ('production_work', 'read', '{}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,contractor_1,contractor_1_cost,date,deadline,item_status,office_status,technical_task_text,production_comment,url,production_status', '00000000-0000-4000-8000-000000000204'),
+  ('production_work', 'read', '{}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,contractor_1,contractor_1_cost,date,deadline,item_status,office_status,technical_task_text,production_comment,url,layout_preview_url,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at,production_status', '00000000-0000-4000-8000-000000000204'),
   ('production_work', 'update', '{}'::json, NULL, NULL, 'production_status,production_comment', '00000000-0000-4000-8000-000000000204'),
 
   ('screen_printing_work', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
   ('screen_printing_work', 'update', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
-  ('screen_printing_work', 'read', '{}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,contractor_1,contractor_1_cost,application_contractor_slot,application_cost_per_unit,application_cost_total,date,deadline,item_status,office_status,technical_task_text,production_comment,url,production_status', '00000000-0000-4000-8000-000000000206'),
+  ('screen_printing_work', 'read', '{}'::json, NULL, NULL, 'id,order,order_link,customer,customer_company,manager_employee,product_name,quantity,price_per_unit,order_sum,blank_source,blank_ordered,product_category,product_subcategory,application_method,contractor_1,contractor_1_cost,application_contractor_slot,application_cost_per_unit,application_cost_total,date,deadline,item_status,office_status,technical_task_text,production_comment,url,layout_preview_url,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at,production_status', '00000000-0000-4000-8000-000000000206'),
   ('screen_printing_work', 'update', '{}'::json, NULL, NULL, 'production_status,production_comment,application_cost_per_unit', '00000000-0000-4000-8000-000000000206'),
 
   ('contractor_work', 'read', '{}'::json, NULL, NULL, '*', '00000000-0000-4000-8000-000000000205'),
@@ -15918,13 +15963,13 @@ CROSS JOIN own_order_permissions permission;
 
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy) VALUES
   ('production_work', 'read', '{}'::json, NULL, NULL,
-    'id,order,order_number,order_link,customer_name,customer_company_name,manager_employee,product_name,quantity,date,deadline,item_status,office_status,technical_task_text,production_comment,url,production_status',
+    'id,order,order_number,order_link,customer_name,customer_company_name,manager_employee,product_name,quantity,date,deadline,item_status,office_status,technical_task_text,production_comment,url,layout_preview_url,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at,production_status',
     '00000000-0000-4000-8000-000000000204'),
   ('production_work', 'update', '{}'::json, NULL, NULL,
     'production_status,production_comment',
     '00000000-0000-4000-8000-000000000204'),
   ('screen_printing_work', 'read', '{}'::json, NULL, NULL,
-    'id,order,order_number,order_link,customer_name,customer_company_name,manager_employee,product_name,quantity,date,deadline,item_status,office_status,technical_task_text,production_comment,url,production_status,application_contractor_slot,application_cost_per_unit,application_cost_total',
+    'id,order,order_number,order_link,customer_name,customer_company_name,manager_employee,product_name,quantity,date,deadline,item_status,office_status,technical_task_text,production_comment,url,layout_preview_url,layout_preview_disk_name,layout_preview_disk_size,layout_preview_disk_mime_type,layout_preview_uploaded_at,production_status,application_contractor_slot,application_cost_per_unit,application_cost_total',
     '00000000-0000-4000-8000-000000000206'),
   ('screen_printing_work', 'update', '{}'::json, NULL, NULL,
     'production_status,production_comment,application_cost_per_unit',

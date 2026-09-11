@@ -89,6 +89,11 @@ export const orderItemWorkerFields = Object.freeze([
   'shipping_method',
   'office_status',
   'url',
+  'layout_preview_url',
+  'layout_preview_disk_name',
+  'layout_preview_disk_size',
+  'layout_preview_disk_mime_type',
+  'layout_preview_uploaded_at',
 ]);
 
 export const orderItemCardWorkerFields = Object.freeze([
@@ -100,6 +105,11 @@ export const orderItemCardWorkerFields = Object.freeze([
   'item_status',
   'technical_task_text',
   'url',
+  'layout_preview_url',
+  'layout_preview_disk_name',
+  'layout_preview_disk_size',
+  'layout_preview_disk_mime_type',
+  'layout_preview_uploaded_at',
   'production_status',
   'production_comment',
 ]);
@@ -172,9 +182,11 @@ export function managerOrderItemFields(canEditItemCosts) {
 export function orderItemCardFields({
   roleName = '',
   hasManagerWorkflowAccess = false,
+  hasManagerOverrideAccess = false,
   ownsOrder = false,
   canEditItemCosts = false,
 } = {}) {
+  if (hasManagerOverrideAccess) return orderItemPrivilegedFields;
   if (hasManagerWorkflowAccess || ownsOrder) return managerOrderItemFields(canEditItemCosts);
   if (roleName === 'Дизайнер') return orderItemDesignerFields;
   return orderItemCardWorkerFields;

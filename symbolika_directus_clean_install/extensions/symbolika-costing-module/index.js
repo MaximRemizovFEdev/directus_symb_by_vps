@@ -151,6 +151,11 @@ const workFields = [
   'office_status',
   'technical_task_text',
   'url',
+  'layout_preview_url',
+  'layout_preview_disk_name',
+  'layout_preview_disk_size',
+  'layout_preview_disk_mime_type',
+  'layout_preview_uploaded_at',
   'production_status.id',
   'production_status.name',
   'production_comment',
@@ -176,6 +181,11 @@ const limitedWorkFields = [
   'office_status',
   'technical_task_text',
   'url',
+  'layout_preview_url',
+  'layout_preview_disk_name',
+  'layout_preview_disk_size',
+  'layout_preview_disk_mime_type',
+  'layout_preview_uploaded_at',
   'production_status.id',
   'production_status.name',
   'production_comment',
@@ -6344,6 +6354,7 @@ export const CostingModule = {
         const fields = orderItemCardFields({
           roleName: this.currentRoleName,
           hasManagerWorkflowAccess: this.hasManagerWorkflowAccess,
+          hasManagerOverrideAccess: this.hasManagerOverrideAccess,
           ownsOrder,
           canEditItemCosts: this.canEditItemCosts,
         }).join(',');
@@ -34425,6 +34436,9 @@ export const CostingModule = {
                   <div class="symbolika-costing-text">{{ row.technical_task_text || '-' }}</div>
                   <a v-if="row.url" class="symbolika-costing-link symbolika-costing-link-inline" :href="row.url" target="_blank" rel="noreferrer">Макет</a>
                   <span v-else class="symbolika-costing-subtle">Макет не указан</span>
+                  <button v-if="row.layout_preview_url" type="button" class="symbolika-costing-mini-button" title="Открыть превью макета" @click.stop="openLayoutPreviewLightbox(row)">
+                    <v-icon name="image" small />Превью
+                  </button>
                 </td>
                 <td>
                   <select
@@ -37921,6 +37935,12 @@ export const CostingModule = {
                     </button>
                   </div>
                   <div v-else class="symbolika-layout-current-empty">Макет пока не загружен</div>
+                </div>
+                <div v-if="detail.row.layout_preview_url" class="symbolika-costing-detail-field symbolika-costing-detail-wide is-muted">
+                  <div class="symbolika-costing-detail-label">Превью макета</div>
+                  <button type="button" class="symbolika-costing-mini-button" @click="openLayoutPreviewLightbox(detail.row)">
+                    <v-icon name="image" small />Открыть превью
+                  </button>
                 </div>
                 <div v-if="itemAttachmentRows(detail.row).length" class="symbolika-costing-detail-field symbolika-costing-detail-wide is-muted">
                   <div class="symbolika-costing-detail-label">Дополнительные материалы</div>
