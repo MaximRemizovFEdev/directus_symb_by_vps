@@ -10978,6 +10978,14 @@ export const CostingModule = {
       const selectedField = this.contractorSelectionField(item, capabilityType);
       const selectedId = Number(this.entityId(item?.[selectedField]) || 0);
 
+      // "Прочее" is the deliberate catch-all category. It cannot have one
+      // predefined route, so an ordinary manager must be able to select any
+      // approved executor instead of being blocked by an empty route list.
+      const categoryName = String(this.categoryById(this.itemCategoryId(item))?.name || '').trim().toLocaleLowerCase('ru-RU');
+      if (capabilityType === 'executor' && categoryName === 'прочее' && !configured.length) {
+        return approved;
+      }
+
       if (this.hasManagerOverrideAccess && item?.[this.contractorOverrideFlag(capabilityType)]) {
         return approved;
       }

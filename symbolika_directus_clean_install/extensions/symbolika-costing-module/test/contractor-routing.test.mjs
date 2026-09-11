@@ -72,6 +72,19 @@ test('an existing manual contractor remains visible while recommendations stay c
   assert.deepEqual(options.map((contractor) => contractor.id), [1, 2]);
 });
 
+test('miscellaneous category lets a manager select any approved executor', () => {
+  const context = routingContext();
+  context.productCategories = [{ id: 99, name: 'Прочее' }];
+  context.contractorCapabilities = [];
+
+  const options = context.capabilityContractorOptions(
+    { product_category: 99, blank_source: 'none' },
+    'executor',
+  );
+
+  assert.deepEqual(options.map((contractor) => contractor.id), [1, 2]);
+});
+
 test('blank supplier and executor use separate contractor slots', () => {
   const context = routingContext({ override: true });
   const item = {
