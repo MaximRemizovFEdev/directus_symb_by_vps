@@ -4,9 +4,9 @@ services:
     container_name: symbolika-db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: directus
-      POSTGRES_USER: directus
-      POSTGRES_PASSWORD: ChangeThisDbPass2026
+      POSTGRES_DB: "${POSTGRES_DB:-directus}"
+      POSTGRES_USER: "${POSTGRES_USER:-directus}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}"
     volumes:
       - ./database:/var/lib/postgresql/data
     healthcheck:
@@ -19,25 +19,62 @@ services:
     image: directus/directus:11.17.0
     container_name: symbolika-directus
     restart: unless-stopped
+    command: >
+      /bin/sh -c "sh /directus/setup/patch-directus-admin-locale.sh
+      && node cli.js bootstrap
+      && pm2-runtime start ecosystem.config.cjs"
     ports:
       - "8057:8055"
     depends_on:
       database:
         condition: service_healthy
     environment:
-      KEY: "symbolika-directus-key-change-me"
-      SECRET: "symbolika-directus-secret-change-me"
-      ADMIN_EMAIL: "admin@symb.local"
-      ADMIN_PASSWORD: "ChangeThisAdminPass2026"
+      KEY: "${DIRECTUS_KEY:?Set DIRECTUS_KEY in .env}"
+      SECRET: "${DIRECTUS_SECRET:?Set DIRECTUS_SECRET in .env}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}"
       DB_CLIENT: "pg"
       DB_HOST: "database"
       DB_PORT: "5432"
-      DB_DATABASE: "directus"
-      DB_USER: "directus"
-      DB_PASSWORD: "ChangeThisDbPass2026"
+      DB_DATABASE: "${POSTGRES_DB:-directus}"
+      DB_USER: "${POSTGRES_USER:-directus}"
+      DB_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}"
       WEBSOCKETS_ENABLED: "true"
       CORS_ENABLED: "true"
-      CORS_ORIGIN: "true"
+      CORS_ORIGIN: "${DIRECTUS_CORS_ORIGIN:-true}"
+      PUBLIC_URL: "${SYMBOLIKA_PUBLIC_URL:?Set SYMBOLIKA_PUBLIC_URL in .env}"
+      SYMBOLIKA_PUSH_PUBLIC_KEY: "${SYMBOLIKA_PUSH_PUBLIC_KEY:-}"
+      SYMBOLIKA_PUSH_PRIVATE_KEY: "${SYMBOLIKA_PUSH_PRIVATE_KEY:-}"
+      SYMBOLIKA_PUSH_SUBJECT: "${SYMBOLIKA_PUSH_SUBJECT:-mailto:start@symb62.ru}"
+      SYMBOLIKA_PUBLIC_URL: "${SYMBOLIKA_PUBLIC_URL:?Set SYMBOLIKA_PUBLIC_URL in .env}"
+      SYMBOLIKA_VK_TOKEN: "${SYMBOLIKA_VK_TOKEN:-}"
+      SYMBOLIKA_VK_API_VERSION: "${SYMBOLIKA_VK_API_VERSION:-5.199}"
+      SYMBOLIKA_TELEGRAM_BOT_TOKEN: "${SYMBOLIKA_TELEGRAM_BOT_TOKEN:-}"
+      SYMBOLIKA_TELEGRAM_API_BASE: "${SYMBOLIKA_TELEGRAM_API_BASE:-https://api.telegram.org}"
+      SYMBOLIKA_SMS_RU_API_ID: "${SYMBOLIKA_SMS_RU_API_ID:-}"
+      SYMBOLIKA_SMS_RU_FROM: "${SYMBOLIKA_SMS_RU_FROM:-}"
+      SYMBOLIKA_SMTP_HOST: "${SYMBOLIKA_SMTP_HOST:-}"
+      SYMBOLIKA_SMTP_PORT: "${SYMBOLIKA_SMTP_PORT:-465}"
+      SYMBOLIKA_SMTP_SECURE: "${SYMBOLIKA_SMTP_SECURE:-true}"
+      SYMBOLIKA_SMTP_USER: "${SYMBOLIKA_SMTP_USER:-}"
+      SYMBOLIKA_SMTP_PASSWORD: "${SYMBOLIKA_SMTP_PASSWORD:-}"
+      SYMBOLIKA_EMAIL_FROM: "${SYMBOLIKA_EMAIL_FROM:-}"
+      # Встроенный почтовый клиент. Пока используется безопасный локальный
+      # режим с тестовыми письмами; для REG.RU задайте значения в .env и
+      # переключите SYMBOLIKA_MAIL_MODE на imap.
+      SYMBOLIKA_MAIL_MODE: "${SYMBOLIKA_MAIL_MODE:-mock}"
+      SYMBOLIKA_IMAP_HOST: "${SYMBOLIKA_IMAP_HOST:-mail.hosting.reg.ru}"
+      SYMBOLIKA_IMAP_PORT: "${SYMBOLIKA_IMAP_PORT:-993}"
+      SYMBOLIKA_IMAP_SECURE: "${SYMBOLIKA_IMAP_SECURE:-true}"
+      SYMBOLIKA_IMAP_USER: "${SYMBOLIKA_IMAP_USER:-}"
+      SYMBOLIKA_IMAP_PASSWORD: "${SYMBOLIKA_IMAP_PASSWORD:-}"
+      SYMBOLIKA_MAIL_ALLOWED_ALIASES: "${SYMBOLIKA_MAIL_ALLOWED_ALIASES:-start@symb62.ru}"
+      SYMBOLIKA_YANDEX_DISK_TOKEN: "${SYMBOLIKA_YANDEX_DISK_TOKEN:-}"
+      SYMBOLIKA_YANDEX_DISK_ROOT: "${SYMBOLIKA_YANDEX_DISK_ROOT:-app:/Заказы}"
+      SYMBOLIKA_YANDEX_DISK_PUBLISH_FILES: "${SYMBOLIKA_YANDEX_DISK_PUBLISH_FILES:-true}"
+      SYMBOLIKA_YANDEX_DISK_DELETE_REPLACED: "${SYMBOLIKA_YANDEX_DISK_DELETE_REPLACED:-true}"
+      SYMBOLIKA_VK_PRODUCTION_PEER_ID: "${SYMBOLIKA_VK_PRODUCTION_PEER_ID:-}"
+      SYMBOLIKA_VK_SCREEN_PRINTING_PEER_ID: "${SYMBOLIKA_VK_SCREEN_PRINTING_PEER_ID:-}"
     volumes:
       - ./uploads:/directus/uploads
       - ./extensions:/directus/extensions
