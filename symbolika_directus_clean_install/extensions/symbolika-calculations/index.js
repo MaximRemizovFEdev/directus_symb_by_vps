@@ -13,6 +13,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
 
   const OFFICE_PICKUP = 'office_pickup';
   const NOT_IN_OFFICE = 'not_in_office';
+  const PARTIALLY_IN_OFFICE = 'partially_in_office';
   const IN_OFFICE = 'in_office';
   const ISSUED = 'issued';
   const DELIVERY_PENDING = 'pending';
@@ -2034,6 +2035,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     const allIssued = items.every((item) => item.office_status === ISSUED);
     const allInOffice = items.every((item) => item.office_status === IN_OFFICE || item.office_status === ISSUED);
     const hasNotInOffice = items.some((item) => !item.office_status || item.office_status === NOT_IN_OFFICE);
+    const hasArrived = items.some((item) => item.office_status === IN_OFFICE || item.office_status === ISSUED);
 
     const update = {};
 
@@ -2042,10 +2044,10 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
 
       const deliveredId = await getDeliveredStatusId();
       if (deliveredId) update.order_status = deliveredId;
-    } else if (hasNotInOffice) {
-      update.office_status = NOT_IN_OFFICE;
     } else if (allInOffice) {
       update.office_status = IN_OFFICE;
+    } else if (hasArrived && hasNotInOffice) {
+      update.office_status = PARTIALLY_IN_OFFICE;
     } else {
       update.office_status = NOT_IN_OFFICE;
     }

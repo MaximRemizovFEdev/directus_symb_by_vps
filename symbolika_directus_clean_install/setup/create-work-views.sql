@@ -2502,6 +2502,7 @@ DECLARE
   all_issued boolean;
   all_in_office boolean;
   has_not_in_office boolean;
+  has_arrived boolean;
   next_status character varying(255);
 BEGIN
   IF NOT EXISTS (
@@ -2526,8 +2527,9 @@ BEGIN
   SELECT
     bool_and(office_status = 'issued'),
     bool_and(office_status IN ('in_office', 'issued')),
-    bool_or(COALESCE(office_status, 'not_in_office') = 'not_in_office')
-  INTO all_issued, all_in_office, has_not_in_office
+    bool_or(COALESCE(office_status, 'not_in_office') = 'not_in_office'),
+    bool_or(office_status IN ('in_office', 'issued'))
+  INTO all_issued, all_in_office, has_not_in_office, has_arrived
   FROM orders_items oi
   LEFT JOIN product_categories pc ON pc.id = oi.product_category
   WHERE oi."order" = order_id
@@ -2535,10 +2537,10 @@ BEGIN
 
   IF all_issued THEN
     next_status := 'issued';
-  ELSIF has_not_in_office THEN
-    next_status := 'not_in_office';
   ELSIF all_in_office THEN
     next_status := 'in_office';
+  ELSIF has_arrived AND has_not_in_office THEN
+    next_status := 'partially_in_office';
   ELSE
     next_status := 'not_in_office';
   END IF;

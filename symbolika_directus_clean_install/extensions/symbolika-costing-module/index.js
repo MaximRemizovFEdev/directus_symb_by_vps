@@ -1166,6 +1166,13 @@ const officeStatusChoices = [
   { text: 'Выдан', value: 'issued' },
 ];
 
+const orderOfficeStatusChoices = [
+  { text: 'Не в офисе', value: 'not_in_office' },
+  { text: 'Частично в офисе', value: 'partially_in_office', readonly: true },
+  { text: 'В офисе', value: 'in_office' },
+  { text: 'Выдан', value: 'issued' },
+];
+
 const deliveryStatusChoices = [
   { text: 'Ожидает доставки', value: 'pending' },
   { text: 'В доставке', value: 'in_delivery' },
@@ -1227,6 +1234,7 @@ export const CostingModule = {
       currentRoleName: '',
       tabs,
       officeStatusChoices,
+      orderOfficeStatusChoices,
       deliveryStatusChoices,
       itemStatusChoices,
       shippingMethodChoices,
@@ -15097,7 +15105,7 @@ export const CostingModule = {
     },
 
     officeStatusName(value) {
-      return officeStatusChoices.find((choice) => choice.value === value)?.text || 'Не выбран';
+      return orderOfficeStatusChoices.find((choice) => choice.value === value)?.text || 'Не выбран';
     },
 
     deliveryStatusName(value) {
@@ -29589,7 +29597,7 @@ export const CostingModule = {
               <div class="symbolika-costing-filter-panel-title">Статус офиса</div>
               <div class="symbolika-costing-filter-chip-list">
                 <button
-                  v-for="status in officeStatusChoices"
+                  v-for="status in orderOfficeStatusChoices"
                   :key="'office-status-' + status.value"
                   type="button"
                   class="symbolika-costing-filter-chip"
@@ -30971,7 +30979,7 @@ export const CostingModule = {
                       :value="row.office_status"
                       @change="saveOrderField(row, 'office_status', $event.target.value)"
                     >
-                      <option v-for="status in officeStatusChoices" :key="status.value" :value="status.value">
+                      <option v-for="status in orderOfficeStatusChoices" :key="status.value" :value="status.value" :disabled="status.readonly">
                         {{ status.text }}
                       </option>
                     </select>
@@ -31176,7 +31184,7 @@ export const CostingModule = {
                       :value="row.office_status"
                       @change="saveOrderField(row, 'office_status', $event.target.value)"
                     >
-                      <option v-for="status in officeStatusChoices" :key="status.value" :value="status.value">
+                      <option v-for="status in orderOfficeStatusChoices" :key="status.value" :value="status.value" :disabled="status.readonly">
                         {{ status.text }}
                       </option>
                     </select>
@@ -31340,7 +31348,7 @@ export const CostingModule = {
                       @click.stop
                       @change.stop="saveOrderField(row, 'office_status', $event.target.value)"
                     >
-                      <option v-for="status in officeStatusChoices" :key="'archive-order-office-' + status.value" :value="status.value">{{ status.text }}</option>
+                      <option v-for="status in orderOfficeStatusChoices" :key="'archive-order-office-' + status.value" :value="status.value" :disabled="status.readonly">{{ status.text }}</option>
                     </select>
                     <select
                       v-else
@@ -34915,7 +34923,7 @@ export const CostingModule = {
                       :value="row.office_status"
                       @change="saveOfficeIssueField(row, 'office_status', $event.target.value)"
                     >
-                      <option v-for="status in officeStatusChoices" :key="status.value" :value="status.value">
+                      <option v-for="status in orderOfficeStatusChoices" :key="status.value" :value="status.value" :disabled="status.readonly">
                         {{ status.text }}
                       </option>
                     </select>
@@ -37453,7 +37461,7 @@ export const CostingModule = {
                   :value="detailOfficeStatus(detail.row)"
                   @change="saveOrderField(detail.row, 'office_status', $event.target.value)"
                 >
-                  <option v-for="status in officeStatusChoices" :key="status.value" :value="status.value">
+                  <option v-for="status in orderOfficeStatusChoices" :key="status.value" :value="status.value" :disabled="status.readonly">
                     {{ status.text }}
                   </option>
                 </select>

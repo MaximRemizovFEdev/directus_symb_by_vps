@@ -34,6 +34,8 @@ test('maps workflow statuses to stable visual classes', () => {
   assert.equal(statusToneClass('Согласование'), 'symbolika-costing-select-purple');
   assert.equal(officeBadgeClass('issued'), 'symbolika-costing-pill-green');
   assert.equal(officeSelectClass('in_office'), 'symbolika-costing-select-orange');
+  assert.equal(officeBadgeClass('partially_in_office'), 'symbolika-costing-pill-purple');
+  assert.equal(officeSelectClass('partially_in_office'), 'symbolika-costing-select-purple');
 });
 
 test('formats money without changing stored precision', () => {

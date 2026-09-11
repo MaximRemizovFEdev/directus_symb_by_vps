@@ -64,12 +64,14 @@ export function statusToneClass(value) {
 export function officeBadgeClass(value) {
   if (value === 'issued') return 'symbolika-costing-pill-green';
   if (value === 'in_office') return 'symbolika-costing-pill-orange';
+  if (value === 'partially_in_office') return 'symbolika-costing-pill-purple';
   return 'symbolika-costing-pill-muted';
 }
 
 export function officeSelectClass(value) {
   if (value === 'issued') return 'symbolika-costing-select-green';
   if (value === 'in_office') return 'symbolika-costing-select-orange';
+  if (value === 'partially_in_office') return 'symbolika-costing-select-purple';
   return 'symbolika-costing-select-muted';
 }
 
