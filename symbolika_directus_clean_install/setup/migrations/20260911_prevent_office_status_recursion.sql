@@ -3,6 +3,33 @@ BEGIN;
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
+CREATE OR REPLACE FUNCTION symbolika_recalc_order_status_from_items_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- Updates issued from another item trigger are implementation details of
+  -- the same outer operation. Recalculating the parent at every nested level
+  -- otherwise re-enters the item update indefinitely.
+  IF pg_trigger_depth() > 1 THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    PERFORM symbolika_recalc_order_status_from_items(OLD."order");
+    RETURN OLD;
+  END IF;
+
+  PERFORM symbolika_recalc_order_status_from_items(NEW."order");
+
+  IF TG_OP = 'UPDATE' AND OLD."order" IS DISTINCT FROM NEW."order" THEN
+    PERFORM symbolika_recalc_order_status_from_items(OLD."order");
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION sync_office_issue_item_trigger()
 RETURNS trigger
 LANGUAGE plpgsql

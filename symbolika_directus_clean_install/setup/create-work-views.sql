@@ -3085,6 +3085,13 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+  -- Parent status propagation and financial recalculation can update the same
+  -- item from inside another item trigger. Only the outer/direct write owns
+  -- the aggregate order-status recalculation.
+  IF pg_trigger_depth() > 1 THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+
   IF TG_OP = 'DELETE' THEN
     PERFORM symbolika_recalc_order_status_from_items(OLD."order");
     RETURN OLD;
