@@ -3312,13 +3312,21 @@ BEGIN
     DELETE FROM office_issue_items WHERE id = OLD.id;
     DELETE FROM office_issue_archive_items WHERE id = OLD.id;
     DELETE FROM office_items_in_office WHERE id = OLD.id;
-    PERFORM recalc_order_office_status(OLD."order");
+    IF pg_trigger_depth() = 1 THEN
+      PERFORM recalc_order_office_status(OLD."order");
+    END IF;
     RETURN OLD;
   END IF;
 
   PERFORM sync_office_issue_items(NEW."order");
   PERFORM sync_office_items_in_office(NEW.id);
-  PERFORM recalc_order_office_status(NEW."order");
+  -- A direct item change owns the aggregate recalculation. When this trigger
+  -- was reached from an order-level propagation, recalculating the parent
+  -- order here would re-enter the order trigger while its item update was
+  -- still in progress and could oscillate between partial/final statuses.
+  IF pg_trigger_depth() = 1 THEN
+    PERFORM recalc_order_office_status(NEW."order");
+  END IF;
   RETURN NEW;
 END;
 $$;
