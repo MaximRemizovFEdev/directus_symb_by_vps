@@ -3374,6 +3374,7 @@ BEGIN
 
   IF order_id IS NOT NULL THEN
     PERFORM recalc_order_office_status(order_id);
+    PERFORM symbolika_recalc_order_status_from_items(order_id);
   END IF;
 
   RETURN NEW;
@@ -3411,6 +3412,11 @@ BEGIN
          )
        );
   END IF;
+
+  -- Mirror-table updates are nested writes, so the generic item trigger
+  -- deliberately skips parent aggregation. Complete both aggregates here.
+  PERFORM recalc_order_office_status(NEW.id);
+  PERFORM symbolika_recalc_order_status_from_items(NEW.id);
 
   IF COALESCE(NEW.add_payment, 0) > 0 THEN
     INSERT INTO order_payments (

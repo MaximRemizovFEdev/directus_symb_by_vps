@@ -7262,9 +7262,12 @@ export const CostingModule = {
         const delivered = this.orderStatuses.find((status) => String(status.name || '').trim().toLowerCase() === 'доставлен');
         if (!delivered?.id) throw new Error('Не найден системный статус «Доставлен».');
 
-        await this.request(`/items/orders/${fresh.order.id}`, {
+        // Issue through the office working collection. Office staff may issue
+        // every order that is physically in the office, while direct writes to
+        // `orders` remain intentionally limited to a manager's own orders.
+        await this.request(`/items/office_issue/${fresh.order.id}`, {
           method: 'PATCH',
-          body: JSON.stringify({ order_status: Number(delivered.id) }),
+          body: JSON.stringify({ office_status: 'issued' }),
         });
 
         const orderId = Number(fresh.order.id);
