@@ -3471,13 +3471,14 @@ BEGIN
   LEFT JOIN order_statuses os ON os.id = o.order_status
   WHERE oi.id = item_id;
 
-  IF item_work_status NOT IN ('sent_to_work', 'in_work', 'layout_revision', 'ready', 'cancelled')
+  IF item_work_status NOT IN ('sent_to_work', 'in_work', 'layout_revision', 'ready', 'cancelled', 'delivered')
      AND order_status_name NOT IN (
        U&'\041e\0442\043f\0440\0430\0432\043b\0435\043d \0432 \0440\0430\0431\043e\0442\0443',
        U&'\0412 \0440\0430\0431\043e\0442\0435',
        U&'\0414\043e\0440\0430\0431\043e\0442\043a\0430 \043c\0430\043a\0435\0442\0430',
        U&'\0413\043e\0442\043e\0432',
-       U&'\041e\0442\043c\0435\043d\0435\043d'
+       U&'\041e\0442\043c\0435\043d\0435\043d',
+       U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d'
      ) THEN
     RETURN;
   END IF;
