@@ -1237,6 +1237,7 @@ export const CostingModule = {
       pagedCollections: {},
       pagingObserver: null,
       pagingCompletionTimer: null,
+      orderViewPreferencesSaveTimer: null,
       activeTab: 'dashboard',
       smartToolbarHidden: false,
       smartToolbarLastScrollTop: 0,
@@ -3623,10 +3624,10 @@ export const CostingModule = {
     search(value) {
       if (String(value || '').trim()) this.completeActivePagingSoon();
     },
-    activeFilter() { this.completeActivePagingSoon(); },
-    orderManagerFilter() { this.completeActivePagingSoon(); },
-    orderStatusFilters: { deep: true, handler() { this.completeActivePagingSoon(); } },
-    officeStatusFilters: { deep: true, handler() { this.completeActivePagingSoon(); } },
+    activeFilter() { this.completeActivePagingSoon(); this.scheduleOrderViewPreferencesSave(); },
+    orderManagerFilter() { this.completeActivePagingSoon(); this.scheduleOrderViewPreferencesSave(); },
+    orderStatusFilters: { deep: true, handler() { this.completeActivePagingSoon(); this.scheduleOrderViewPreferencesSave(); } },
+    officeStatusFilters: { deep: true, handler() { this.completeActivePagingSoon(); this.scheduleOrderViewPreferencesSave(); } },
     taskStatusFilter() { this.completeActivePagingSoon(); },
     taskPriorityFilter() { this.completeActivePagingSoon(); },
     taskArchiveStatusFilter() { this.completeActivePagingSoon(); },
@@ -3640,10 +3641,13 @@ export const CostingModule = {
       this.costingBulkCost = '';
       this.completeActivePagingSoon();
     },
-    orderDeadlineFrom() { this.completeActivePagingSoon(); },
-    orderDeadlineTo() { this.completeActivePagingSoon(); },
-    orderDateFrom() { this.completeActivePagingSoon(); },
-    orderDateTo() { this.completeActivePagingSoon(); },
+    orderDeadlineFrom() { this.completeActivePagingSoon(); this.scheduleOrderViewPreferencesSave(); },
+    orderDeadlineTo() { this.completeActivePagingSoon(); this.scheduleOrderViewPreferencesSave(); },
+    orderDateFrom() { this.completeActivePagingSoon(); this.scheduleOrderViewPreferencesSave(); },
+    orderDateTo() { this.completeActivePagingSoon(); this.scheduleOrderViewPreferencesSave(); },
+    orderDisplayMode() { this.scheduleOrderViewPreferencesSave(); },
+    orderArchiveMode() { this.scheduleOrderViewPreferencesSave(); },
+    tableSorts: { deep: true, handler() { this.scheduleOrderViewPreferencesSave(); } },
     workArchiveMode() { this.completeActivePagingSoon(); },
     workDeadlinePreset() { this.completeActivePagingSoon(); },
     workDeadlineFrom() { this.completeActivePagingSoon(); },
@@ -3677,6 +3681,7 @@ export const CostingModule = {
     this.updateMobileViewport();
     window.addEventListener('resize', this.updateMobileViewport, { passive: true });
     window.addEventListener('beforeunload', this.saveNewOrderDraft);
+    window.addEventListener('beforeunload', this.persistCurrentOrderViewPreferences);
     this.applyAppearanceTheme(localStorage.getItem('symbolika-theme') || 'graphite');
     this.injectStyles();
     this.setupOverlayStacking();
@@ -3691,6 +3696,7 @@ export const CostingModule = {
     if (!restoredTab && !this.availableTabs.some((tab) => tab.id === this.activeTab)) {
       this.activeTab = this.availableTabs[0]?.id || '';
     }
+    this.restoreOrderViewPreferences(this.activeTab);
     this.persistActiveTab(this.activeTab);
 
     await this.loadAllowedData();
@@ -3704,8 +3710,11 @@ export const CostingModule = {
 
   beforeUnmount() {
     this.saveNewOrderDraft();
+    if (this.orderViewPreferencesSaveTimer) clearTimeout(this.orderViewPreferencesSaveTimer);
+    this.persistOrderViewPreferences(this.activeTab);
     window.removeEventListener('resize', this.updateMobileViewport);
     window.removeEventListener('beforeunload', this.saveNewOrderDraft);
+    window.removeEventListener('beforeunload', this.persistCurrentOrderViewPreferences);
     this.unbindSmartToolbarScroll();
     this.unbindPagingObserver();
     this.teardownOverlayStacking();
@@ -3903,9 +3912,15 @@ export const CostingModule = {
         return;
       }
       if (!this.availableTabs.some((item) => item.id === tab)) return;
+      const previousTab = this.activeTab;
+      this.persistOrderViewPreferences(previousTab);
       this.activeTab = tab;
       this.persistActiveTab(tab);
-      this.activeFilter = 'all';
+      if (this.isOrderViewPreferencesTab(tab)) {
+        this.restoreOrderViewPreferences(tab, { resetIfMissing: previousTab !== tab });
+      } else {
+        this.activeFilter = 'all';
+      }
       this.detail = null;
       this.updateOrderLinkUrl(null);
       this.smartToolbarHidden = false;
@@ -4063,6 +4078,143 @@ export const CostingModule = {
     unbindPagingObserver() {
       if (this.pagingObserver) this.pagingObserver.disconnect();
       this.pagingObserver = null;
+    },
+
+    isOrderViewPreferencesTab(tab = this.activeTab) {
+      return ['all_orders', 'my_orders'].includes(tab);
+    },
+
+    orderViewPreferencesStorageKey(tab = this.activeTab) {
+      const user = this.currentUserId || this.currentRoleName || 'anonymous';
+      return `symbolika-order-view:v1:${user}:${tab}`;
+    },
+
+    defaultOrderViewPreferences(tab) {
+      return {
+        activeFilter: 'all',
+        orderDeadlineFrom: '',
+        orderDeadlineTo: '',
+        orderDateFrom: '',
+        orderDateTo: '',
+        orderManagerFilter: '',
+        orderStatusFilters: [],
+        officeStatusFilters: [],
+        orderDisplayMode: 'orders',
+        orderArchiveMode: 'active',
+        orderSort: { key: 'deadline', direction: 'asc' },
+        itemSort: { key: 'deadline', direction: 'asc' },
+        tab,
+      };
+    },
+
+    normalizeStoredOrderSort(value, fallback) {
+      const allowedKeys = new Set(this.tableSortOptions.map((option) => option.key || option.id));
+      const key = allowedKeys.has(value?.key) ? value.key : fallback.key;
+      const direction = ['asc', 'desc'].includes(value?.direction) ? value.direction : fallback.direction;
+      return { key, direction };
+    },
+
+    normalizedOrderViewPreferences(tab, stored = {}) {
+      const defaults = this.defaultOrderViewPreferences(tab);
+      const quickFilterIds = new Set(this.orderDeadlineQuickFilters.map((filter) => filter.id));
+      const officeStatuses = new Set(this.orderOfficeStatusChoices.map((status) => status.value));
+      const text = (value) => String(value || '').slice(0, 100);
+      const list = (value) => Array.isArray(value)
+        ? [...new Set(value.map((item) => String(item || '')).filter(Boolean))].slice(0, 100)
+        : [];
+      return {
+        ...defaults,
+        activeFilter: quickFilterIds.has(stored.activeFilter) ? stored.activeFilter : defaults.activeFilter,
+        orderDeadlineFrom: text(stored.orderDeadlineFrom),
+        orderDeadlineTo: text(stored.orderDeadlineTo),
+        orderDateFrom: text(stored.orderDateFrom),
+        orderDateTo: text(stored.orderDateTo),
+        orderManagerFilter: tab === 'all_orders' ? text(stored.orderManagerFilter) : '',
+        orderStatusFilters: list(stored.orderStatusFilters),
+        officeStatusFilters: list(stored.officeStatusFilters).filter((value) => officeStatuses.has(value)),
+        orderDisplayMode: ['orders', 'items'].includes(stored.orderDisplayMode) ? stored.orderDisplayMode : defaults.orderDisplayMode,
+        orderArchiveMode: ['active', 'archive', 'all'].includes(stored.orderArchiveMode) ? stored.orderArchiveMode : defaults.orderArchiveMode,
+        orderSort: this.normalizeStoredOrderSort(stored.orderSort, defaults.orderSort),
+        itemSort: this.normalizeStoredOrderSort(stored.itemSort, defaults.itemSort),
+      };
+    },
+
+    currentOrderViewPreferences(tab = this.activeTab) {
+      return this.normalizedOrderViewPreferences(tab, {
+        activeFilter: this.activeFilter,
+        orderDeadlineFrom: this.orderDeadlineFrom,
+        orderDeadlineTo: this.orderDeadlineTo,
+        orderDateFrom: this.orderDateFrom,
+        orderDateTo: this.orderDateTo,
+        orderManagerFilter: this.orderManagerFilter,
+        orderStatusFilters: this.orderStatusFilters,
+        officeStatusFilters: this.officeStatusFilters,
+        orderDisplayMode: this.orderDisplayMode,
+        orderArchiveMode: this.orderArchiveMode,
+        orderSort: this.tableSorts?.[tab],
+        itemSort: this.tableSorts?.order_items,
+      });
+    },
+
+    applyOrderViewPreferences(tab, preferences) {
+      const value = this.normalizedOrderViewPreferences(tab, preferences);
+      this.activeFilter = value.activeFilter;
+      this.orderDeadlineFrom = value.orderDeadlineFrom;
+      this.orderDeadlineTo = value.orderDeadlineTo;
+      this.orderDateFrom = value.orderDateFrom;
+      this.orderDateTo = value.orderDateTo;
+      this.orderManagerFilter = value.orderManagerFilter;
+      this.orderStatusFilters = value.orderStatusFilters;
+      this.officeStatusFilters = value.officeStatusFilters;
+      this.orderDisplayMode = value.orderDisplayMode;
+      this.orderArchiveMode = value.orderArchiveMode;
+      this.tableSorts = {
+        ...this.tableSorts,
+        [tab]: value.orderSort,
+        order_items: value.itemSort,
+      };
+    },
+
+    persistOrderViewPreferences(tab = this.activeTab) {
+      if (!this.isOrderViewPreferencesTab(tab)) return false;
+      try {
+        localStorage.setItem(
+          this.orderViewPreferencesStorageKey(tab),
+          JSON.stringify(this.currentOrderViewPreferences(tab)),
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    persistCurrentOrderViewPreferences() {
+      this.persistOrderViewPreferences(this.activeTab);
+    },
+
+    restoreOrderViewPreferences(tab = this.activeTab, options = {}) {
+      if (!this.isOrderViewPreferencesTab(tab)) return false;
+      try {
+        const raw = localStorage.getItem(this.orderViewPreferencesStorageKey(tab));
+        if (!raw) {
+          if (options.resetIfMissing) this.applyOrderViewPreferences(tab, this.defaultOrderViewPreferences(tab));
+          return false;
+        }
+        this.applyOrderViewPreferences(tab, JSON.parse(raw));
+        return true;
+      } catch {
+        if (options.resetIfMissing) this.applyOrderViewPreferences(tab, this.defaultOrderViewPreferences(tab));
+        return false;
+      }
+    },
+
+    scheduleOrderViewPreferencesSave() {
+      if (!this.isOrderViewPreferencesTab()) return;
+      if (this.orderViewPreferencesSaveTimer) clearTimeout(this.orderViewPreferencesSaveTimer);
+      this.orderViewPreferencesSaveTimer = window.setTimeout(() => {
+        this.orderViewPreferencesSaveTimer = null;
+        this.persistOrderViewPreferences(this.activeTab);
+      }, 120);
     },
 
     activeTabStorageKey() {
