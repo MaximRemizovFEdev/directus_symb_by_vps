@@ -21,3 +21,10 @@ test('payment type editing follows the same owner boundary as other order fields
   );
   assert.match(source, /\['order_status', 'payment_type'\]\.includes\(field\)/);
 });
+
+test('order-bound payments send only the canonical order relation', () => {
+  const createBranch = source.match(/await this\.request\('\/items\/order_payments', \{[\s\S]*?\n\s*\}\);/u)?.[0] || '';
+  assert.match(createBranch, /order: orderId/);
+  assert.doesNotMatch(createBranch, /customer:/);
+  assert.doesNotMatch(createBranch, /customer_company:/);
+});

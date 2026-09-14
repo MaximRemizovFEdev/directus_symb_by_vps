@@ -7538,8 +7538,6 @@ export const CostingModule = {
             method: 'POST',
             body: JSON.stringify({
               order: orderId,
-              customer: this.entityId(row.customer) ? Number(this.entityId(row.customer)) : null,
-              customer_company: this.entityId(row.customer_company) ? Number(this.entityId(row.customer_company)) : null,
               amount: paymentAmount,
               payment_date: paymentDate || this.todayInput(),
               payment_type: mode === 'certificate' ? null : (paymentType ? Number(paymentType) : null),
