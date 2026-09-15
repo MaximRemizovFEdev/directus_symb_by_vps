@@ -3253,18 +3253,27 @@ BEGIN
   ORDER BY ps.id
   LIMIT 1;
 
+  -- Change production first. The item workflow trigger derives `ready` from a
+  -- changed production status, so assigning production and `delivered` in one
+  -- statement could overwrite the final item status back to `ready`.
+  IF ready_production_status IS NOT NULL THEN
+    UPDATE orders_items
+       SET production_status = ready_production_status
+     WHERE "order" = NEW.id
+       AND symbolika_normalize_item_status(item_status) <> 'cancelled'
+       AND production_status IS DISTINCT FROM ready_production_status;
+  END IF;
+
   UPDATE orders_items
      SET item_status = 'delivered',
          office_status = 'not_in_office',
-         shipping_method = NEW.shipping_method,
-         production_status = COALESCE(ready_production_status, production_status)
+         shipping_method = NEW.shipping_method
    WHERE "order" = NEW.id
      AND symbolika_normalize_item_status(item_status) <> 'cancelled'
      AND (
        symbolika_normalize_item_status(item_status) IS DISTINCT FROM 'delivered'
        OR office_status IS DISTINCT FROM 'not_in_office'
        OR shipping_method IS DISTINCT FROM NEW.shipping_method
-       OR (ready_production_status IS NOT NULL AND production_status IS DISTINCT FROM ready_production_status)
      );
 
   RETURN NEW;

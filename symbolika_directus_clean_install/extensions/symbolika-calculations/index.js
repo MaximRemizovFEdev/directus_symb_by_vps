@@ -2078,15 +2078,21 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       const readyProductionStatus = await getReadyProductionStatusId();
       if (deliveredId) update.order_status = deliveredId;
 
-      await database('orders_items')
+      const deliveryItems = database('orders_items')
         .where({ order: orderId })
-        .whereNot('item_status', 'cancelled')
-        .update({
-          item_status: 'delivered',
-          office_status: NOT_IN_OFFICE,
-          shipping_method: order.shipping_method,
-          ...(readyProductionStatus ? { production_status: readyProductionStatus } : {}),
-        });
+        .whereNot('item_status', 'cancelled');
+
+      // Setting production_status and item_status together lets the database
+      // workflow derive `ready` from production and overwrite `delivered`.
+      // Finish production first, then persist the final delivery state.
+      if (readyProductionStatus) {
+        await deliveryItems.clone().update({ production_status: readyProductionStatus });
+      }
+      await deliveryItems.update({
+        item_status: 'delivered',
+        office_status: NOT_IN_OFFICE,
+        shipping_method: order.shipping_method,
+      });
     }
 
     await database('orders').where({ id: orderId }).update(update);
