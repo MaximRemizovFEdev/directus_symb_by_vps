@@ -45,11 +45,14 @@ BEGIN
 END;
 $$;
 
--- Repair positions of already delivered non-office orders after installing
--- the corrected trigger. Production status is normalized first for the same
--- reason as in the trigger above.
+-- Repair historical rows without firing the expensive per-item refresh tree.
+-- All affected derived item buckets are mirrored explicitly below.
+SET LOCAL session_replication_role = 'replica';
 UPDATE orders_items item
-   SET production_status = ready_status.id
+   SET item_status = 'delivered',
+       office_status = 'not_in_office',
+       shipping_method = order_row.shipping_method,
+       production_status = ready_status.id
   FROM orders order_row
   JOIN order_statuses order_status ON order_status.id = order_row.order_status
   CROSS JOIN LATERAL (
@@ -63,22 +66,48 @@ UPDATE orders_items item
    AND order_status.name = U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d'
    AND order_row.shipping_method IS DISTINCT FROM 'office_pickup'
    AND symbolika_normalize_item_status(item.item_status) <> 'cancelled'
-   AND item.production_status IS DISTINCT FROM ready_status.id;
-
-UPDATE orders_items item
-   SET item_status = 'delivered',
-       office_status = 'not_in_office',
-       shipping_method = order_row.shipping_method
-  FROM orders order_row
-  JOIN order_statuses order_status ON order_status.id = order_row.order_status
- WHERE item."order" = order_row.id
-   AND order_status.name = U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d'
-   AND order_row.shipping_method IS DISTINCT FROM 'office_pickup'
-   AND symbolika_normalize_item_status(item.item_status) <> 'cancelled'
    AND (
      symbolika_normalize_item_status(item.item_status) IS DISTINCT FROM 'delivered'
      OR item.office_status IS DISTINCT FROM 'not_in_office'
      OR item.shipping_method IS DISTINCT FROM order_row.shipping_method
+     OR item.production_status IS DISTINCT FROM ready_status.id
    );
+
+UPDATE my_orders_completed_items bucket
+   SET item_status = source.item_status,
+       production_status = source.production_status,
+       office_status = source.office_status
+  FROM orders_items source
+ WHERE source.id = bucket.id
+   AND (
+     bucket.item_status IS DISTINCT FROM source.item_status
+     OR bucket.production_status IS DISTINCT FROM source.production_status
+     OR bucket.office_status IS DISTINCT FROM source.office_status
+   );
+
+UPDATE my_orders_unpaid_items bucket
+   SET item_status = source.item_status,
+       production_status = source.production_status,
+       office_status = source.office_status
+  FROM orders_items source
+ WHERE source.id = bucket.id
+   AND (
+     bucket.item_status IS DISTINCT FROM source.item_status
+     OR bucket.production_status IS DISTINCT FROM source.production_status
+     OR bucket.office_status IS DISTINCT FROM source.office_status
+   );
+
+UPDATE my_orders_in_work_items bucket
+   SET item_status = source.item_status,
+       production_status = source.production_status,
+       office_status = source.office_status
+  FROM orders_items source
+ WHERE source.id = bucket.id
+   AND (
+     bucket.item_status IS DISTINCT FROM source.item_status
+     OR bucket.production_status IS DISTINCT FROM source.production_status
+     OR bucket.office_status IS DISTINCT FROM source.office_status
+   );
+SET LOCAL session_replication_role = 'origin';
 
 COMMIT;
