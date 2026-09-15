@@ -548,6 +548,7 @@ ALTER TABLE contractors ADD COLUMN IF NOT EXISTS default_pickup_days integer;
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS pickup_notes text;
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS supplier_kind character varying(64) DEFAULT 'contractor';
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS is_internal_production boolean NOT NULL DEFAULT false;
+ALTER TABLE contractors ADD COLUMN IF NOT EXISTS allows_item_cost boolean NOT NULL DEFAULT false;
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS website_url text;
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS balance_adjustment numeric(14,2) NOT NULL DEFAULT 0;
 ALTER TABLE contractors ADD COLUMN IF NOT EXISTS balance_adjustment_comment text;
@@ -2167,14 +2168,18 @@ AS $$
 BEGIN
   IF NEW.contractor_1 IS NOT NULL AND EXISTS (
     SELECT 1 FROM contractors c
-    WHERE c.id = NEW.contractor_1 AND COALESCE(c.is_internal_production, false)
+    WHERE c.id = NEW.contractor_1
+      AND COALESCE(c.is_internal_production, false)
+      AND NOT COALESCE(c.allows_item_cost, false)
   ) THEN
     NEW.contractor_1_cost := 0;
   END IF;
 
   IF NEW.contractor_2 IS NOT NULL AND EXISTS (
     SELECT 1 FROM contractors c
-    WHERE c.id = NEW.contractor_2 AND COALESCE(c.is_internal_production, false)
+    WHERE c.id = NEW.contractor_2
+      AND COALESCE(c.is_internal_production, false)
+      AND NOT COALESCE(c.allows_item_cost, false)
   ) THEN
     NEW.contractor_2_cost := 0;
   END IF;
@@ -2191,7 +2196,9 @@ UPDATE orders_items oi
 SET contractor_1_cost = 0
 WHERE EXISTS (
   SELECT 1 FROM contractors c
-  WHERE c.id = oi.contractor_1 AND COALESCE(c.is_internal_production, false)
+  WHERE c.id = oi.contractor_1
+    AND COALESCE(c.is_internal_production, false)
+    AND NOT COALESCE(c.allows_item_cost, false)
 )
 AND COALESCE(oi.contractor_1_cost, 0) <> 0;
 
@@ -2199,7 +2206,9 @@ UPDATE orders_items oi
 SET contractor_2_cost = 0
 WHERE EXISTS (
   SELECT 1 FROM contractors c
-  WHERE c.id = oi.contractor_2 AND COALESCE(c.is_internal_production, false)
+  WHERE c.id = oi.contractor_2
+    AND COALESCE(c.is_internal_production, false)
+    AND NOT COALESCE(c.allows_item_cost, false)
 )
 AND COALESCE(oi.contractor_2_cost, 0) <> 0;
 
@@ -3932,6 +3941,8 @@ AS $$
 DECLARE
   contractor_1_internal boolean := false;
   contractor_2_internal boolean := false;
+  contractor_1_cost_allowed boolean := false;
+  contractor_2_cost_allowed boolean := false;
   contractor_1_screen boolean := false;
   contractor_2_screen boolean := false;
   effective_unit_cost numeric := 0;
@@ -3939,8 +3950,9 @@ BEGIN
   IF NEW.contractor_1 IS NOT NULL THEN
     SELECT
       COALESCE(is_internal_production, false),
+      COALESCE(allows_item_cost, false),
       COALESCE(name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%', false)
-    INTO contractor_1_internal, contractor_1_screen
+    INTO contractor_1_internal, contractor_1_cost_allowed, contractor_1_screen
     FROM contractors
     WHERE id = NEW.contractor_1;
   END IF;
@@ -3948,16 +3960,19 @@ BEGIN
   IF NEW.contractor_2 IS NOT NULL THEN
     SELECT
       COALESCE(is_internal_production, false),
+      COALESCE(allows_item_cost, false),
       COALESCE(name ILIKE U&'%\0448\0435\043b\043a\043e\0433\0440\0430\0444%', false)
-    INTO contractor_2_internal, contractor_2_screen
+    INTO contractor_2_internal, contractor_2_cost_allowed, contractor_2_screen
     FROM contractors
     WHERE id = NEW.contractor_2;
   END IF;
 
   effective_unit_cost :=
-    CASE WHEN COALESCE(contractor_1_internal, false) OR COALESCE(contractor_1_screen, false)
+    CASE WHEN (COALESCE(contractor_1_internal, false) AND NOT COALESCE(contractor_1_cost_allowed, false))
+                   OR COALESCE(contractor_1_screen, false)
       THEN 0 ELSE COALESCE(NEW.contractor_1_cost, 0) END
-    + CASE WHEN COALESCE(contractor_2_internal, false) OR COALESCE(contractor_2_screen, false)
+    + CASE WHEN (COALESCE(contractor_2_internal, false) AND NOT COALESCE(contractor_2_cost_allowed, false))
+                   OR COALESCE(contractor_2_screen, false)
       THEN 0 ELSE COALESCE(NEW.contractor_2_cost, 0) END
     + CASE WHEN COALESCE(contractor_1_screen, false)
              OR COALESCE(contractor_2_screen, false)
@@ -16329,17 +16344,19 @@ ON CONFLICT (
   (COALESCE(product_subcategory, 0)), (COALESCE(application_method, 0))
 ) DO UPDATE SET priority = 1, is_active = true;
 
--- Personal internal executor for plastic cards and plastic badges. Keep the
--- production executor in the contractor layer used by orders_items, but bind
--- it to the employee account when that employee already exists.
+-- Personal piecework executor for plastic cards and plastic badges. Keep the
+-- executor in the contractor layer used by orders_items and bind it to the
+-- employee account, but do not classify its payable piecework as cost-free
+-- internal production.
 INSERT INTO contractors (
-  name, contact_name, directus_user, approval_status, is_internal_production
+  name, contact_name, directus_user, approval_status, is_internal_production, allows_item_cost
 )
 SELECT
   U&'\041a\0430\043b\044c\0432\0438\043d \041c\0430\043a\0441\0438\043c',
   U&'\041a\0430\043b\044c\0432\0438\043d \041c\0430\043a\0441\0438\043c',
   employee.directus_user,
   'approved',
+  true,
   true
 FROM (SELECT 1) seed
 LEFT JOIN LATERAL (
@@ -16358,7 +16375,8 @@ WHERE NOT EXISTS (
 UPDATE contractors contractor
 SET contact_name = COALESCE(NULLIF(contractor.contact_name, ''), U&'\041a\0430\043b\044c\0432\0438\043d \041c\0430\043a\0441\0438\043c'),
     approval_status = 'approved',
-    is_internal_production = true
+    is_internal_production = true,
+    allows_item_cost = true
 WHERE lower(trim(contractor.name)) = lower(trim(U&'\041a\0430\043b\044c\0432\0438\043d \041c\0430\043a\0441\0438\043c'))
 ;
 

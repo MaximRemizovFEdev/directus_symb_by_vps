@@ -216,12 +216,12 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
 
     const contractor = await database('contractors')
       .where({ id: contractorId })
-      .select('name', 'is_internal_production')
+      .select('name', 'is_internal_production', 'allows_item_cost')
       .first();
     const isScreenPrinting = String(contractor?.name || '').toLowerCase().includes('шелкограф');
 
     return {
-      cost: contractor?.is_internal_production || isScreenPrinting ? 0 : num(value),
+      cost: (contractor?.is_internal_production && !contractor?.allows_item_cost) || isScreenPrinting ? 0 : num(value),
       isScreenPrinting,
     };
   }
