@@ -7238,7 +7238,7 @@ export const CostingModule = {
       this.openPaymentDialog(
         { ...order, payment_type: this.entityId(order.payment_type) || '' },
         {
-          source: 'order_issue',
+          source: 'office_issue',
           returnToOrderIssue: true,
           orderIssueOrderId: Number(order.id),
         },
@@ -7641,7 +7641,7 @@ export const CostingModule = {
     async saveOfficePayment() {
       if (!this.paymentDialog?.row) return;
       const { row, amount, paymentDate, paymentType, comment, returnToOrderIssue, orderIssueOrderId, mode, editingPaymentId } = this.paymentDialog;
-      const isOfficeIssue = this.paymentDialog.source === 'office_issue'
+      const isOfficeIssue = ['office_issue', 'order_issue'].includes(this.paymentDialog.source)
         || (row?.office_payment_due !== undefined && (this.activeTab === 'office' || row?.office_issue !== undefined));
       const orderId = this.paymentOrderId(row, this.paymentDialog.orderId || orderIssueOrderId);
       const key = `${editingPaymentId ? 'order_payment_edit' : (isOfficeIssue ? 'office_issue' : 'order_payments')}:${editingPaymentId || row.id || orderId}:payment`;
