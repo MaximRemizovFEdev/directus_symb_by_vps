@@ -3206,12 +3206,17 @@ AS $$
 DECLARE
   delivered_status_id integer;
 BEGIN
+  delivered_status_id := symbolika_order_status_id(U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d');
+
   IF NEW.shipping_method = 'office_pickup' THEN
     NEW.delivery_status := NULL;
   ELSE
     NEW.office_status := 'not_in_office';
 
-    IF TG_OP = 'INSERT'
+    IF delivered_status_id IS NOT NULL
+       AND NEW.order_status = delivered_status_id THEN
+      NEW.delivery_status := 'delivered';
+    ELSIF TG_OP = 'INSERT'
        OR NEW.shipping_method IS DISTINCT FROM OLD.shipping_method THEN
       NEW.delivery_status := COALESCE(NULLIF(NEW.delivery_status, ''), 'pending');
     ELSE
@@ -3219,7 +3224,6 @@ BEGIN
     END IF;
 
     IF NEW.delivery_status = 'delivered' THEN
-      delivered_status_id := symbolika_order_status_id(U&'\0414\043e\0441\0442\0430\0432\043b\0435\043d');
       IF delivered_status_id IS NOT NULL THEN
         NEW.order_status := delivered_status_id;
       END IF;
@@ -3897,7 +3901,7 @@ FOR EACH ROW
 EXECUTE FUNCTION symbolika_validate_order_workflow_transition_trigger();
 
 CREATE TRIGGER symbolika_normalize_order_delivery
-BEFORE INSERT OR UPDATE OF shipping_method, delivery_status ON orders
+BEFORE INSERT OR UPDATE OF shipping_method, delivery_status, order_status ON orders
 FOR EACH ROW
 EXECUTE FUNCTION symbolika_normalize_order_delivery_trigger();
 
