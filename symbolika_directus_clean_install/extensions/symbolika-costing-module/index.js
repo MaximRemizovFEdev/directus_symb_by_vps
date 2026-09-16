@@ -25444,6 +25444,100 @@ export const CostingModule = {
           }
         }
 
+        /* Reconciliations have five columns. Keep their proportions separate
+           from the four-column Clients/Companies directory table. */
+        .symbolika-costing-finance-payers {
+          min-inline-size: 1040px !important;
+        }
+
+        .symbolika-costing-finance-payers col:nth-child(1) { width: 48px !important; }
+        .symbolika-costing-finance-payers col:nth-child(2) { width: 30% !important; }
+        .symbolika-costing-finance-payers col:nth-child(3) { width: 18% !important; }
+        .symbolika-costing-finance-payers col:nth-child(4) { width: 24% !important; }
+        .symbolika-costing-finance-payers col:nth-child(5) { width: auto !important; }
+
+        .symbolika-costing-finance-payers tbody tr.symbolika-costing-directory-row td {
+          block-size: auto;
+          min-block-size: 78px;
+        }
+
+        .symbolika-costing-finance-payers .symbolika-costing-directory-primary {
+          white-space: normal;
+        }
+
+        .symbolika-costing-finance-payers .symbolika-costing-directory-identity {
+          display: grid;
+          inline-size: 100%;
+        }
+
+        .symbolika-costing-finance-payers .symbolika-costing-money-stack {
+          inline-size: 100%;
+          max-inline-size: 250px;
+        }
+
+        .symbolika-costing-finance-balance-layout {
+          display: grid;
+          grid-template-columns: minmax(112px, 1fr) auto;
+          gap: 12px;
+          align-items: center;
+          min-inline-size: 0;
+        }
+
+        .symbolika-costing-finance-balance-layout .symbolika-costing-client-finance-actions {
+          flex-wrap: nowrap;
+        }
+
+        .symbolika-costing-finance-payers-wrap {
+          overflow-x: auto;
+          overflow-y: visible;
+          scrollbar-gutter: stable;
+        }
+
+        @media (max-width: 980px) {
+          .symbolika-costing-finance-payers {
+            min-inline-size: 0 !important;
+          }
+
+          .symbolika-costing-finance-payers tbody tr.symbolika-costing-directory-row {
+            grid-template-columns: 34px minmax(0, 1fr);
+            gap: 8px 12px;
+          }
+
+          .symbolika-costing-finance-payers tbody tr.symbolika-costing-directory-row td:first-child {
+            grid-column: 1;
+            grid-row: 1;
+          }
+
+          .symbolika-costing-finance-payers .symbolika-costing-directory-primary {
+            grid-column: 2;
+            grid-row: 1;
+          }
+
+          .symbolika-costing-finance-payers tbody tr.symbolika-costing-directory-row td:nth-child(3) {
+            grid-column: 2;
+            grid-row: 2;
+          }
+
+          .symbolika-costing-finance-payers tbody tr.symbolika-costing-directory-row td:nth-child(4),
+          .symbolika-costing-finance-payers tbody tr.symbolika-costing-directory-row td:nth-child(5) {
+            grid-column: 1 / -1;
+          }
+
+          .symbolika-costing-finance-payers .symbolika-costing-money-stack {
+            max-inline-size: none;
+          }
+        }
+
+        @media (max-width: 620px) {
+          .symbolika-costing-finance-balance-layout {
+            grid-template-columns: minmax(0, 1fr);
+          }
+
+          .symbolika-costing-finance-balance-layout .symbolika-costing-client-finance-actions {
+            justify-content: flex-start;
+          }
+        }
+
         .symbolika-costing-detail-backdrop {
           position: fixed;
           inset: 0;
@@ -28242,6 +28336,39 @@ export const CostingModule = {
           .symbolika-costing-table-finance-items :is(a, button, select, input) {
             max-inline-size: 100%;
             overflow-wrap: anywhere;
+          }
+
+          .symbolika-costing-finance-payers tbody tr.symbolika-costing-directory-row {
+            grid-template-columns: 34px minmax(0, 1fr);
+          }
+
+          .symbolika-costing-finance-payers tbody tr.symbolika-costing-directory-row td:first-child {
+            grid-column: 1;
+            grid-row: 1;
+          }
+
+          .symbolika-costing-finance-payers tbody tr.symbolika-costing-directory-row td:nth-child(2) {
+            grid-column: 2;
+            grid-row: 1;
+          }
+
+          .symbolika-costing-finance-payers tbody tr.symbolika-costing-directory-row td:nth-child(3) {
+            grid-column: 2;
+            grid-row: 2;
+          }
+
+          .symbolika-costing-finance-payers tbody tr.symbolika-costing-directory-row td:nth-child(4),
+          .symbolika-costing-finance-payers tbody tr.symbolika-costing-directory-row td:nth-child(5) {
+            grid-column: 1 / -1;
+          }
+
+          .symbolika-costing-finance-payers tbody tr.symbolika-costing-expanded-row {
+            display: block;
+          }
+
+          .symbolika-costing-finance-payers tbody tr.symbolika-costing-expanded-row td {
+            display: block;
+            inline-size: 100% !important;
           }
 
           .symbolika-costing-admin-table {
@@ -33951,8 +34078,8 @@ export const CostingModule = {
             </div>
           </div>
 
-          <div v-if="financeLevel === 'orders'" class="symbolika-costing-table-wrap">
-            <table class="symbolika-costing-table symbolika-costing-table-compact symbolika-costing-table-finance symbolika-costing-directory-table">
+          <div v-if="financeLevel === 'orders'" class="symbolika-costing-table-wrap symbolika-costing-finance-payers-wrap">
+            <table class="symbolika-costing-table symbolika-costing-table-compact symbolika-costing-table-finance symbolika-costing-directory-table symbolika-costing-finance-payers">
               <colgroup>
                 <col style="width: 52px" />
                 <col />
@@ -34004,12 +34131,14 @@ export const CostingModule = {
                       </div>
                     </td>
                     <td>
-                      <div class="symbolika-costing-money-stack">
-                        <span>Баланс <strong><span class="symbolika-costing-pill" :class="balanceBadgeClass(clientBalance(row))">{{ formatMoney(clientBalance(row)) }}</span></strong></span>
-                      </div>
-                      <div class="symbolika-costing-client-finance-actions">
-                        <button type="button" class="symbolika-costing-button symbolika-costing-button-compact" @click="openClientPaymentForRow(row)"><v-icon name="payments" small />Оплата</button>
-                        <button type="button" class="symbolika-costing-mini-button" @click="openClientOperationForRow(row)"><v-icon name="add" small />Операция</button>
+                      <div class="symbolika-costing-finance-balance-layout">
+                        <div class="symbolika-costing-money-stack">
+                          <span>Баланс <strong><span class="symbolika-costing-pill" :class="balanceBadgeClass(clientBalance(row))">{{ formatMoney(clientBalance(row)) }}</span></strong></span>
+                        </div>
+                        <div class="symbolika-costing-client-finance-actions">
+                          <button type="button" class="symbolika-costing-button symbolika-costing-button-compact" @click="openClientPaymentForRow(row)"><v-icon name="payments" small />Оплата</button>
+                          <button type="button" class="symbolika-costing-mini-button" @click="openClientOperationForRow(row)"><v-icon name="add" small />Операция</button>
+                        </div>
                       </div>
                     </td>
                   </tr>

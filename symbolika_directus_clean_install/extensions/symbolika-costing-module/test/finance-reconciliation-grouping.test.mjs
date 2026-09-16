@@ -59,6 +59,9 @@ test('order reconciliation is grouped by payer and exposes expandable details', 
   const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
 
   assert.match(source, /<template v-for="row in visibleClientRows" :key="row\.key">/);
+  assert.match(source, /symbolika-costing-finance-payers-wrap/);
+  assert.match(source, /symbolika-costing-finance-payers/);
+  assert.match(source, /symbolika-costing-finance-balance-layout/);
   assert.match(source, /Показать заказы и операции/);
   assert.match(source, /v-for="order in row\.orders"/);
   assert.match(source, /v-for="operation in row\.operations"/);
