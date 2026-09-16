@@ -1,6 +1,7 @@
 export const orderDetailFields = Object.freeze([
   'id',
   'order_number',
+  'invoice_number_1c',
   'date',
   'deadline',
   'customer.id',

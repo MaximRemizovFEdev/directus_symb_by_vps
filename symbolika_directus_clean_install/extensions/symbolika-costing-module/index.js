@@ -469,6 +469,7 @@ const expenseTypes = [
 const orderSummaryFields = [
   'id',
   'order_number',
+  'invoice_number_1c',
   'date',
   'deadline',
   'customer',
@@ -501,6 +502,7 @@ const orderSummaryFields = [
 const overviewFields = [
   'id',
   'order_number',
+  'invoice_number_1c',
   'date',
   'deadline',
   'customer',
@@ -2382,6 +2384,7 @@ export const CostingModule = {
       const rows = this.deadlineRows[this.activeDeadlineBucket] || [];
       return this.sortRows(this.applySearchAndFilter(rows, (row) => [
         row.order_number,
+        row.invoice_number_1c,
         row.customer_display,
         row.manager_name,
         row.order_status_name,
@@ -2723,6 +2726,7 @@ export const CostingModule = {
     visibleArchivedOrderRows() {
       return this.sortRows(this.applySearchAndFilter(this.allOrderRows, (row) => [
         row.order_number,
+        row.invoice_number_1c,
         row.customer_display,
         this.resolveCustomer(row)?.name,
         this.resolveCompany(row)?.name,
@@ -3435,6 +3439,7 @@ export const CostingModule = {
       const ownRows = (this.myOrderRows || []).filter((row) => this.orderBelongsToCurrentEmployee(row));
       return this.sortRows(this.applySearchAndFilter(ownRows, (row) => [
         row.order_number,
+        row.invoice_number_1c,
         row.customer_display,
         this.resolveCustomer(row)?.name,
         this.resolveCompany(row)?.name,
@@ -3447,6 +3452,7 @@ export const CostingModule = {
     visibleAllOrderRows() {
       return this.sortRows(this.applySearchAndFilter(this.allOrderRows, (row) => [
         row.order_number,
+        row.invoice_number_1c,
         row.customer_display,
         this.resolveCustomer(row)?.name,
         this.resolveCompany(row)?.name,
@@ -3463,6 +3469,7 @@ export const CostingModule = {
       const rows = this.orderItemsForRows(orderRows);
       return this.sortRows(this.applySearchAndFilter(rows, (row) => [
         this.orderNumber(row),
+        row.invoice_number_1c || row.order_context?.invoice_number_1c,
         row.product_name,
         this.detailCustomerName(row),
         this.detailCompanyName(row),
@@ -4996,6 +5003,7 @@ export const CostingModule = {
     filterRows(rows, archive = false) {
       return this.applySearchAndFilter(rows, (row) => [
           row.order_number,
+          row.invoice_number_1c,
           row.product_name,
           row.technical_task_text,
           row.production_comment,
@@ -5050,6 +5058,7 @@ export const CostingModule = {
           row.section,
           row.reason,
           row.order_number,
+          row.invoice_number_1c,
           row.product_name,
           row.customer_name,
           row.customer_company_name,
@@ -10601,7 +10610,7 @@ export const CostingModule = {
       return !!(
         dialog.customer || dialog.customer_company || dialog.create_customer || dialog.create_company
         || String(dialog.new_customer_name || '').trim() || String(dialog.new_company_name || '').trim()
-        || dialog.deadline || dialog.payment_type || String(dialog.comment || '').trim()
+        || dialog.deadline || dialog.payment_type || String(dialog.invoice_number_1c || '').trim() || String(dialog.comment || '').trim()
         || (dialog.items || []).some((item) => (
           String(item.product_name || '').trim() || Number(item.quantity || 0) > 0
           || String(item.technical_task_text || '').trim() || String(item._layout_file?.name || '').trim()
@@ -10765,6 +10774,7 @@ export const CostingModule = {
         shipping_method: 'office_pickup',
         payment_on_receipt: false,
         payment_type: '',
+        invoice_number_1c: '',
         comment: '',
         shipping_comment: '',
         items: [this.newOrderItem('')],
@@ -11966,6 +11976,7 @@ export const CostingModule = {
           shipping_comment: form.shipping_comment || null,
           payment_on_receipt: !!form.payment_on_receipt,
           payment_type: form.payment_type ? Number(form.payment_type) : null,
+          invoice_number_1c: String(form.invoice_number_1c || '').trim() || null,
           comment: form.comment || null,
         };
         const orderManagerId = Number(form.manager_employee || this.currentEmployeeId || 0);
@@ -13037,6 +13048,12 @@ export const CostingModule = {
     },
 
     canEditOrderPaymentType(row) {
+      if (!this.detailIsOrder(row)) return false;
+      return this.hasManagerOverrideAccess
+        || this.orderBelongsToCurrentEmployee(row);
+    },
+
+    canEditOrderDocumentFields(row) {
       if (!this.detailIsOrder(row)) return false;
       return this.hasManagerOverrideAccess
         || this.orderBelongsToCurrentEmployee(row);
@@ -36460,6 +36477,11 @@ export const CostingModule = {
                 </select>
               </label>
 
+              <label class="symbolika-costing-label symbolika-mobile-order-extra">
+                Номер счёта в 1С
+                <input v-model.trim="newOrderDialog.invoice_number_1c" class="symbolika-costing-input" placeholder="Например: 1542 от 16.09.2026" />
+              </label>
+
               <label class="symbolika-costing-checkbox symbolika-mobile-order-extra">
                 <input v-model="newOrderDialog.payment_on_receipt" type="checkbox" />
                 Оплата при получении
@@ -38132,6 +38154,20 @@ export const CostingModule = {
             </div>
 
             <div class="symbolika-costing-detail-section-title">Финансы</div>
+            <div class="symbolika-costing-detail-field is-primary">
+              <div class="symbolika-costing-detail-label">Номер счёта в 1С</div>
+              <div class="symbolika-costing-detail-value">
+                <input
+                  v-if="canEditOrderDocumentFields(detail.row)"
+                  class="symbolika-costing-input"
+                  :class="savingWorkClass('orders', detail.row, 'invoice_number_1c')"
+                  :value="detail.row.invoice_number_1c || ''"
+                  placeholder="Не указан"
+                  @change="saveOrderField(detail.row, 'invoice_number_1c', $event.target.value.trim())"
+                />
+                <span v-else>{{ detail.row.invoice_number_1c || 'Не указан' }}</span>
+              </div>
+            </div>
             <div class="symbolika-costing-detail-field is-primary">
               <div class="symbolika-costing-detail-label">Тип оплаты</div>
               <div class="symbolika-costing-detail-value">

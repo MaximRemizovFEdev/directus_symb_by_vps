@@ -233,6 +233,7 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS phone character varying(255);
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS birthday date;
 ALTER TABLE directus_users ADD COLUMN IF NOT EXISTS phone character varying(255);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_status character varying(32);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number_1c character varying(255);
 
 CREATE SEQUENCE IF NOT EXISTS orders_order_number_seq;
 
@@ -7060,6 +7061,7 @@ CREATE TABLE IF NOT EXISTS orders_overview (
   id integer PRIMARY KEY,
   order_link integer,
   order_number character varying(255),
+  invoice_number_1c character varying(255),
   date timestamp without time zone,
   deadline timestamp without time zone,
   customer integer,
@@ -7169,6 +7171,7 @@ CREATE TABLE IF NOT EXISTS my_orders_in_work (
   id integer PRIMARY KEY,
   order_link integer,
   order_number character varying(255),
+  invoice_number_1c character varying(255),
   date timestamp without time zone,
   deadline timestamp without time zone,
   customer_display character varying(255),
@@ -7195,6 +7198,56 @@ ALTER TABLE my_orders_unpaid ADD COLUMN IF NOT EXISTS shipping_comment text;
 ALTER TABLE my_orders_in_work ADD COLUMN IF NOT EXISTS delivery_status character varying(32);
 ALTER TABLE my_orders_completed ADD COLUMN IF NOT EXISTS delivery_status character varying(32);
 ALTER TABLE my_orders_unpaid ADD COLUMN IF NOT EXISTS delivery_status character varying(32);
+
+ALTER TABLE orders_overview ADD COLUMN IF NOT EXISTS invoice_number_1c character varying(255);
+ALTER TABLE orders_due_today ADD COLUMN IF NOT EXISTS invoice_number_1c character varying(255);
+ALTER TABLE orders_due_this_week ADD COLUMN IF NOT EXISTS invoice_number_1c character varying(255);
+ALTER TABLE orders_due_next_week ADD COLUMN IF NOT EXISTS invoice_number_1c character varying(255);
+ALTER TABLE orders_due_this_month ADD COLUMN IF NOT EXISTS invoice_number_1c character varying(255);
+ALTER TABLE orders_due_urgent ADD COLUMN IF NOT EXISTS invoice_number_1c character varying(255);
+ALTER TABLE orders_due_next_month ADD COLUMN IF NOT EXISTS invoice_number_1c character varying(255);
+ALTER TABLE my_orders_in_work ADD COLUMN IF NOT EXISTS invoice_number_1c character varying(255);
+ALTER TABLE my_orders_completed ADD COLUMN IF NOT EXISTS invoice_number_1c character varying(255);
+ALTER TABLE my_orders_unpaid ADD COLUMN IF NOT EXISTS invoice_number_1c character varying(255);
+
+CREATE OR REPLACE FUNCTION symbolika_fill_order_invoice_number_1c()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  SELECT o.invoice_number_1c
+    INTO NEW.invoice_number_1c
+    FROM orders o
+   WHERE o.id = NEW.id;
+  RETURN NEW;
+END;
+$$;
+
+DO $$
+DECLARE
+  mirror_table text;
+BEGIN
+  FOREACH mirror_table IN ARRAY ARRAY[
+    'orders_overview',
+    'orders_due_today',
+    'orders_due_this_week',
+    'orders_due_next_week',
+    'orders_due_this_month',
+    'orders_due_urgent',
+    'orders_due_next_month',
+    'my_orders_in_work',
+    'my_orders_completed',
+    'my_orders_unpaid'
+  ]
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS symbolika_fill_order_invoice_number_1c ON %I', mirror_table);
+    EXECUTE format(
+      'CREATE TRIGGER symbolika_fill_order_invoice_number_1c BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION symbolika_fill_order_invoice_number_1c()',
+      mirror_table
+    );
+  END LOOP;
+END;
+$$;
 
 CREATE TABLE IF NOT EXISTS my_orders_in_work_items (
   id integer PRIMARY KEY,
@@ -8538,6 +8591,7 @@ summary_fields(field_name, interface_name, sort_order, width_value, label, hidde
   ('id', 'numeric', 1, 'full', NULL, true),
   ('order_link', 'symbolika-order-link', 2, 'half', U&'\041f\0435\0440\0435\0439\0442\0438 \0432 \0437\0430\043a\0430\0437', false),
   ('order_number', 'input', 3, 'half', U&'\041d\043e\043c\0435\0440 \0437\0430\043a\0430\0437\0430', false),
+  ('invoice_number_1c', 'input', 4, 'half', U&'\041d\043e\043c\0435\0440 \0441\0447\0451\0442\0430 \0432 1\0421', false),
   ('date', 'datetime', 4, 'half', U&'\0414\0430\0442\0430', false),
   ('deadline', 'datetime', 5, 'half', U&'\0421\0440\043e\043a', false),
   ('customer_display', 'input', 6, 'half', U&'\0417\0430\043a\0430\0437\0447\0438\043a', false),
@@ -8692,6 +8746,7 @@ my_fields(field_name, interface_name, sort_order, width_value, label, hidden_val
   ('id', 'numeric', 1, 'full', NULL, true, NULL, NULL, NULL::json),
   ('order_link', 'symbolika-order-link', 2, 'half', U&'\041f\0435\0440\0435\0439\0442\0438 \0432 \0437\0430\043a\0430\0437', false, NULL, NULL, NULL::json),
   ('order_number', 'input', 3, 'half', U&'\041d\043e\043c\0435\0440 \0437\0430\043a\0430\0437\0430', false, NULL, NULL, NULL::json),
+  ('invoice_number_1c', 'input', 4, 'half', U&'\041d\043e\043c\0435\0440 \0441\0447\0451\0442\0430 \0432 1\0421', false, NULL, NULL, NULL::json),
   ('date', 'datetime', 4, 'half', U&'\0414\0430\0442\0430', false, NULL, NULL, NULL::json),
   ('deadline', 'datetime', 5, 'half', U&'\0421\0440\043e\043a', false, NULL, NULL, NULL::json),
   ('customer_display', 'input', 6, 'half', U&'\0417\0430\043a\0430\0437\0447\0438\043a', false, NULL, NULL, NULL::json),
@@ -9608,7 +9663,8 @@ WITH layout(collection_name, field_name, group_name, sort_value, width_value, hi
   ('orders', 'office_payment_due', 'payment', 4, 'half', false),
   ('orders', 'payment_on_receipt', 'payment', 5, 'half', false),
   ('orders', 'payment_type', 'payment', 6, 'half', false),
-  ('orders', 'payments', 'payment', 7, 'full', false),
+  ('orders', 'invoice_number_1c', 'payment', 7, 'half', false),
+  ('orders', 'payments', 'payment', 8, 'full', false),
   ('orders', 'admin', NULL, 90, 'full', false),
   ('orders', 'items_total_cost', 'admin', 1, 'half', false),
   ('orders', 'items_tax_sum', 'admin', 2, 'half', false),
@@ -17352,6 +17408,31 @@ WHERE collection = 'orders_items'
     '00000000-0000-4000-8000-000000000201',
     '00000000-0000-4000-8000-000000000202'
   );
+
+DELETE FROM directus_fields
+WHERE collection = 'orders'
+  AND field = 'invoice_number_1c';
+
+INSERT INTO directus_fields (
+  collection, field, interface, readonly, hidden, sort, width, translations, required, searchable
+) VALUES (
+  'orders', 'invoice_number_1c', 'input', false, false, 7, 'half',
+  json_build_array(json_build_object('language','ru-RU','translation',U&'\041d\043e\043c\0435\0440 \0441\0447\0451\0442\0430 \0432 1\0421'))::json,
+  false, true
+);
+
+UPDATE directus_fields
+SET "group" = 'payment', sort = 7, width = 'half'
+WHERE collection = 'orders'
+  AND field = 'invoice_number_1c';
+
+UPDATE directus_permissions
+SET fields = concat_ws(',', NULLIF(fields, ''), 'invoice_number_1c')
+WHERE collection = 'orders'
+  AND action IN ('create', 'read', 'update')
+  AND fields IS NOT NULL
+  AND fields <> '*'
+  AND NOT ('invoice_number_1c' = ANY(string_to_array(fields, ',')));
 
 COMMIT;
 
