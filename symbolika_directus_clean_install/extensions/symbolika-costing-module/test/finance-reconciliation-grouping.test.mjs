@@ -50,9 +50,56 @@ test('all company orders are reduced to one payer row', () => {
 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].key, 'company:20');
+  assert.equal(rows[0].customers.length, 2);
   assert.equal(rows[0].orders.length, 2);
   assert.equal(rows[0].order_sum, 3500);
   assert.equal(rows[0].payment_due, 3000);
+});
+
+test('customer representation keeps company contacts in separate rows', () => {
+  const context = {
+    ...financeContext('all'),
+    financeGrouping: 'customers',
+    visibleFinanceRows: [
+      { id: 1, entry_type: 'order', customer: 10, customer_name: 'Первый контакт', customer_company: 20, customer_company_name: 'Компания', manager_name: 'Менеджер', order_sum: 1000, paid_amount: 200, payment_due: 800, overpayment: 0 },
+      { id: 2, entry_type: 'order', customer: 11, customer_name: 'Второй контакт', customer_company: 20, customer_company_name: 'Компания', manager_name: 'Менеджер', order_sum: 2500, paid_amount: 500, payment_due: 2000, overpayment: 0 },
+    ],
+    giftCertificates: [],
+    customerGiftCertificateSummary: () => ({ count: 0, activeCount: 0, nominal: 0, remaining: 0 }),
+  };
+
+  const rows = CostingModule.computed.visibleClientRows.call(context);
+
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((row) => row.customer_name).sort(), ['Второй контакт', 'Первый контакт']);
+  assert.equal(rows.reduce((sum, row) => sum + row.order_sum, 0), 3500);
+});
+
+test('customer filter keeps a company contact selected instead of replacing it with the company', () => {
+  const context = {
+    financeCustomerFilter: 10,
+    financeCompanyFilter: '',
+  };
+
+  CostingModule.methods.selectFinanceCustomer.call(context);
+
+  assert.equal(context.financeCustomerFilter, 10);
+  assert.equal(context.financeCompanyFilter, '');
+});
+
+test('entity filter includes the selected customer even when the customer belongs to a company', () => {
+  const context = {
+    financeCustomerFilter: '10',
+    financeCompanyFilter: '',
+    entityId: CostingModule.methods.entityId,
+    matchesFinanceDateFilter: () => true,
+    matchesFinanceDebtFilter: () => true,
+  };
+
+  assert.equal(CostingModule.methods.matchesFinanceEntityFilter.call(context, {
+    customer: 10,
+    customer_company: 20,
+  }), true);
 });
 
 test('order reconciliation is grouped by payer and exposes expandable details', async () => {
@@ -62,6 +109,9 @@ test('order reconciliation is grouped by payer and exposes expandable details', 
   assert.match(source, /symbolika-costing-finance-payers-wrap/);
   assert.match(source, /symbolika-costing-finance-payers/);
   assert.match(source, /symbolika-costing-finance-balance-layout/);
+  assert.match(source, /financeGrouping === 'companies'/);
+  assert.match(source, /symbolika-finance-company-customers/);
+  assert.match(source, /setFinanceGrouping\('customers'\)/);
   assert.match(source, /Показать заказы и операции/);
   assert.match(source, /v-for="order in row\.orders"/);
   assert.match(source, /v-for="operation in row\.operations"/);

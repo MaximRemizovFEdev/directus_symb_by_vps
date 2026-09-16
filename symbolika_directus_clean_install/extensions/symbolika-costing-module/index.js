@@ -1303,6 +1303,7 @@ export const CostingModule = {
       financeRows: [],
       financeItemRows: [],
       financeLevel: 'orders',
+      financeGrouping: 'companies',
       financeCustomerFilter: '',
       financeCompanyFilter: '',
       financeDebtFilter: 'all',
@@ -2820,19 +2821,22 @@ export const CostingModule = {
     },
 
     visibleClientRows() {
-      const groups = new Map();
+      const customerGroups = new Map();
 
       this.visibleFinanceRows.forEach((row) => {
         const customerId = this.entityId(row.customer) || row.customer_name || '';
         const companyId = this.entityId(row.customer_company) || row.customer_company_name || '';
-        const key = companyId ? `company:${companyId}` : `customer:${customerId || 'unknown'}`;
-        const current = groups.get(key) || {
-          key,
+        const customerKey = customerId
+          ? `customer:${customerId}`
+          : (companyId ? `company:${companyId}:unassigned` : 'customer:unknown');
+        const current = customerGroups.get(customerKey) || {
+          key: customerKey,
           customer: row.customer,
-          customer_name: row.customer_name || row.counterparty_name || '-',
+          customer_name: row.customer_name || (companyId ? 'Общие операции компании' : row.counterparty_name) || '-',
           customer_company: row.customer_company,
           customer_company_name: row.customer_company_name || '',
           manager_name: row.manager_name || '-',
+          manager_names: [],
           order_sum: 0,
           paid_amount: 0,
           payment_due: 0,
@@ -2845,10 +2849,11 @@ export const CostingModule = {
         current.paid_amount += this.parseMoney(row.paid_amount);
         current.payment_due += this.parseMoney(row.payment_due);
         current.overpayment += this.parseMoney(row.overpayment);
+        if (row.manager_name && !current.manager_names.includes(row.manager_name)) current.manager_names.push(row.manager_name);
         if (!current.manager_name || current.manager_name === '-') current.manager_name = row.manager_name || '-';
         if (row.entry_type === 'operation') current.operations.push(row);
         else current.orders.push(row);
-        groups.set(key, current);
+        customerGroups.set(customerKey, current);
       });
 
       (this.giftCertificates || []).forEach((certificate) => {
@@ -2856,16 +2861,16 @@ export const CostingModule = {
         if (!customerId) return;
         const customer = this.customers.find((item) => String(item.id) === String(customerId));
         if (!customer) return;
-        const companyId = this.entityId(customer.company) || '';
-        const key = companyId ? `company:${companyId}` : `customer:${customerId}`;
-        if (!groups.has(key)) {
-          groups.set(key, {
+        const key = `customer:${customerId}`;
+        if (!customerGroups.has(key)) {
+          customerGroups.set(key, {
             key,
             customer,
             customer_name: customer.name || '-',
             customer_company: customer.company || null,
             customer_company_name: this.relatedName(customer.company),
             manager_name: this.relatedName(customer.manager, 'full_name') || '-',
+            manager_names: [this.relatedName(customer.manager, 'full_name')].filter((name) => name && name !== '-'),
             order_sum: 0,
             paid_amount: 0,
             payment_due: 0,
@@ -2876,17 +2881,17 @@ export const CostingModule = {
         }
       });
 
-      groups.forEach((row) => {
+      customerGroups.forEach((row) => {
         const companyId = this.entityId(row.customer_company);
         const customerId = this.entityId(row.customer);
-        const payer = companyId
-          ? this.companies.find((item) => String(item.id) === String(companyId))
-          : this.customers.find((item) => String(item.id) === String(customerId));
-        if (payer) {
-          const balance = this.parseMoney(payer.balance);
-          row.paid_amount = this.parseMoney(payer.payments_total_in);
-          row.payment_due = Math.max(-balance, 0);
-          row.overpayment = Math.max(balance, 0);
+        if (!companyId) {
+          const payer = this.customers.find((item) => String(item.id) === String(customerId));
+          if (payer) {
+            const balance = this.parseMoney(payer.balance);
+            row.paid_amount = this.parseMoney(payer.payments_total_in);
+            row.payment_due = Math.max(-balance, 0);
+            row.overpayment = Math.max(balance, 0);
+          }
         }
         const summary = this.customerGiftCertificateSummary(row.customer);
         row.gift_certificate_count = summary.count;
@@ -2895,10 +2900,67 @@ export const CostingModule = {
         row.gift_certificate_remaining = summary.remaining;
       });
 
-      return [...groups.values()].filter((row) => this.matchesFinanceDebtFilter(row)).sort((a, b) => {
+      const customerRows = [...customerGroups.values()].sort((a, b) => {
         const debtDiff = this.parseMoney(b.payment_due) - this.parseMoney(a.payment_due);
         if (debtDiff) return debtDiff;
         return String(a.customer_name).localeCompare(String(b.customer_name), 'ru');
+      });
+
+      if (this.financeGrouping === 'customers') {
+        return customerRows.filter((row) => this.matchesFinanceDebtFilter(row));
+      }
+
+      const payerGroups = new Map();
+      customerRows.forEach((customerRow) => {
+        const companyId = this.entityId(customerRow.customer_company);
+        const customerId = this.entityId(customerRow.customer);
+        const key = companyId ? `company:${companyId}` : `customer:${customerId || customerRow.key}`;
+        const current = payerGroups.get(key) || {
+          key,
+          customer: companyId ? null : customerRow.customer,
+          customer_name: companyId ? '' : customerRow.customer_name,
+          customer_company: companyId ? customerRow.customer_company : null,
+          customer_company_name: companyId ? customerRow.customer_company_name : '',
+          manager_name: customerRow.manager_name || '-',
+          manager_names: [],
+          order_sum: 0,
+          paid_amount: 0,
+          payment_due: 0,
+          overpayment: 0,
+          orders: [],
+          operations: [],
+          customers: [],
+        };
+        current.order_sum += this.parseMoney(customerRow.order_sum);
+        current.paid_amount += this.parseMoney(customerRow.paid_amount);
+        current.payment_due += this.parseMoney(customerRow.payment_due);
+        current.overpayment += this.parseMoney(customerRow.overpayment);
+        current.orders.push(...customerRow.orders);
+        current.operations.push(...customerRow.operations);
+        current.customers.push(customerRow);
+        (customerRow.manager_names || []).forEach((name) => {
+          if (name && !current.manager_names.includes(name)) current.manager_names.push(name);
+        });
+        payerGroups.set(key, current);
+      });
+
+      payerGroups.forEach((row) => {
+        const companyId = this.entityId(row.customer_company);
+        if (!companyId) return;
+        const payer = this.companies.find((item) => String(item.id) === String(companyId));
+        if (!payer) return;
+        const balance = this.parseMoney(payer.balance);
+        row.paid_amount = this.parseMoney(payer.payments_total_in);
+        row.payment_due = Math.max(-balance, 0);
+        row.overpayment = Math.max(balance, 0);
+      });
+
+      return [...payerGroups.values()].filter((row) => this.matchesFinanceDebtFilter(row)).sort((a, b) => {
+        const debtDiff = this.parseMoney(b.payment_due) - this.parseMoney(a.payment_due);
+        if (debtDiff) return debtDiff;
+        const aName = a.customer_company_name || a.customer_name;
+        const bName = b.customer_company_name || b.customer_name;
+        return String(aName).localeCompare(String(bName), 'ru');
       });
     },
 
@@ -3672,6 +3734,7 @@ export const CostingModule = {
     contractorOverviewContractorFilter() { this.completeActivePagingSoon(); },
     financeCustomerFilter() { this.completeActivePagingSoon(); },
     financeCompanyFilter() { this.completeActivePagingSoon(); },
+    financeGrouping() { this.completeActivePagingSoon(); },
     financeDebtFilter() { this.completeActivePagingSoon(); },
     financeDateFrom() { this.completeActivePagingSoon(); },
     financeDateTo() { this.completeActivePagingSoon(); },
@@ -3706,6 +3769,11 @@ export const CostingModule = {
       this.workspaceViewModes = JSON.parse(localStorage.getItem('symbolika-workspace-view-modes') || '{}');
     } catch {
       this.workspaceViewModes = {};
+    }
+    try {
+      this.financeGrouping = localStorage.getItem('symbolika-finance-grouping') === 'customers' ? 'customers' : 'companies';
+    } catch {
+      this.financeGrouping = 'companies';
     }
     await this.loadCurrentUser();
     await this.loadAppearanceTheme();
@@ -5863,6 +5931,12 @@ export const CostingModule = {
       this.financeLevel = level;
     },
 
+    setFinanceGrouping(grouping) {
+      this.financeGrouping = grouping === 'customers' ? 'customers' : 'companies';
+      this.expandedClientRows = {};
+      try { localStorage.setItem('symbolika-finance-grouping', this.financeGrouping); } catch {}
+    },
+
     clientOperationTypeName(value) {
       return {
         opening_balance: 'Начальный остаток',
@@ -5916,9 +5990,6 @@ export const CostingModule = {
 
     selectFinanceCustomer() {
       if (this.financeCustomerFilter) this.financeCompanyFilter = '';
-      const { customerId, companyId } = this.selectedFinanceParty();
-      this.financeCustomerFilter = customerId;
-      this.financeCompanyFilter = companyId;
     },
 
     selectFinanceCompany() {
@@ -6186,7 +6257,6 @@ export const CostingModule = {
       const companyId = this.entityId(row.customer_company);
       if (this.financeCompanyFilter && companyId !== String(this.financeCompanyFilter)) return false;
       if (this.financeCustomerFilter && customerId !== String(this.financeCustomerFilter)) return false;
-      if (this.financeCustomerFilter && !this.financeCompanyFilter && companyId) return false;
       if (!this.matchesFinanceDateFilter(row)) return false;
       if (!this.matchesFinanceDebtFilter(row)) return false;
       return true;
@@ -25617,6 +25687,89 @@ export const CostingModule = {
           flex-wrap: nowrap;
         }
 
+        .symbolika-costing-finance-grouping-switch {
+          margin-inline-end: auto;
+          border-color: color-mix(in srgb, var(--theme--primary) 32%, var(--theme--border-color));
+        }
+
+        .symbolika-finance-company-customers {
+          display: grid;
+          gap: 8px;
+          padding: 12px 14px 14px 58px;
+          background: color-mix(in srgb, var(--theme--background-subdued) 68%, var(--theme--background));
+        }
+
+        .symbolika-finance-company-customer {
+          overflow: hidden;
+          border: 1px solid color-mix(in srgb, var(--theme--border-color) 84%, transparent);
+          border-radius: 11px;
+          background: var(--theme--background-normal);
+        }
+
+        .symbolika-finance-company-customer-head {
+          display: grid;
+          grid-template-columns: 34px minmax(190px, 1fr) minmax(390px, auto);
+          align-items: center;
+          gap: 10px;
+          inline-size: 100%;
+          min-block-size: 58px;
+          border: 0;
+          background: transparent;
+          padding: 8px 12px;
+          color: var(--theme--foreground);
+          text-align: start;
+          cursor: pointer;
+        }
+
+        .symbolika-finance-company-customer-head:hover {
+          background: color-mix(in srgb, var(--theme--primary) 7%, transparent);
+        }
+
+        .symbolika-finance-company-customer-name {
+          display: grid;
+          gap: 3px;
+          min-inline-size: 0;
+        }
+
+        .symbolika-finance-company-customer-name strong {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .symbolika-finance-company-customer-name small {
+          color: var(--theme--foreground-subdued);
+          font-size: 11px;
+          font-weight: 720;
+        }
+
+        .symbolika-finance-company-customer-money {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(112px, 1fr));
+          gap: 16px;
+          font-size: 11px;
+        }
+
+        .symbolika-finance-company-customer-money > span {
+          display: grid;
+          gap: 2px;
+          color: var(--theme--foreground-subdued);
+        }
+
+        .symbolika-finance-company-customer-money strong {
+          color: var(--theme--foreground);
+          font-size: 12px;
+          font-variant-numeric: tabular-nums;
+          white-space: nowrap;
+        }
+
+        .symbolika-finance-company-customer-orders {
+          margin: 0;
+          padding: 8px 10px 10px 54px;
+          border-block-start: 1px solid var(--theme--border-color-subdued);
+          background: color-mix(in srgb, var(--theme--background-subdued) 72%, transparent);
+        }
+
         .symbolika-costing-finance-payers-wrap {
           overflow-x: auto;
           overflow-y: visible;
@@ -25656,6 +25809,19 @@ export const CostingModule = {
           .symbolika-costing-finance-payers .symbolika-costing-money-stack {
             max-inline-size: none;
           }
+
+          .symbolika-finance-company-customers {
+            padding-inline-start: 12px;
+          }
+
+          .symbolika-finance-company-customer-head {
+            grid-template-columns: 34px minmax(0, 1fr);
+          }
+
+          .symbolika-finance-company-customer-money {
+            grid-column: 2;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
         }
 
         @media (max-width: 620px) {
@@ -25665,6 +25831,15 @@ export const CostingModule = {
 
           .symbolika-costing-finance-balance-layout .symbolika-costing-client-finance-actions {
             justify-content: flex-start;
+          }
+
+          .symbolika-finance-company-customer-money {
+            grid-template-columns: minmax(0, 1fr);
+            gap: 7px;
+          }
+
+          .symbolika-finance-company-customer-orders {
+            padding-inline-start: 10px;
           }
         }
 
@@ -34213,6 +34388,15 @@ export const CostingModule = {
               </button>
             </div>
 
+            <div v-if="financeLevel === 'orders'" class="symbolika-costing-segments symbolika-costing-finance-grouping-switch" aria-label="Группировка сверки">
+              <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': financeGrouping === 'companies' }" @click="setFinanceGrouping('companies')">
+                По компаниям
+              </button>
+              <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': financeGrouping === 'customers' }" @click="setFinanceGrouping('customers')">
+                По клиентам
+              </button>
+            </div>
+
             <div class="symbolika-costing-reconciliation-filters">
               <select v-model="financeCustomerFilter" class="symbolika-costing-select" @change="selectFinanceCustomer">
                 <option value="">Все клиенты</option>
@@ -34256,7 +34440,9 @@ export const CostingModule = {
               <div class="symbolika-costing-card-note">
                 {{ financeLevel === 'items'
                   ? visibleFinanceItemRowsAllocated.length + ' ' + pluralRu(visibleFinanceItemRowsAllocated.length, 'позиция', 'позиции', 'позиций')
-                  : visibleClientRows.length + ' ' + pluralRu(visibleClientRows.length, 'заказчик', 'заказчика', 'заказчиков') }}
+                  : visibleClientRows.length + ' ' + (financeGrouping === 'companies'
+                    ? pluralRu(visibleClientRows.length, 'плательщик', 'плательщика', 'плательщиков')
+                    : pluralRu(visibleClientRows.length, 'клиент', 'клиента', 'клиентов')) }}
               </div>
             </div>
             <div class="symbolika-costing-card green">
@@ -34288,8 +34474,8 @@ export const CostingModule = {
               <thead>
                 <tr>
                   <th></th>
-                  <th>Заказчик</th>
-                  <th>Менеджер / активность</th>
+                  <th>{{ financeGrouping === 'companies' ? 'Компания / плательщик' : 'Клиент / компания' }}</th>
+                  <th>{{ financeGrouping === 'companies' ? 'Менеджер / заказчики' : 'Менеджер / активность' }}</th>
                   <th>Заказы и оплаты</th>
                   <th>Баланс и действия</th>
                 </tr>
@@ -34304,18 +34490,25 @@ export const CostingModule = {
                     </td>
                     <td class="symbolika-costing-directory-primary">
                       <div class="symbolika-costing-directory-identity">
-                        <button type="button" class="symbolika-costing-link-button symbolika-costing-directory-name" @click="openEntityDetail(row.customer_company_name ? 'company' : 'customer', row)">
-                          {{ row.customer_company_name || row.customer_name || '-' }}
+                        <button type="button" class="symbolika-costing-link-button symbolika-costing-directory-name" @click="openEntityDetail(financeGrouping === 'companies' && row.customer_company_name ? 'company' : (row.customer ? 'customer' : 'company'), row)">
+                          {{ financeGrouping === 'companies'
+                            ? (row.customer_company_name || row.customer_name || '-')
+                            : (row.customer_name || row.customer_company_name || '-') }}
                         </button>
                         <div class="symbolika-costing-directory-contact">
-                          {{ row.customer_company_name && row.customer_name ? row.customer_name : (row.customer_company_name ? 'Компания' : 'Частный клиент') }}
+                          {{ financeGrouping === 'companies'
+                            ? (row.customer_company_name ? 'Компания' : 'Частный клиент')
+                            : (row.customer_company_name || 'Личный заказ') }}
                         </div>
                       </div>
                     </td>
                     <td>
-                      <a v-if="managerUrl(row)" class="symbolika-costing-entity-link" :href="managerUrl(row)" @click.prevent="openEntityDetail('manager', row)">{{ row.manager_name || '-' }}</a>
-                      <span v-else>{{ row.manager_name || '-' }}</span>
+                      <a v-if="managerUrl(row) && (!row.manager_names || row.manager_names.length <= 1)" class="symbolika-costing-entity-link" :href="managerUrl(row)" @click.prevent="openEntityDetail('manager', row)">{{ row.manager_name || '-' }}</a>
+                      <span v-else>{{ row.manager_names && row.manager_names.length ? row.manager_names.join(', ') : (row.manager_name || '-') }}</span>
                       <div class="symbolika-costing-subtle">
+                        <template v-if="financeGrouping === 'companies' && row.customer_company_name">
+                          {{ row.customers.length }} {{ pluralRu(row.customers.length, 'заказчик', 'заказчика', 'заказчиков') }} ·
+                        </template>
                         {{ row.orders.length }} {{ pluralRu(row.orders.length, 'заказ', 'заказа', 'заказов') }} ·
                         {{ row.operations.length }} {{ pluralRu(row.operations.length, 'операция', 'операции', 'операций') }}
                       </div>
@@ -34342,7 +34535,55 @@ export const CostingModule = {
                   </tr>
                   <tr v-if="isClientRowExpanded(row)" class="symbolika-costing-expanded-row">
                     <td colspan="5">
-                      <div v-if="row.orders.length || row.operations.length" class="symbolika-costing-client-orders">
+                      <div v-if="financeGrouping === 'companies' && row.customer_company_name && row.customers.length" class="symbolika-finance-company-customers">
+                        <section v-for="customerRow in row.customers" :key="'finance-customer-' + customerRow.key" class="symbolika-finance-company-customer">
+                          <button type="button" class="symbolika-finance-company-customer-head" @click="toggleClientRow(customerRow)">
+                            <span class="symbolika-costing-directory-expand" aria-hidden="true">
+                              <v-icon :name="isClientRowExpanded(customerRow) ? 'remove' : 'add'" small />
+                            </span>
+                            <span class="symbolika-finance-company-customer-name">
+                              <strong>{{ customerRow.customer_name || 'Общие операции компании' }}</strong>
+                              <small>
+                                {{ customerRow.orders.length }} {{ pluralRu(customerRow.orders.length, 'заказ', 'заказа', 'заказов') }} ·
+                                {{ customerRow.operations.length }} {{ pluralRu(customerRow.operations.length, 'операция', 'операции', 'операций') }}
+                              </small>
+                            </span>
+                            <span class="symbolika-finance-company-customer-money">
+                              <span>Начислено <strong>{{ formatMoney(customerRow.order_sum) }}</strong></span>
+                              <span>Оплачено по заказам <strong>{{ formatMoney(customerRow.paid_amount) }}</strong></span>
+                              <span>Остаток по заказам <strong>{{ formatMoney(customerRow.payment_due) }}</strong></span>
+                            </span>
+                          </button>
+
+                          <div v-if="isClientRowExpanded(customerRow)" class="symbolika-costing-client-orders symbolika-finance-company-customer-orders">
+                            <button v-for="order in customerRow.orders" :key="'finance-company-order-' + order.id" type="button" class="symbolika-costing-client-order" @click="openDetail('finance', order)">
+                              <span class="symbolika-costing-client-order-title">
+                                <strong>{{ order.order_number }}</strong>
+                                <span>{{ formatDate(order.date) }} · {{ order.order_status_name || '-' }}</span>
+                              </span>
+                              <span class="symbolika-costing-cell-money">
+                                <span>Сумма <strong>{{ formatMoney(order.order_sum) }}</strong></span>
+                                <span>Оплачено <strong>{{ formatMoney(order.paid_amount) }}</strong></span>
+                                <span>Остаток <strong>{{ formatMoney(order.payment_due) }}</strong></span>
+                              </span>
+                            </button>
+                            <button v-for="operation in customerRow.operations" :key="'finance-company-operation-' + operation.id" type="button" class="symbolika-costing-client-order" @click="openClientOperation(operation)">
+                              <span class="symbolika-costing-client-order-title">
+                                <strong>{{ clientOperationTypeName(operation.operation_type) }}</strong>
+                                <span>{{ formatDate(operation.date) }} · {{ operation.description || clientOperationDirectionName(operation.direction) }}</span>
+                              </span>
+                              <span class="symbolika-costing-cell-money">
+                                <span>Факт. расход <strong>{{ formatMoney(clientOperationActualAmount(operation)) }}</strong></span>
+                                <span>В сверку <strong>{{ formatMoney(operation.order_sum) }}</strong></span>
+                                <span>Остаток <strong>{{ formatMoney(operation.payment_due) }}</strong></span>
+                              </span>
+                            </button>
+                            <div v-if="!customerRow.orders.length && !customerRow.operations.length" class="symbolika-costing-empty symbolika-costing-empty-inline">Заказов и операций пока нет</div>
+                          </div>
+                        </section>
+                      </div>
+
+                      <div v-else-if="row.orders.length || row.operations.length" class="symbolika-costing-client-orders">
                         <button v-for="order in row.orders" :key="'finance-order-' + order.id" type="button" class="symbolika-costing-client-order" @click="openDetail('finance', order)">
                           <span class="symbolika-costing-client-order-title">
                             <strong>{{ order.order_number }}</strong>
@@ -34374,7 +34615,9 @@ export const CostingModule = {
                 </template>
               </tbody>
             </table>
-            <div v-if="!visibleClientRows.length" class="symbolika-costing-empty">Нет заказчиков по выбранным фильтрам</div>
+            <div v-if="!visibleClientRows.length" class="symbolika-costing-empty">
+              {{ financeGrouping === 'companies' ? 'Нет компаний и частных клиентов по выбранным фильтрам' : 'Нет клиентов по выбранным фильтрам' }}
+            </div>
           </div>
 
           <div v-if="financeLevel === 'items'" class="symbolika-costing-table-wrap">
