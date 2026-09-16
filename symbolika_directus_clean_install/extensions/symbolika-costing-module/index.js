@@ -288,7 +288,11 @@ const officeArchiveFields = [
 const financeFields = [
   'id',
   'entry_type',
-  'client_operation',
+  'client_operation.id',
+  'client_operation.actual_amount',
+  'client_operation.markup_percent',
+  'client_operation.amount',
+  'client_operation.reference',
   'operation_type',
   'direction',
   'description',
@@ -782,7 +786,7 @@ const adminConfigs = {
     eyebrow: 'Взаиморасчеты вне заказов',
     description: 'Покупки, наличные и другие просьбы заказчиков. Только подтвержденные операции влияют на сверку.',
     sort: '-operation_date',
-    fields: 'id,operation_date,operation_type,direction,amount,allocated_amount,payment_due,customer.id,customer.name,customer_company.id,customer_company.name,manager_employee.id,manager_employee.full_name,status,description,reference,date_created,date_updated',
+    fields: 'id,operation_date,operation_type,direction,actual_amount,markup_percent,amount,allocated_amount,payment_due,customer.id,customer.name,customer_company.id,customer_company.name,manager_employee.id,manager_employee.full_name,status,description,reference,date_created,date_updated',
     tableColumns: [
       { key: 'operation_date', label: 'Дата', type: 'date' },
       { key: 'operation_type', label: 'Операция', type: 'select', choices: [
@@ -798,7 +802,9 @@ const adminConfigs = {
         { value: 'customer_owes_us', text: 'Клиент должен нам' },
         { value: 'we_owe_customer', text: 'Мы должны клиенту' },
       ] },
-      { key: 'amount', label: 'Сумма', type: 'money' },
+      { key: 'actual_amount', label: 'Фактический расход', type: 'money' },
+      { key: 'markup_percent', label: 'Процент', type: 'number' },
+      { key: 'amount', label: 'Сумма в сверку', type: 'money' },
       { key: 'allocated_amount', label: 'Оплачено', type: 'money' },
       { key: 'payment_due', label: 'Остаток', type: 'money' },
       { key: 'status', label: 'Статус', type: 'select', choices: [
@@ -821,7 +827,8 @@ const adminConfigs = {
         { value: 'customer_owes_us', text: 'Клиент должен нам' },
         { value: 'we_owe_customer', text: 'Мы должны клиенту' },
       ] },
-      { key: 'amount', label: 'Сумма', type: 'money', required: true },
+      { key: 'actual_amount', label: 'Фактический расход', type: 'money', required: true },
+      { key: 'markup_percent', label: 'Процент к расходу', type: 'number', required: true },
       { key: 'customer', label: 'Клиент', type: 'relation', options: 'customers', searchable: true, placeholder: 'Начните вводить имя, телефон или e-mail' },
       { key: 'customer_company', label: 'Компания', type: 'relation', options: 'companies', searchable: true, placeholder: 'Начните вводить название, телефон или e-mail' },
       { key: 'status', label: 'Статус', type: 'select', required: true, choices: [
@@ -5860,6 +5867,29 @@ export const CostingModule = {
       return value === 'we_owe_customer' ? 'Мы должны клиенту' : 'Клиент должен нам';
     },
 
+    clientOperationActualAmount(row) {
+      const operation = row?.client_operation && typeof row.client_operation === 'object'
+        ? row.client_operation
+        : row;
+      const value = operation?.actual_amount;
+      return value === undefined || value === null
+        ? this.parseMoney(row?.order_sum ?? row?.amount)
+        : this.parseMoney(value);
+    },
+
+    clientOperationMarkupPercent(row) {
+      const operation = row?.client_operation && typeof row.client_operation === 'object'
+        ? row.client_operation
+        : row;
+      return this.parseMoney(operation?.markup_percent);
+    },
+
+    clientOperationCalculatedAmount(actualAmount, markupPercent) {
+      const actual = Math.max(this.parseMoney(actualAmount), 0);
+      const percent = Math.max(this.parseMoney(markupPercent), 0);
+      return Math.round(actual * (1 + percent / 100) * 100) / 100;
+    },
+
     selectedFinanceParty(row = null) {
       let customerId = String(this.entityId(row?.customer) || this.financeCustomerFilter || '');
       let companyId = String(this.entityId(row?.customer_company) || this.financeCompanyFilter || '');
@@ -5923,6 +5953,9 @@ export const CostingModule = {
 
     openClientOperationDialog(row = null, defaultDirection = 'customer_owes_us') {
       const operationId = this.entityId(row?.client_operation);
+      const operation = row?.client_operation && typeof row.client_operation === 'object'
+        ? row.client_operation
+        : row;
       const { customerId, companyId } = this.selectedFinanceParty(row);
       const direction = row?.direction || defaultDirection;
       this.clientOperationDialog = {
@@ -5933,9 +5966,10 @@ export const CostingModule = {
         operationDate: this.dateOnly(row?.date) || this.todayInput(),
         operationType: row?.operation_type || (direction === 'we_owe_customer' ? 'customer_debt' : 'other'),
         direction,
-        amount: row ? String(this.parseMoney(row.order_sum) || '') : '',
+        actualAmount: row ? String(this.clientOperationActualAmount(row) || '') : '',
+        markupPercent: row ? String(this.clientOperationMarkupPercent(row) || 0) : '0',
         description: row?.description || '',
-        reference: '',
+        reference: operation?.reference || '',
         saving: false,
       };
     },
@@ -5950,13 +5984,18 @@ export const CostingModule = {
       if (!dialog || dialog.saving) return;
       const customerId = dialog.partyType === 'customer' ? Number(dialog.customerId || 0) : 0;
       const companyId = dialog.partyType === 'company' ? Number(dialog.companyId || 0) : 0;
-      const amount = this.parseMoney(dialog.amount);
+      const actualAmount = this.parseMoney(dialog.actualAmount);
+      const markupPercent = this.parseMoney(dialog.markupPercent);
       if (!customerId && !companyId) {
         this.error = 'Выберите клиента или компанию.';
         return;
       }
-      if (amount <= 0) {
-        this.error = 'Укажите сумму клиентской операции.';
+      if (actualAmount <= 0) {
+        this.error = 'Укажите фактическую сумму расхода.';
+        return;
+      }
+      if (markupPercent < 0 || markupPercent > 1000) {
+        this.error = 'Процент должен быть от 0 до 1000.';
         return;
       }
       if (!String(dialog.description || '').trim()) {
@@ -5971,7 +6010,8 @@ export const CostingModule = {
           operation_date: dialog.operationDate || this.todayInput(),
           operation_type: dialog.operationType || 'other',
           direction: dialog.direction || 'customer_owes_us',
-          amount,
+          actual_amount: actualAmount,
+          markup_percent: markupPercent,
           customer: customerId || null,
           customer_company: companyId || null,
           status: 'confirmed',
@@ -8987,6 +9027,7 @@ export const CostingModule = {
           operation_date: this.toInputDate(new Date()),
           operation_type: 'marketplace_purchase',
           direction: 'customer_owes_us',
+          markup_percent: 0,
           status: 'confirmed',
         };
       }
@@ -14982,6 +15023,8 @@ export const CostingModule = {
           "Менеджер": row.manager_name,
           "Статус": row.order_status_name,
           "Описание": row.description || '',
+          "ФактическийРасход": row.entry_type === 'operation' ? this.formatMoney(this.clientOperationActualAmount(row)) : '',
+          "Процент": row.entry_type === 'operation' ? this.formatMoney(this.clientOperationMarkupPercent(row)) : '',
           "Сумма": this.formatMoney(row.order_sum),
           "Оплачено": this.formatMoney(row.paid_amount),
           "Остаток": this.formatMoney(row.payment_due),
@@ -33950,7 +33993,9 @@ export const CostingModule = {
                       <span class="symbolika-costing-cell-meta">{{ formatDate(operation.date) }} · {{ operation.description || clientOperationDirectionName(operation.direction) }}</span>
                     </span>
                     <span class="symbolika-costing-cell-money">
-                      <span>Сумма <strong>{{ formatMoney(operation.order_sum) }}</strong></span>
+                      <span>Факт. расход <strong>{{ formatMoney(clientOperationActualAmount(operation)) }}</strong></span>
+                      <span>Наценка <strong>{{ formatMoney(clientOperationMarkupPercent(operation)) }}%</strong></span>
+                      <span>В сверку <strong>{{ formatMoney(operation.order_sum) }}</strong></span>
                       <span>Остаток <strong>{{ formatMoney(operation.payment_due) }}</strong></span>
                     </span>
                   </div>
@@ -34162,7 +34207,9 @@ export const CostingModule = {
                             <span>{{ formatDate(operation.date) }} · {{ operation.description || clientOperationDirectionName(operation.direction) }}</span>
                           </span>
                           <span class="symbolika-costing-cell-money">
-                            <span>Сумма <strong>{{ formatMoney(operation.order_sum) }}</strong></span>
+                            <span>Факт. расход <strong>{{ formatMoney(clientOperationActualAmount(operation)) }}</strong></span>
+                            <span>Наценка <strong>{{ formatMoney(clientOperationMarkupPercent(operation)) }}%</strong></span>
+                            <span>В сверку <strong>{{ formatMoney(operation.order_sum) }}</strong></span>
                             <span>Погашено <strong>{{ formatMoney(operation.paid_amount) }}</strong></span>
                             <span>Остаток <strong>{{ formatMoney(operation.payment_due) }}</strong></span>
                           </span>
@@ -34414,6 +34461,12 @@ export const CostingModule = {
                 class="symbolika-costing-subtle"
               >
                 Итого по заявке: {{ formatMoney(parseMoney(adminForm.quantity) * parseMoney(adminForm.estimated_cost)) }} ₽
+              </small>
+              <small
+                v-else-if="activeTab === 'client_operations' && column.key === 'markup_percent'"
+                class="symbolika-costing-subtle"
+              >
+                В сверку: {{ formatMoney(clientOperationCalculatedAmount(adminForm.actual_amount, adminForm.markup_percent)) }} ₽
               </small>
               <textarea
                 v-else-if="column.type === 'textarea'"
@@ -37322,7 +37375,7 @@ export const CostingModule = {
             <div class="symbolika-costing-client-payment-targets">
               <label v-for="target in clientPaymentDialog.targets" :key="target.key" class="symbolika-costing-client-payment-target">
                 <span>
-                  <strong>{{ target.targetType === 'order' ? target.title : clientOperationTypeName(financeRows.find(row => Number(row.client_operation) === Number(target.targetId))?.operation_type) }}</strong>
+                  <strong>{{ target.targetType === 'order' ? target.title : clientOperationTypeName(financeRows.find(row => Number(entityId(row.client_operation)) === Number(target.targetId))?.operation_type) }}</strong>
                   <small>{{ target.targetType === 'operation' ? target.title : formatDate(target.date) }} · остаток {{ formatMoney(target.due) }}</small>
                 </span>
                 <input v-model="target.allocation" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0,00" @focus="prepareNumericInput($event)" />
@@ -37392,13 +37445,21 @@ export const CostingModule = {
                 </select>
               </label>
               <label class="symbolika-costing-label">
-                Сумма
-                <input v-model="clientOperationDialog.amount" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0,00" @focus="prepareNumericInput($event)" />
+                Фактический расход
+                <input v-model="clientOperationDialog.actualAmount" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0,00" @focus="prepareNumericInput($event)" />
+              </label>
+              <label class="symbolika-costing-label">
+                Процент к расходу
+                <input v-model="clientOperationDialog.markupPercent" class="symbolika-costing-input symbolika-costing-num" inputmode="decimal" placeholder="0" @focus="prepareNumericInput($event)" />
               </label>
               <label class="symbolika-costing-label">
                 Дата
                 <input v-model="clientOperationDialog.operationDate" class="symbolika-costing-input" type="date" />
               </label>
+              <div class="symbolika-costing-detail-field">
+                <div class="symbolika-costing-detail-label">Сумма в сверку</div>
+                <div class="symbolika-costing-detail-value">{{ formatMoney(clientOperationCalculatedAmount(clientOperationDialog.actualAmount, clientOperationDialog.markupPercent)) }}</div>
+              </div>
               <label class="symbolika-costing-label symbolika-costing-detail-wide">
                 Что сделали / основание
                 <textarea v-model.trim="clientOperationDialog.description" class="symbolika-costing-comment" placeholder="Например: купили товар по просьбе клиента"></textarea>

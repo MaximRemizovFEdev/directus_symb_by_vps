@@ -19,9 +19,9 @@ export function clientPaymentTargets(rows = [], { customerId = '', companyId = '
     .filter((row) => numberValue(row?.payment_due) > 0)
     .filter((row) => row?.entry_type !== 'operation' || row?.direction === 'customer_owes_us')
     .map((row) => ({
-      key: row.entry_type === 'operation' ? `operation:${row.client_operation}` : `order:${row.order_link}`,
+      key: row.entry_type === 'operation' ? `operation:${entityId(row.client_operation)}` : `order:${entityId(row.order_link)}`,
       targetType: row.entry_type === 'operation' ? 'operation' : 'order',
-      targetId: Number(row.entry_type === 'operation' ? row.client_operation : row.order_link),
+      targetId: Number(row.entry_type === 'operation' ? entityId(row.client_operation) : entityId(row.order_link)),
       title: row.entry_type === 'operation'
         ? (row.description || row.order_number || 'Клиентская операция')
         : (row.order_number || 'Заказ'),

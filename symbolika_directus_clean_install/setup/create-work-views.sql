@@ -8849,7 +8849,7 @@ WHERE (many_collection = 'orders_overview_items' AND many_field = 'orders_overvi
    OR (many_collection IN ('my_orders_in_work_items', 'my_orders_completed_items', 'my_orders_unpaid_items') AND many_field = 'bucket_order')
    OR (many_collection IN ('my_orders_in_work_items', 'my_orders_completed_items', 'my_orders_unpaid_items') AND many_field = 'production_status')
    OR (many_collection IN ('my_orders_in_work_payments', 'my_orders_completed_payments', 'my_orders_unpaid_payments') AND many_field = 'bucket_order')
-   OR (many_collection = 'customer_reconciliation' AND many_field IN ('customer', 'customer_company', 'manager_employee', 'order_status'))
+   OR (many_collection = 'customer_reconciliation' AND many_field IN ('customer', 'customer_company', 'manager_employee', 'order_status', 'client_operation'))
    OR (many_collection = 'customer_reconciliation_items' AND many_field IN ('customer', 'customer_company', 'manager_employee', 'order_status'))
    OR many_collection IN ('my_orders_in_work', 'my_orders_completed', 'my_orders_unpaid');
 
@@ -8879,6 +8879,7 @@ INSERT INTO directus_relations (
   ('customer_reconciliation', 'customer_company', 'customer_companies', NULL, 'nullify'),
   ('customer_reconciliation', 'manager_employee', 'employees', NULL, 'nullify'),
   ('customer_reconciliation', 'order_status', 'order_statuses', NULL, 'nullify'),
+  ('customer_reconciliation', 'client_operation', 'customer_operations', NULL, 'cascade'),
   ('customer_reconciliation_items', 'customer', 'customers', NULL, 'nullify'),
   ('customer_reconciliation_items', 'customer_company', 'customer_companies', NULL, 'nullify'),
   ('customer_reconciliation_items', 'manager_employee', 'employees', NULL, 'nullify'),
@@ -13732,6 +13733,8 @@ CREATE TABLE IF NOT EXISTS customer_operations (
   operation_date date NOT NULL DEFAULT CURRENT_DATE,
   operation_type varchar(64) NOT NULL DEFAULT 'other',
   direction varchar(32) NOT NULL DEFAULT 'customer_owes_us',
+  actual_amount numeric(14,2) NOT NULL DEFAULT 0,
+  markup_percent numeric(7,3) NOT NULL DEFAULT 0,
   amount numeric(14,2) NOT NULL DEFAULT 0,
   allocated_amount numeric(14,2) NOT NULL DEFAULT 0,
   payment_due numeric(14,2) NOT NULL DEFAULT 0,
@@ -13743,6 +13746,8 @@ CREATE TABLE IF NOT EXISTS customer_operations (
   reference text,
   date_created timestamptz NOT NULL DEFAULT now(),
   date_updated timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT customer_operations_actual_amount_positive CHECK (actual_amount > 0),
+  CONSTRAINT customer_operations_markup_percent_valid CHECK (markup_percent >= 0 AND markup_percent <= 1000),
   CONSTRAINT customer_operations_amount_positive CHECK (amount > 0),
   CONSTRAINT customer_operations_direction_valid CHECK (direction IN ('customer_owes_us', 'we_owe_customer')),
   CONSTRAINT customer_operations_status_valid CHECK (status IN ('draft', 'confirmed', 'cancelled')),
@@ -13752,6 +13757,8 @@ CREATE TABLE IF NOT EXISTS customer_operations (
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS operation_date date NOT NULL DEFAULT CURRENT_DATE;
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS operation_type varchar(64) NOT NULL DEFAULT 'other';
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS direction varchar(32) NOT NULL DEFAULT 'customer_owes_us';
+ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS actual_amount numeric(14,2) NOT NULL DEFAULT 0;
+ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS markup_percent numeric(7,3) NOT NULL DEFAULT 0;
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS amount numeric(14,2) NOT NULL DEFAULT 0;
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS allocated_amount numeric(14,2) NOT NULL DEFAULT 0;
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS payment_due numeric(14,2) NOT NULL DEFAULT 0;
@@ -13763,6 +13770,16 @@ ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS description text NOT NU
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS reference text;
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS date_created timestamptz NOT NULL DEFAULT now();
 ALTER TABLE customer_operations ADD COLUMN IF NOT EXISTS date_updated timestamptz NOT NULL DEFAULT now();
+
+UPDATE customer_operations
+SET actual_amount = amount,
+    markup_percent = 0
+WHERE actual_amount <= 0;
+
+ALTER TABLE customer_operations DROP CONSTRAINT IF EXISTS customer_operations_actual_amount_positive;
+ALTER TABLE customer_operations ADD CONSTRAINT customer_operations_actual_amount_positive CHECK (actual_amount > 0);
+ALTER TABLE customer_operations DROP CONSTRAINT IF EXISTS customer_operations_markup_percent_valid;
+ALTER TABLE customer_operations ADD CONSTRAINT customer_operations_markup_percent_valid CHECK (markup_percent >= 0 AND markup_percent <= 1000);
 
 ALTER TABLE payment_allocations ALTER COLUMN "order" DROP NOT NULL;
 UPDATE directus_fields
@@ -13787,7 +13804,15 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
   NEW.operation_date := COALESCE(NEW.operation_date, CURRENT_DATE);
-  NEW.amount := round(COALESCE(NEW.amount, 0), 2);
+  IF TG_OP = 'INSERT' AND COALESCE(NEW.actual_amount, 0) <= 0 AND COALESCE(NEW.amount, 0) > 0 THEN
+    NEW.actual_amount := NEW.amount;
+  END IF;
+  NEW.actual_amount := round(COALESCE(NEW.actual_amount, 0), 2);
+  NEW.markup_percent := round(COALESCE(NEW.markup_percent, 0), 3);
+  IF NEW.markup_percent < 0 OR NEW.markup_percent > 1000 THEN
+    RAISE EXCEPTION 'Процент клиентской операции должен быть от 0 до 1000';
+  END IF;
+  NEW.amount := round(NEW.actual_amount * (1 + NEW.markup_percent / 100), 2);
   NEW.allocated_amount := round(COALESCE(NEW.allocated_amount, 0), 2);
   NEW.payment_due := GREATEST(NEW.amount - NEW.allocated_amount, 0);
   NEW.description := btrim(COALESCE(NEW.description, ''));
@@ -14350,6 +14375,39 @@ INSERT INTO directus_fields (
   ('customer_operations','date_created','date-created',NULL,NULL,'datetime',NULL,true,true,14,'half',NULL,false),
   ('customer_operations','date_updated','date-updated',NULL,NULL,'datetime',NULL,true,true,15,'half',NULL,false);
 
+DELETE FROM directus_fields
+WHERE collection = 'customer_operations'
+  AND field IN ('actual_amount', 'markup_percent');
+
+INSERT INTO directus_fields (
+  collection, field, interface, readonly, hidden, sort, width, translations, required
+) VALUES
+  ('customer_operations','actual_amount','input',false,false,5,'half',json_build_array(json_build_object('language','ru-RU','translation',U&'\0424\0430\043a\0442\0438\0447\0435\0441\043a\0438\0439 \0440\0430\0441\0445\043e\0434'))::json,true),
+  ('customer_operations','markup_percent','input',false,false,6,'half',json_build_array(json_build_object('language','ru-RU','translation',U&'\041f\0440\043e\0446\0435\043d\0442'))::json,true);
+
+UPDATE directus_fields
+SET sort = CASE field
+      WHEN 'actual_amount' THEN 5 WHEN 'markup_percent' THEN 6 WHEN 'amount' THEN 7
+      WHEN 'customer' THEN 8 WHEN 'customer_company' THEN 9 WHEN 'manager_employee' THEN 10
+      WHEN 'status' THEN 11 WHEN 'description' THEN 12 WHEN 'reference' THEN 13
+      WHEN 'allocated_amount' THEN 14 WHEN 'payment_due' THEN 15
+      WHEN 'date_created' THEN 16 WHEN 'date_updated' THEN 17 ELSE sort END,
+    readonly = CASE WHEN field = 'amount' THEN true ELSE readonly END,
+    translations = CASE WHEN field = 'amount'
+      THEN json_build_array(json_build_object('language','ru-RU','translation',U&'\0421\0443\043c\043c\0430 \0432 \0441\0432\0435\0440\043a\0443'))::json
+      ELSE translations END
+WHERE collection = 'customer_operations';
+
+DELETE FROM directus_fields
+WHERE collection = 'customer_reconciliation'
+  AND field = 'client_operation';
+
+INSERT INTO directus_fields (
+  collection, field, special, interface, display, readonly, hidden, width
+) VALUES (
+  'customer_reconciliation', 'client_operation', 'm2o', 'select-dropdown-m2o', 'related-values', true, true, 'half'
+);
+
 DELETE FROM directus_fields WHERE collection = 'payment_allocations' AND field = 'customer_operation';
 INSERT INTO directus_fields (
   collection, field, special, interface, options, display, display_options,
@@ -14375,8 +14433,8 @@ VALUES ('payment_allocations', 'customer_operation', 'customer_operations', 'cas
 DELETE FROM directus_permissions WHERE collection = 'customer_operations';
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy) VALUES
   ('customer_operations','read','{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,NULL,'*','00000000-0000-4000-8000-000000000201'),
-  ('customer_operations','create','{}'::json,'{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,'operation_date,operation_type,direction,amount,customer,customer_company,manager_employee,status,description,reference,allocated_amount,payment_due','00000000-0000-4000-8000-000000000201'),
-  ('customer_operations','update','{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,'{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,'operation_date,operation_type,direction,amount,customer,customer_company,status,description,reference,allocated_amount,payment_due','00000000-0000-4000-8000-000000000201'),
+  ('customer_operations','create','{}'::json,'{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,'operation_date,operation_type,direction,actual_amount,markup_percent,amount,customer,customer_company,manager_employee,status,description,reference,allocated_amount,payment_due','00000000-0000-4000-8000-000000000201'),
+  ('customer_operations','update','{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,'{"manager_employee":{"directus_user":{"_eq":"$CURRENT_USER"}}}'::json,NULL,'operation_date,operation_type,direction,actual_amount,markup_percent,amount,customer,customer_company,status,description,reference,allocated_amount,payment_due','00000000-0000-4000-8000-000000000201'),
   ('customer_operations','read','{}'::json,NULL,NULL,'*','00000000-0000-4000-8000-000000000205'),
   ('customer_operations','create','{}'::json,NULL,NULL,'*','00000000-0000-4000-8000-000000000205'),
   ('customer_operations','update','{}'::json,NULL,NULL,'*','00000000-0000-4000-8000-000000000205'),
