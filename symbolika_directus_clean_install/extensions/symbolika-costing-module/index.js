@@ -1534,6 +1534,7 @@ export const CostingModule = {
       expandedOfficeOrders: {},
       expandedOrderRows: {},
       expandedOrderItems: {},
+      expandedOrderEconomicsRows: {},
       expandedClientRows: {},
       paymentDialog: null,
       clientPaymentDialog: null,
@@ -9535,6 +9536,25 @@ export const CostingModule = {
       const items = this.orderEconomicsItems(row);
       if (!items.length) return 'Нет позиций';
       return items.map((item) => `${item.product_name || 'Позиция'} · ${this.formatQuantity(item.quantity)} шт.`).join(', ');
+    },
+
+    orderEconomicsPositionCountLabel(row) {
+      const count = this.orderEconomicsItems(row).length;
+      return `${count} ${this.pluralRu(count, 'позиция', 'позиции', 'позиций')}`;
+    },
+
+    toggleOrderEconomicsRow(row) {
+      const key = String(this.entityId(row?.id) || '');
+      if (!key) return;
+      this.expandedOrderEconomicsRows = {
+        ...this.expandedOrderEconomicsRows,
+        [key]: !this.expandedOrderEconomicsRows[key],
+      };
+    },
+
+    isOrderEconomicsRowExpanded(row) {
+      const key = String(this.entityId(row?.id) || '');
+      return Boolean(key && this.expandedOrderEconomicsRows[key]);
     },
 
     costingFields() {
@@ -20964,9 +20984,46 @@ export const CostingModule = {
         .symbolika-economics-card.is-negative { border-color: color-mix(in srgb, var(--theme--danger) 62%, var(--theme--border-color-subdued)); }
         .symbolika-economics-profit { color: #34d399; }
         .symbolika-economics-negative { color: var(--theme--danger); }
-        .symbolika-economics-table th:nth-child(3) { min-inline-size: 270px; }
+        .symbolika-economics-table > thead > tr > th:nth-child(4) { min-inline-size: 220px; }
+        .symbolika-economics-expand-column,
+        .symbolika-economics-expand-cell {
+          inline-size: 46px;
+          min-inline-size: 46px;
+          text-align: center;
+        }
         .symbolika-economics-description { max-inline-size: 430px; }
         .symbolika-economics-description > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .symbolika-economics-expanded-row > td { padding: 0 !important; }
+        .symbolika-economics-position-panel {
+          padding: 10px 12px 12px 58px;
+          background: color-mix(in srgb, var(--theme--background-subdued) 66%, var(--theme--background));
+        }
+        .symbolika-economics-position-table {
+          inline-size: 100%;
+          border-collapse: separate;
+          border-spacing: 0;
+          overflow: hidden;
+          border: 1px solid color-mix(in srgb, var(--theme--border-color) 82%, transparent);
+          border-radius: 10px;
+          background: var(--theme--background-normal);
+        }
+        .symbolika-economics-position-table th,
+        .symbolika-economics-position-table td {
+          padding: 9px 11px;
+          border-block-end: 1px solid color-mix(in srgb, var(--theme--border-color) 70%, transparent);
+          vertical-align: middle;
+        }
+        .symbolika-economics-position-table th {
+          color: var(--theme--foreground-subdued);
+          background: color-mix(in srgb, var(--theme--background-subdued) 68%, transparent);
+          font-size: 11px;
+          font-weight: 850;
+          text-align: start;
+        }
+        .symbolika-economics-position-table tbody tr:last-child td { border-block-end: 0; }
+        .symbolika-economics-position-table tbody tr:hover td {
+          background: color-mix(in srgb, var(--theme--primary) 6%, var(--theme--background-normal));
+        }
         .symbolika-economics-note { padding: 10px 14px; color: var(--theme--foreground-subdued); font-size: 12px; }
 
         @media (max-width: 1280px) {
@@ -32248,17 +32305,30 @@ export const CostingModule = {
           <table class="symbolika-costing-table symbolika-costing-table-compact symbolika-economics-table">
             <thead>
               <tr>
+                <th class="symbolika-economics-expand-column" aria-label="Позиции"></th>
                 <th>Заказ</th>
                 <th>Заказчик</th>
-                <th>Позиции и контрагенты</th>
+                <th>Состав заказа</th>
                 <th class="symbolika-costing-num">Выручка</th>
                 <th class="symbolika-costing-num">Себестоимость</th>
                 <th class="symbolika-costing-num">Налоги / %</th>
                 <th class="symbolika-costing-num">Маржа до зарплат</th>
               </tr>
             </thead>
-            <tbody v-if="visibleOrderEconomicsRows.length">
-              <tr v-for="row in visibleOrderEconomicsRows" :key="'economics-' + row.id" class="symbolika-costing-row-clickable" @click="openRowDetail('order', row, $event)">
+            <tbody>
+              <template v-for="row in visibleOrderEconomicsRows" :key="'economics-' + row.id">
+              <tr class="symbolika-costing-row-clickable" @click="openRowDetail('order', row, $event)">
+                <td class="symbolika-economics-expand-cell">
+                  <button
+                    type="button"
+                    class="symbolika-costing-expand"
+                    :title="isOrderEconomicsRowExpanded(row) ? 'Скрыть позиции' : 'Показать позиции'"
+                    :aria-expanded="isOrderEconomicsRowExpanded(row) ? 'true' : 'false'"
+                    @click.stop="toggleOrderEconomicsRow(row)"
+                  >
+                    <v-icon :name="isOrderEconomicsRowExpanded(row) ? 'remove' : 'add'" small />
+                  </button>
+                </td>
                 <td>
                   <div class="symbolika-costing-cell-stack">
                     <span class="symbolika-costing-order">{{ row.order_number }}</span>
@@ -32275,7 +32345,7 @@ export const CostingModule = {
                 </td>
                 <td>
                   <div class="symbolika-costing-cell-stack symbolika-economics-description">
-                    <span class="symbolika-costing-cell-main">{{ orderEconomicsPositions(row) }}</span>
+                    <span class="symbolika-costing-cell-main">{{ orderEconomicsPositionCountLabel(row) }}</span>
                     <span class="symbolika-costing-cell-meta">{{ orderEconomicsContractors(row) || 'Контрагенты не выбраны' }}</span>
                   </div>
                 </td>
@@ -32292,6 +32362,59 @@ export const CostingModule = {
                   <div class="symbolika-costing-cell-meta">{{ formatMoney(orderEconomicsMarginPercent(row)) }}%</div>
                 </td>
               </tr>
+              <tr v-if="isOrderEconomicsRowExpanded(row)" class="symbolika-costing-expanded-row symbolika-economics-expanded-row">
+                <td colspan="8">
+                  <div v-if="orderEconomicsItems(row).length" class="symbolika-economics-position-panel">
+                    <table class="symbolika-economics-position-table">
+                      <thead>
+                        <tr>
+                          <th>Позиция</th>
+                          <th>Контрагенты</th>
+                          <th class="symbolika-costing-num">Выручка</th>
+                          <th class="symbolika-costing-num">Себестоимость</th>
+                          <th class="symbolika-costing-num">Налоги / %</th>
+                          <th class="symbolika-costing-num">Маржа до зарплат</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="item in orderEconomicsItems(row)"
+                          :key="'economics-position-' + item.id"
+                          class="symbolika-costing-row-clickable"
+                          @click="openRowDetail('orders_items', item, $event)"
+                        >
+                          <td>
+                            <div class="symbolika-costing-cell-stack">
+                              <span class="symbolika-costing-cell-main">{{ item.product_name || 'Позиция' }}</span>
+                              <span class="symbolika-costing-cell-meta">{{ formatQuantity(item.quantity) }} шт. · {{ formatMoney(item.price_per_unit) }} ₽/шт.</span>
+                            </div>
+                          </td>
+                          <td>
+                            <div class="symbolika-costing-cell-stack">
+                              <span>{{ relatedName(item.contractor_1) || 'Не выбран' }}</span>
+                              <span v-if="relatedName(item.contractor_2)" class="symbolika-costing-cell-meta">{{ relatedName(item.contractor_2) }}</span>
+                            </div>
+                          </td>
+                          <td class="symbolika-costing-num"><strong>{{ formatMoney(item.order_sum) }}</strong></td>
+                          <td class="symbolika-costing-num">{{ formatMoney(item.total_cost) }}</td>
+                          <td class="symbolika-costing-num">
+                            <div class="symbolika-costing-money-stack">
+                              <span>Налог <strong>{{ formatMoney(item.tax_sum) }}</strong></span>
+                              <span>Менеджер <strong>{{ formatMoney(item.manager_commission_sum) }}</strong></span>
+                            </div>
+                          </td>
+                          <td class="symbolika-costing-num">
+                            <strong :class="orderEconomicsMargin(item, true) < 0 ? 'symbolika-economics-negative' : 'symbolika-economics-profit'">{{ formatMoney(orderEconomicsMargin(item, true)) }}</strong>
+                            <div class="symbolika-costing-cell-meta">{{ formatMoney(orderEconomicsMarginPercent(item, true)) }}%</div>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div v-else class="symbolika-costing-empty symbolika-costing-empty-inline">В заказе нет позиций</div>
+                </td>
+              </tr>
+              </template>
             </tbody>
           </table>
           <div v-if="!visibleOrderEconomicsRows.length" class="symbolika-costing-empty">Заказы не найдены</div>
