@@ -74,3 +74,11 @@ test('finance sources are completely loaded before payer grouping', async () => 
   assert.match(source, /loadCompletePagedCollection\('finance',/);
   assert.match(source, /loadCompletePagedCollection\('finance_items',/);
 });
+
+test('reconciliation balance and actions have non-overlapping desktop columns', async () => {
+  const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+
+  assert.match(source, /\.symbolika-costing-finance-payers col:nth-child\(5\) \{ width: 410px !important; \}/);
+  assert.match(source, /grid-template-columns: minmax\(145px, 1fr\) auto/);
+  assert.match(source, /\.symbolika-costing-finance-balance-layout > \.symbolika-costing-money-stack \{[\s\S]*?min-inline-size: 145px;/);
+});

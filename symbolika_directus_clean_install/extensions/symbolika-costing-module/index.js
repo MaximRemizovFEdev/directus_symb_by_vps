@@ -25573,14 +25573,14 @@ export const CostingModule = {
         /* Reconciliations have five columns. Keep their proportions separate
            from the four-column Clients/Companies directory table. */
         .symbolika-costing-finance-payers {
-          min-inline-size: 1040px !important;
+          min-inline-size: 1180px !important;
         }
 
         .symbolika-costing-finance-payers col:nth-child(1) { width: 48px !important; }
-        .symbolika-costing-finance-payers col:nth-child(2) { width: 30% !important; }
-        .symbolika-costing-finance-payers col:nth-child(3) { width: 18% !important; }
-        .symbolika-costing-finance-payers col:nth-child(4) { width: 24% !important; }
-        .symbolika-costing-finance-payers col:nth-child(5) { width: auto !important; }
+        .symbolika-costing-finance-payers col:nth-child(2) { width: 29% !important; }
+        .symbolika-costing-finance-payers col:nth-child(3) { width: 17% !important; }
+        .symbolika-costing-finance-payers col:nth-child(4) { width: auto !important; }
+        .symbolika-costing-finance-payers col:nth-child(5) { width: 410px !important; }
 
         .symbolika-costing-finance-payers tbody tr.symbolika-costing-directory-row td {
           block-size: auto;
@@ -25603,10 +25603,14 @@ export const CostingModule = {
 
         .symbolika-costing-finance-balance-layout {
           display: grid;
-          grid-template-columns: minmax(112px, 1fr) auto;
+          grid-template-columns: minmax(145px, 1fr) auto;
           gap: 12px;
           align-items: center;
           min-inline-size: 0;
+        }
+
+        .symbolika-costing-finance-balance-layout > .symbolika-costing-money-stack {
+          min-inline-size: 145px;
         }
 
         .symbolika-costing-finance-balance-layout .symbolika-costing-client-finance-actions {
