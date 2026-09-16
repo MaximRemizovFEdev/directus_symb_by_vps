@@ -20989,7 +20989,16 @@ export const CostingModule = {
         .symbolika-economics-expand-cell {
           inline-size: 46px;
           min-inline-size: 46px;
+          max-inline-size: 46px;
+          padding-inline: 8px !important;
+          overflow: hidden !important;
           text-align: center;
+          text-overflow: clip !important;
+          white-space: normal !important;
+        }
+        .symbolika-economics-expand-cell .symbolika-costing-expand {
+          display: inline-flex;
+          vertical-align: middle;
         }
         .symbolika-economics-description { max-inline-size: 430px; }
         .symbolika-economics-description > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

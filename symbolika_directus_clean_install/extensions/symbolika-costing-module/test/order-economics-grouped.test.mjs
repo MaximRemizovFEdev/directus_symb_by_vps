@@ -37,3 +37,13 @@ test('summary remains based on filtered order rows, not expanded state', () => {
   assert.match(summaryBlock, /this\.visibleOrderEconomicsRows/);
   assert.doesNotMatch(summaryBlock, /expandedOrderEconomicsRows/);
 });
+
+test('expand column clips overflow without drawing an ellipsis beside the plus button', () => {
+  const styleBlock = moduleSource.match(/\.symbolika-economics-expand-column,[\s\S]*?\n        \}/)?.[0] || '';
+
+  assert.match(styleBlock, /max-inline-size: 46px/);
+  assert.match(styleBlock, /padding-inline: 8px !important/);
+  assert.match(styleBlock, /text-overflow: clip !important/);
+  assert.match(styleBlock, /white-space: normal !important/);
+  assert.doesNotMatch(styleBlock, /text-overflow: ellipsis/);
+});
