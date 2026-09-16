@@ -3,11 +3,12 @@ import test from 'node:test';
 
 import { CostingModule } from '../index.js';
 
-function routingContext({ override = false } = {}) {
+function routingContext({ override = false, workflow = override } = {}) {
   return {
     ...CostingModule.methods,
     itemNeedsBlank: () => true,
     hasManagerOverrideAccess: override,
+    hasManagerWorkflowAccess: workflow,
     productCategories: [{ id: 10, name: 'Textile' }],
     contractors: [
       { id: 1, name: 'Configured', approval_status: 'approved' },
@@ -60,6 +61,19 @@ test('administrator and managing explicitly open the complete contractor list', 
 
   assert.equal(context.contractorRouteIsExpanded(item, 'executor'), true);
   assert.deepEqual(options.map((contractor) => contractor.id), [1, 2]);
+});
+
+test('manager can explicitly select an approved contractor outside the recommended route', () => {
+  const context = routingContext({ workflow: true });
+  const item = { product_category: 10, blank_source: 'none' };
+
+  assert.equal(context.canChooseOtherContractor(item, 'executor'), true);
+  context.toggleContractorOverride(item, 'executor');
+
+  assert.deepEqual(
+    context.capabilityContractorOptions(item, 'executor').map((contractor) => contractor.id),
+    [1, 2],
+  );
 });
 
 test('an existing manual contractor remains visible while recommendations stay collapsed', () => {

@@ -11207,11 +11207,11 @@ export const CostingModule = {
         return approved;
       }
 
-      if (this.hasManagerOverrideAccess && item?.[this.contractorOverrideFlag(capabilityType)]) {
+      if (this.hasManagerWorkflowAccess && item?.[this.contractorOverrideFlag(capabilityType)]) {
         return approved;
       }
       if (configured.length) {
-        if (!this.hasManagerOverrideAccess || !selectedId || configured.some((row) => Number(row.id) === selectedId)) {
+        if (!this.hasManagerWorkflowAccess || !selectedId || configured.some((row) => Number(row.id) === selectedId)) {
           return configured;
         }
         const selected = approved.find((contractor) => Number(contractor.id) === selectedId);
@@ -11230,7 +11230,11 @@ export const CostingModule = {
     },
 
     canChooseOtherContractor(item, capabilityType) {
-      if (!this.hasManagerOverrideAccess || !item) return false;
+      // Managers must be able to handle an order-specific exception without
+      // changing the shared routing directory for every future order. The
+      // configured capability remains the default and the full approved list
+      // is only exposed after an explicit action in the item card.
+      if (!this.hasManagerWorkflowAccess || !item) return false;
       if (capabilityType === 'executor' && this.fixedInternalExecutor(item)) return false;
       const approvedCount = this.approvedContractorOptions().length;
       const recommendedCount = this.recommendedContractorOptions(item, capabilityType).length;
@@ -11238,7 +11242,7 @@ export const CostingModule = {
     },
 
     toggleContractorOverride(item, capabilityType) {
-      if (!this.hasManagerOverrideAccess || !item) return;
+      if (!this.hasManagerWorkflowAccess || !item) return;
       const flag = this.contractorOverrideFlag(capabilityType);
       item[flag] = !item[flag];
     },
