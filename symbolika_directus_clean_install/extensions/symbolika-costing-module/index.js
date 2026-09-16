@@ -1296,6 +1296,7 @@ export const CostingModule = {
       financeLevel: 'orders',
       financeCustomerFilter: '',
       financeCompanyFilter: '',
+      financeDebtFilter: 'all',
       financeDateFrom: '',
       financeDateTo: '',
       orderFilterPanels: {
@@ -2844,7 +2845,7 @@ export const CostingModule = {
         const customer = this.customers.find((item) => String(item.id) === String(customerId));
         if (!customer) return;
         const companyId = this.entityId(customer.company) || '';
-        const key = `${customerId}:${companyId || 'personal'}`;
+        const key = companyId ? `company:${companyId}` : `customer:${customerId}`;
         if (!groups.has(key)) {
           groups.set(key, {
             key,
@@ -2882,7 +2883,7 @@ export const CostingModule = {
         row.gift_certificate_remaining = summary.remaining;
       });
 
-      return [...groups.values()].sort((a, b) => {
+      return [...groups.values()].filter((row) => this.matchesFinanceDebtFilter(row)).sort((a, b) => {
         const debtDiff = this.parseMoney(b.payment_due) - this.parseMoney(a.payment_due);
         if (debtDiff) return debtDiff;
         return String(a.customer_name).localeCompare(String(b.customer_name), 'ru');
@@ -3656,6 +3657,7 @@ export const CostingModule = {
     contractorOverviewContractorFilter() { this.completeActivePagingSoon(); },
     financeCustomerFilter() { this.completeActivePagingSoon(); },
     financeCompanyFilter() { this.completeActivePagingSoon(); },
+    financeDebtFilter() { this.completeActivePagingSoon(); },
     financeDateFrom() { this.completeActivePagingSoon(); },
     financeDateTo() { this.completeActivePagingSoon(); },
     eventEntityFilter() { this.completeActivePagingSoon(); },
@@ -6097,8 +6099,32 @@ export const CostingModule = {
     clearFinanceEntityFilters() {
       this.financeCustomerFilter = '';
       this.financeCompanyFilter = '';
+      this.financeDebtFilter = 'all';
       this.financeDateFrom = '';
       this.financeDateTo = '';
+    },
+
+    financePayerBalance(row) {
+      if (Array.isArray(row?.orders) || Array.isArray(row?.operations)) {
+        return this.clientBalance(row);
+      }
+      const companyId = this.entityId(row?.customer_company);
+      const customerId = this.entityId(row?.customer);
+      const payer = companyId
+        ? this.companies.find((item) => String(item.id) === String(companyId))
+        : this.customers.find((item) => String(item.id) === String(customerId));
+      if (payer) return this.parseMoney(payer.balance);
+      return this.parseMoney(row?.overpayment) - this.parseMoney(row?.payment_due);
+    },
+
+    matchesFinanceDebtFilter(row) {
+      const filter = this.financeDebtFilter || 'all';
+      if (filter === 'all') return true;
+      const balance = this.financePayerBalance(row);
+      if (filter === 'customer_owes_us') return balance < -0.005;
+      if (filter === 'we_owe_customer') return balance > 0.005;
+      if (filter === 'settled') return Math.abs(balance) <= 0.005;
+      return true;
     },
 
     entityId(value) {
@@ -6112,6 +6138,7 @@ export const CostingModule = {
       if (this.financeCustomerFilter && customerId !== String(this.financeCustomerFilter)) return false;
       if (this.financeCustomerFilter && !this.financeCompanyFilter && companyId) return false;
       if (!this.matchesFinanceDateFilter(row)) return false;
+      if (!this.matchesFinanceDebtFilter(row)) return false;
       return true;
     },
 
@@ -9564,9 +9591,9 @@ export const CostingModule = {
           }
           params.set('filter[manager_employee][_eq]', String(this.currentEmployeeId));
         }
-        await this.loadPagedCollection('finance', '/items/customer_reconciliation', params, (rows, append) => {
+        await this.loadCompletePagedCollection('finance', '/items/customer_reconciliation', params, (rows, append) => {
           this.financeRows = append ? this.mergePagedRows(this.financeRows, rows) : rows;
-        });
+        }, { pageSize: 500 });
       } catch (error) {
         this.error = error.message;
       }
@@ -9584,9 +9611,9 @@ export const CostingModule = {
           }
           params.set('filter[manager_employee][_eq]', String(this.currentEmployeeId));
         }
-        await this.loadPagedCollection('finance_items', '/items/customer_reconciliation_items', params, (rows, append) => {
+        await this.loadCompletePagedCollection('finance_items', '/items/customer_reconciliation_items', params, (rows, append) => {
           this.financeItemRows = append ? this.mergePagedRows(this.financeItemRows, rows) : rows;
-        });
+        }, { pageSize: 500 });
       } catch (error) {
         this.error = error.message;
         this.financeItemRows = [];
@@ -18078,7 +18105,7 @@ export const CostingModule = {
 
         .symbolika-costing-reconciliation-filters {
           display: grid;
-          grid-template-columns: minmax(150px, 230px) minmax(150px, 230px) 140px 140px auto;
+          grid-template-columns: minmax(150px, 220px) minmax(150px, 220px) minmax(170px, 220px) 140px 140px auto;
           flex: 1 1 760px;
           gap: 10px;
           align-items: center;
@@ -33632,6 +33659,12 @@ export const CostingModule = {
                   {{ company.name }}
                 </option>
               </select>
+              <select v-model="financeDebtFilter" class="symbolika-costing-select" title="Сторона задолженности">
+                <option value="all">Все расчёты</option>
+                <option value="customer_owes_us">Заказчик должен нам</option>
+                <option value="we_owe_customer">Мы должны заказчику</option>
+                <option value="settled">Без долга</option>
+              </select>
               <input v-model="financeDateFrom" class="symbolika-costing-input" type="date" title="Дата заказа от" />
               <input v-model="financeDateTo" class="symbolika-costing-input" type="date" title="Дата заказа до" />
               <button type="button" class="symbolika-costing-mini-button" @click="clearFinanceEntityFilters">
@@ -33865,6 +33898,12 @@ export const CostingModule = {
                   {{ company.name }}
                 </option>
               </select>
+              <select v-model="financeDebtFilter" class="symbolika-costing-select" title="Сторона задолженности">
+                <option value="all">Все расчёты</option>
+                <option value="customer_owes_us">Заказчик должен нам</option>
+                <option value="we_owe_customer">Мы должны заказчику</option>
+                <option value="settled">Без долга</option>
+              </select>
               <input v-model="financeDateFrom" class="symbolika-costing-input" type="date" title="Дата заказа от" />
               <input v-model="financeDateTo" class="symbolika-costing-input" type="date" title="Дата заказа до" />
               <button type="button" class="symbolika-costing-mini-button" @click="clearFinanceEntityFilters">
@@ -33889,7 +33928,7 @@ export const CostingModule = {
               <div class="symbolika-costing-card-note">
                 {{ financeLevel === 'items'
                   ? visibleFinanceItemRowsAllocated.length + ' ' + pluralRu(visibleFinanceItemRowsAllocated.length, 'позиция', 'позиции', 'позиций')
-                  : visibleFinanceRows.length + ' ' + pluralRu(visibleFinanceRows.length, 'строка', 'строки', 'строк') }}
+                  : visibleClientRows.length + ' ' + pluralRu(visibleClientRows.length, 'заказчик', 'заказчика', 'заказчиков') }}
               </div>
             </div>
             <div class="symbolika-costing-card green">
@@ -33910,59 +33949,100 @@ export const CostingModule = {
           </div>
 
           <div v-if="financeLevel === 'orders'" class="symbolika-costing-table-wrap">
-            <table class="symbolika-costing-table symbolika-costing-table-compact symbolika-costing-table-finance">
+            <table class="symbolika-costing-table symbolika-costing-table-compact symbolika-costing-table-finance symbolika-costing-directory-table">
               <colgroup>
-                <col style="width: 105px" />
+                <col style="width: 52px" />
+                <col />
                 <col style="width: 190px" />
-                <col style="width: 145px" />
-                <col style="width: 180px" />
-                <col style="width: 140px" />
+                <col style="width: 250px" />
+                <col style="width: 290px" />
               </colgroup>
               <thead>
                 <tr>
-                  <th>Основание</th>
+                  <th></th>
                   <th>Заказчик</th>
-                  <th>Менеджер / статус</th>
-                  <th>Деньги</th>
-                  <th>Итог сверки</th>
+                  <th>Менеджер / активность</th>
+                  <th>Заказы и оплаты</th>
+                  <th>Баланс и действия</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in visibleFinanceRows" :key="row.id" :class="[rowStateClass(row), 'symbolika-costing-row-clickable']" @click="row.entry_type === 'operation' ? openClientOperation(row) : openRowDetail('finance', row, $event)">
-                  <td>
-                    <span class="symbolika-costing-order">{{ row.entry_type === 'operation' ? clientOperationTypeName(row.operation_type) : row.order_number }}</span>
-                    <div class="symbolika-costing-subtle">{{ formatDate(row.date) }}</div>
-                    <div v-if="row.entry_type === 'operation'" class="symbolika-costing-subtle">{{ row.order_number }} · {{ row.description }}</div>
-                    <span v-else class="symbolika-costing-date" :class="deadlineClass(row.deadline, row)"><v-icon :name="deadlineIcon(row.deadline, row)" small />{{ formatDate(row.deadline) }}</span>
-                  </td>
-                  <td>
-                    <div>{{ row.counterparty_name || row.customer_name || '-' }}</div>
-                    <div class="symbolika-costing-subtle">
-                      {{ [row.customer_name, row.customer_company_name].filter(Boolean).join(' · ') || '-' }}
-                    </div>
-                  </td>
-                  <td>
-                    <div>
+                <template v-for="row in visibleClientRows" :key="row.key">
+                  <tr class="symbolika-costing-directory-row" :class="{ 'has-debt': parseMoney(row.payment_due) > 0 }">
+                    <td>
+                      <button type="button" class="symbolika-costing-directory-expand" :title="isClientRowExpanded(row) ? 'Скрыть детализацию' : 'Показать заказы и операции'" @click="toggleClientRow(row)">
+                        <v-icon :name="isClientRowExpanded(row) ? 'remove' : 'add'" small />
+                      </button>
+                    </td>
+                    <td class="symbolika-costing-directory-primary">
+                      <div class="symbolika-costing-directory-identity">
+                        <button type="button" class="symbolika-costing-link-button symbolika-costing-directory-name" @click="openEntityDetail(row.customer_company_name ? 'company' : 'customer', row)">
+                          {{ row.customer_company_name || row.customer_name || '-' }}
+                        </button>
+                        <div class="symbolika-costing-directory-contact">
+                          {{ row.customer_company_name && row.customer_name ? row.customer_name : (row.customer_company_name ? 'Компания' : 'Частный клиент') }}
+                        </div>
+                      </div>
+                    </td>
+                    <td>
                       <a v-if="managerUrl(row)" class="symbolika-costing-entity-link" :href="managerUrl(row)" @click.prevent="openEntityDetail('manager', row)">{{ row.manager_name || '-' }}</a>
                       <span v-else>{{ row.manager_name || '-' }}</span>
-                    </div>
-                    <span class="symbolika-costing-pill" :class="row.entry_type === 'operation' ? paymentBadgeClass(row.payment_due) : statusBadgeClass(row.order_status_name)">{{ row.entry_type === 'operation' ? clientOperationDirectionName(row.direction) : (row.order_status_name || '-') }}</span>
-                  </td>
-                  <td>
-                    <div class="symbolika-costing-money-stack">
-                      <span>{{ row.entry_type === 'operation' ? 'Начислено' : 'Сумма' }} <strong>{{ formatMoney(row.order_sum) }}</strong></span>
-                      <span>{{ row.entry_type === 'operation' ? (row.direction === 'we_owe_customer' ? 'Погашено' : 'Оплачено') : 'Оплачено' }} <strong>{{ formatMoney(row.paid_amount) }}</strong></span>
-                      <span>Остаток <strong><span class="symbolika-costing-pill" :class="paymentBadgeClass(row.payment_due)">{{ formatMoney(row.payment_due) }}</span></strong></span>
-                      <span>Переплата <strong>{{ formatMoney(row.overpayment) }}</strong></span>
-                    </div>
-                  </td>
-                  <td>
-                    <span class="symbolika-costing-pill" :class="paymentBadgeClass(row.payment_due)">{{ row.reconciliation_result || '-' }}</span>
-                  </td>
-                </tr>
+                      <div class="symbolika-costing-subtle">
+                        {{ row.orders.length }} {{ pluralRu(row.orders.length, 'заказ', 'заказа', 'заказов') }} ·
+                        {{ row.operations.length }} {{ pluralRu(row.operations.length, 'операция', 'операции', 'операций') }}
+                      </div>
+                    </td>
+                    <td>
+                      <div class="symbolika-costing-money-stack">
+                        <span>Начислено <strong>{{ formatMoney(row.order_sum) }}</strong></span>
+                        <span>Оплачено <strong>{{ formatMoney(row.paid_amount) }}</strong></span>
+                        <span v-if="parseMoney(row.payment_due) > 0">Нам должны <strong>{{ formatMoney(row.payment_due) }}</strong></span>
+                        <span v-if="parseMoney(row.overpayment) > 0">Мы должны <strong>{{ formatMoney(row.overpayment) }}</strong></span>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="symbolika-costing-money-stack">
+                        <span>Баланс <strong><span class="symbolika-costing-pill" :class="balanceBadgeClass(clientBalance(row))">{{ formatMoney(clientBalance(row)) }}</span></strong></span>
+                      </div>
+                      <div class="symbolika-costing-client-finance-actions">
+                        <button type="button" class="symbolika-costing-button symbolika-costing-button-compact" @click="openClientPaymentForRow(row)"><v-icon name="payments" small />Оплата</button>
+                        <button type="button" class="symbolika-costing-mini-button" @click="openClientOperationForRow(row)"><v-icon name="add" small />Операция</button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr v-if="isClientRowExpanded(row)" class="symbolika-costing-expanded-row">
+                    <td colspan="5">
+                      <div v-if="row.orders.length || row.operations.length" class="symbolika-costing-client-orders">
+                        <button v-for="order in row.orders" :key="'finance-order-' + order.id" type="button" class="symbolika-costing-client-order" @click="openDetail('finance', order)">
+                          <span class="symbolika-costing-client-order-title">
+                            <strong>{{ order.order_number }}</strong>
+                            <span>{{ formatDate(order.date) }} · {{ order.order_status_name || '-' }}</span>
+                          </span>
+                          <span class="symbolika-costing-cell-money">
+                            <span>Сумма <strong>{{ formatMoney(order.order_sum) }}</strong></span>
+                            <span>Оплачено <strong>{{ formatMoney(order.paid_amount) }}</strong></span>
+                            <span>Остаток <strong>{{ formatMoney(order.payment_due) }}</strong></span>
+                          </span>
+                        </button>
+                        <button v-for="operation in row.operations" :key="'finance-operation-' + operation.id" type="button" class="symbolika-costing-client-order" @click="openClientOperation(operation)">
+                          <span class="symbolika-costing-client-order-title">
+                            <strong>{{ clientOperationTypeName(operation.operation_type) }}</strong>
+                            <span>{{ formatDate(operation.date) }} · {{ operation.description || clientOperationDirectionName(operation.direction) }}</span>
+                          </span>
+                          <span class="symbolika-costing-cell-money">
+                            <span>Сумма <strong>{{ formatMoney(operation.order_sum) }}</strong></span>
+                            <span>Погашено <strong>{{ formatMoney(operation.paid_amount) }}</strong></span>
+                            <span>Остаток <strong>{{ formatMoney(operation.payment_due) }}</strong></span>
+                          </span>
+                        </button>
+                      </div>
+                      <div v-else class="symbolika-costing-empty symbolika-costing-empty-inline">Заказов и операций пока нет</div>
+                    </td>
+                  </tr>
+                </template>
               </tbody>
             </table>
-            <div v-if="!visibleFinanceRows.length" class="symbolika-costing-empty">Нет строк сверки</div>
+            <div v-if="!visibleClientRows.length" class="symbolika-costing-empty">Нет заказчиков по выбранным фильтрам</div>
           </div>
 
           <div v-if="financeLevel === 'items'" class="symbolika-costing-table-wrap">
