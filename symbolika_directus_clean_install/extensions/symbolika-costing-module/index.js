@@ -12784,7 +12784,10 @@ export const CostingModule = {
     },
 
     screenCostMonthKey(row) {
-      const raw = String(row?.deadline || row?.date || '').trim();
+      // Cost belongs to the accounting month in which the order was created.
+      // The production deadline is only a workflow date and must not move the
+      // position's cost into another month.
+      const raw = String(row?.date || row?.order_date || row?.order?.date || '').trim();
       const match = raw.match(/^(\d{4})-(\d{2})/);
       return match ? `${match[1]}-${match[2]}` : '';
     },
@@ -34738,7 +34741,7 @@ export const CostingModule = {
             </button>
           </div>
           <label v-if="screenViewMode === 'costs'" class="symbolika-screen-cost-month">
-            <span>Месяц производства</span>
+            <span>Месяц оформления заказа</span>
             <select
               class="symbolika-costing-select"
               :value="screenCostSelectedMonth"

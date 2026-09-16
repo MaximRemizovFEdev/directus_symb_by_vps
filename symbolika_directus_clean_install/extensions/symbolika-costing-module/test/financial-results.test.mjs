@@ -85,6 +85,26 @@ test('uses the same margin before payroll in order economics and monthly results
   assert.equal(month.order_margin, orderMarginBeforePayroll(item));
 });
 
+test('monthly order costs and margin follow the order date, not the deadline', () => {
+  const [month] = buildMonthlyFinancialRows({
+    costingRows: [{
+      id: 1,
+      order: 10,
+      date: '2026-09-30',
+      deadline: '2026-10-15',
+      item_status: 'in_work',
+      profit_sum: 800,
+      manager_commission_sum: 50,
+    }],
+    monthKey,
+    monthLabel,
+    orderKey,
+  });
+
+  assert.equal(month.key, '2026-09');
+  assert.equal(month.order_margin, 850);
+});
+
 test('monthly finance uses a dedicated fully loaded costing dataset', () => {
   assert.match(moduleSource, /costingRows: this\.financialCostingRows/);
   assert.match(moduleSource, /loadCompletePagedCollection\('financial_costing', '\/items\/contractor_costing'/);
