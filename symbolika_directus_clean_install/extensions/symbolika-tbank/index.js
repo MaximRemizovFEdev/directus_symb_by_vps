@@ -80,7 +80,7 @@ export function buildInvoicePreview(order, items, options = {}) {
 }
 
 function paymentErrorMessage(payload, fallback) {
-  const message = String(payload?.error?.message || payload?.errorMessage || payload?.message || payload?.Message || payload?.Details || fallback);
+  const message = String(payload?.Details || payload?.details || payload?.error?.message || payload?.errorMessage || payload?.message || payload?.Message || fallback);
   if (/неподходящие скопы|required scopes|opensme\/inn\//i.test(message)) {
     return 'Текущему API-токену Т-Банка не выдан доступ «Выставление ссылок через СБП». Создайте или обновите токен с разрешением на создание и получение QR-кода для вашей компании.';
   }
