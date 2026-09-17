@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import endpoint, { buildInvoicePreview } from '../index.js';
 
-test('builds an invoice preview from active order positions and company contacts', () => {
+test('builds an invoice preview from active order positions without requiring contacts', () => {
   const preview = buildInvoicePreview({
     id: 114,
     order_number: 'SO-00109',
@@ -13,22 +13,23 @@ test('builds an invoice preview from active order positions and company contacts
   }, [
     { id: 1, product_name: 'Футболка', quantity: '2', price_per_unit: '1250.50', item_status: 'ready' },
     { id: 2, product_name: 'Отменено', quantity: 1, price_per_unit: 500, item_status: 'cancelled' },
-  ], { today: '2026-09-17', defaultDueDate: '2026-09-24' });
+  ], { today: '2026-09-17', defaultDueDate: '2026-09-24', fallbackInvoiceNumber: '260917114001' });
 
-  assert.equal(preview.invoiceNumber, '00109');
+  assert.equal(preview.invoiceNumber, '260917114001');
   assert.equal(preview.dueDate, '2026-09-18');
-  assert.equal(preview.contactPhone, '+79991112233');
-  assert.equal(preview.email, 'office@example.com');
+  assert.equal('contactPhone' in preview, false);
+  assert.equal('email' in preview, false);
   assert.equal(preview.payerName, 'Компания');
   assert.deepEqual(preview.items, [{ id: 1, name: 'Футболка', price: 1250.5, amount: 2, unit: 'шт', vat: 'None' }]);
   assert.equal(preview.total, 2501);
 });
 
-test('uses a future fallback deadline and customer contacts when company is absent', () => {
+test('uses a future fallback deadline and configured 1C invoice number when company is absent', () => {
   const preview = buildInvoicePreview({
     id: 7,
     order_number: 'SO-00007',
     deadline: '2026-09-01',
+    invoice_number_1c: 'Счёт № 731',
     customer: { name: 'Клиент', phone: '9000000000', email: 'CLIENT@EXAMPLE.COM' },
   }, [{ id: 3, product_name: 'Печать', quantity: 1, price_per_unit: 100, item_status: 'new' }], {
     today: '2026-09-17',
@@ -36,8 +37,7 @@ test('uses a future fallback deadline and customer contacts when company is abse
   });
 
   assert.equal(preview.dueDate, '2026-09-24');
-  assert.equal(preview.contactPhone, '+79000000000');
-  assert.equal(preview.email, 'client@example.com');
+  assert.equal(preview.invoiceNumber, '731');
 });
 
 test('creates an invoice with the server token and canonical order items', async () => {
@@ -95,4 +95,6 @@ test('creates an invoice with the server token and canonical order items', async
   const sent = JSON.parse(bankRequest.options.body);
   assert.equal(sent.invoiceNumber, '109');
   assert.deepEqual(sent.items, [{ name: 'Брошюра', price: 1060, amount: 2, unit: 'шт', vat: 'None' }]);
+  assert.equal('contactPhone' in sent, false);
+  assert.equal('contacts' in sent, false);
 });

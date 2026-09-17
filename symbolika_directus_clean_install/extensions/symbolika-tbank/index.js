@@ -32,24 +32,11 @@ function moscowDate(offsetDays = 0) {
   }).format(now);
 }
 
-function invoiceNumber(value, fallback) {
+function invoiceNumber(value, fallback = Date.now()) {
   const preferred = String(value || '').replace(/\D/g, '').slice(0, 15);
   if (preferred) return preferred;
   const fallbackDigits = String(fallback || '').replace(/\D/g, '').slice(0, 15);
   return fallbackDigits || String(Date.now()).slice(-15);
-}
-
-function normalizePhone(value) {
-  const digits = String(value || '').replace(/\D/g, '');
-  if (digits.length === 11 && digits.startsWith('8')) return `+7${digits.slice(1)}`;
-  if (digits.length === 11 && digits.startsWith('7')) return `+${digits}`;
-  if (digits.length === 10) return `+7${digits}`;
-  return '';
-}
-
-function normalizeEmail(value) {
-  const email = String(value || '').trim().toLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
 }
 
 function activeInvoiceItems(items = []) {
@@ -79,11 +66,9 @@ export function buildInvoicePreview(order, items, options = {}) {
   return {
     orderId: Number(order?.id),
     orderNumber: String(order?.order_number || `#${order?.id || ''}`),
-    invoiceNumber: invoiceNumber(order?.invoice_number_1c, order?.order_number || order?.id),
+    invoiceNumber: invoiceNumber(order?.invoice_number_1c, options.fallbackInvoiceNumber),
     invoiceDate: today,
     dueDate,
-    contactPhone: normalizePhone(company.phone || customer.phone),
-    email: normalizeEmail(company.email || customer.email),
     payerName: String(company.name || customer.name || '').trim(),
     items: invoiceItems,
     total,
@@ -126,8 +111,8 @@ export default {
       const order = await orderService.readOne(orderId, {
         fields: [
           'id', 'order_number', 'invoice_number_1c', 'deadline',
-          'customer.id', 'customer.name', 'customer.phone', 'customer.email',
-          'customer_company.id', 'customer_company.name', 'customer_company.phone', 'customer_company.email',
+          'customer.id', 'customer.name',
+          'customer_company.id', 'customer_company.name',
         ],
       });
       const items = await itemService.readByQuery({
@@ -168,8 +153,6 @@ export default {
         const requestedInvoiceNumber = invoiceNumber(req.body?.invoiceNumber, preview.invoiceNumber);
         const requestedDueDate = dateOnly(req.body?.dueDate) || preview.dueDate;
         if (requestedDueDate < preview.invoiceDate) throw apiError('Срок оплаты не может быть раньше текущей даты.', 400);
-        const contactPhone = normalizePhone(req.body?.contactPhone || preview.contactPhone);
-        const email = normalizeEmail(req.body?.email || preview.email);
         const body = {
           invoiceNumber: requestedInvoiceNumber,
           invoiceDate: preview.invoiceDate,
@@ -178,8 +161,6 @@ export default {
           customPaymentPurpose: `Оплата по заказу ${preview.orderNumber}`.slice(0, 512),
         };
         if (accountNumber) body.accountNumber = accountNumber;
-        if (contactPhone) body.contactPhone = contactPhone;
-        if (email) body.contacts = [{ email }];
 
         const response = await fetch(API_URL, {
           method: 'POST',

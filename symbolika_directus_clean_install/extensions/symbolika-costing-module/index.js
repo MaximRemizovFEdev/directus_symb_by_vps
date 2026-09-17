@@ -7262,8 +7262,6 @@ export const CostingModule = {
         error: '',
         invoiceNumber: '',
         dueDate: '',
-        contactPhone: '',
-        email: '',
         payerName: '',
         items: [],
         total: 0,
@@ -7305,8 +7303,6 @@ export const CostingModule = {
           body: JSON.stringify({
             invoiceNumber,
             dueDate: dialog.dueDate,
-            contactPhone: dialog.contactPhone || null,
-            email: dialog.email || null,
           }),
         });
         if (!this.tbankInvoiceDialog || this.tbankInvoiceDialog.orderId !== dialog.orderId) return;
@@ -38071,15 +38067,6 @@ export const CostingModule = {
                   Срок оплаты
                   <input v-model="tbankInvoiceDialog.dueDate" class="symbolika-costing-input" type="date" :disabled="!!tbankInvoiceDialog.paymentUrl" />
                 </label>
-                <label class="symbolika-costing-label">
-                  Телефон клиента
-                  <input v-model.trim="tbankInvoiceDialog.contactPhone" class="symbolika-costing-input" placeholder="+7XXXXXXXXXX" :disabled="!!tbankInvoiceDialog.paymentUrl" />
-                </label>
-                <label class="symbolika-costing-label">
-                  Email клиента
-                  <input v-model.trim="tbankInvoiceDialog.email" class="symbolika-costing-input" type="email" placeholder="client@example.com" :disabled="!!tbankInvoiceDialog.paymentUrl" />
-                </label>
-
                 <div class="symbolika-costing-label symbolika-costing-detail-wide">
                   Позиции счёта
                   <div class="symbolika-costing-tbank-items">
