@@ -78,6 +78,7 @@ test('creates an acquiring payment link for an individual', async () => {
     env: {
       SYMBOLIKA_TBANK_TERMINAL_KEY: 'terminal-test',
       SYMBOLIKA_TBANK_TERMINAL_PASSWORD: 'password-test',
+      SYMBOLIKA_PAYMENT_PUBLIC_URL: 'https://pay.symbcorp.ru/',
     },
     logger: { warn() {}, error() {} },
     tbankTransport,
@@ -90,7 +91,7 @@ test('creates an acquiring payment link for an individual', async () => {
   }, response);
 
   assert.equal(response.statusCode, 200);
-  assert.match(response.body.data.paymentUrl, /^https:\/\/symbcorp\.ru\/symbolika-tbank\/pay\/[0-9a-f-]{36}$/);
+  assert.match(response.body.data.paymentUrl, /^https:\/\/pay\.symbcorp\.ru\/symbolika-tbank\/pay\/[0-9a-f-]{36}$/);
   assert.equal(response.body.data.paymentId, 'payment-1');
   assert.equal(bankRequests.length, 2);
   assert.equal(bankRequests[0].url, 'https://securepay.tinkoff.ru/v2/Init');
@@ -101,7 +102,7 @@ test('creates an acquiring payment link for an individual', async () => {
   assert.equal(request.Description, 'Оплата по заказу SO-00109');
   assert.equal(request.PayType, 'O');
   assert.equal(request.Language, 'ru');
-  assert.equal(request.NotificationURL, 'https://symbcorp.ru/symbolika-tbank/notification');
+  assert.equal(request.NotificationURL, 'https://pay.symbcorp.ru/symbolika-tbank/notification');
   assert.deepEqual(request.Receipt, {
     Email: 'client@example.com',
     Taxation: 'usn_income',

@@ -195,6 +195,9 @@ export default {
   handler: (router, { services, getSchema, env, logger, database, tbankTransport: injectedTransport }) => {
     const terminalKey = String(env.SYMBOLIKA_TBANK_TERMINAL_KEY || process.env.SYMBOLIKA_TBANK_TERMINAL_KEY || '').trim();
     const terminalPassword = String(env.SYMBOLIKA_TBANK_TERMINAL_PASSWORD || process.env.SYMBOLIKA_TBANK_TERMINAL_PASSWORD || '').trim();
+    const paymentPublicUrl = String(env.SYMBOLIKA_PAYMENT_PUBLIC_URL || process.env.SYMBOLIKA_PAYMENT_PUBLIC_URL || 'https://pay.symbcorp.ru')
+      .trim()
+      .replace(/\/+$/, '');
 
     const requireUser = (req, res) => {
       if (req.accountability?.user) return true;
@@ -321,7 +324,7 @@ export default {
           Description: `Оплата по заказу ${preview.orderNumber}`.slice(0, 140),
           PayType: 'O',
           Language: 'ru',
-          NotificationURL: 'https://symbcorp.ru/symbolika-tbank/notification',
+          NotificationURL: `${paymentPublicUrl}/symbolika-tbank/notification`,
           Receipt: receipt,
         };
         const bankResult = await createAcquiringPaymentLink(requestBody, terminalPassword, injectedTransport || tbankTransport);
@@ -332,7 +335,7 @@ export default {
         const sbpUrl = String(qrResult?.Data || qrResult?.data || '').trim();
         if (!sbpUrl) throw apiError('Т-Банк не вернул ссылку СБП.', 502);
         const publicToken = randomUUID();
-        const paymentUrl = `https://symbcorp.ru/symbolika-tbank/pay/${publicToken}`;
+        const paymentUrl = `${paymentPublicUrl}/symbolika-tbank/pay/${publicToken}`;
         if (database) await database('symbolika_tbank_payments').insert({
           order_id: orderId,
           payment_id: paymentId,
