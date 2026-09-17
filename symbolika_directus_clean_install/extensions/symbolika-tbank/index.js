@@ -187,7 +187,7 @@ async function createAcquiringPaymentLink(payload, password, transport = tbankTr
 
 export default {
   id: 'symbolika-tbank',
-  handler: (router, { services, getSchema, env, logger, tbankTransport: injectedTransport }) => {
+  handler: (router, { services, getSchema, env, logger, database, tbankTransport: injectedTransport }) => {
     const terminalKey = String(env.SYMBOLIKA_TBANK_TERMINAL_KEY || process.env.SYMBOLIKA_TBANK_TERMINAL_KEY || '').trim();
     const terminalPassword = String(env.SYMBOLIKA_TBANK_TERMINAL_PASSWORD || process.env.SYMBOLIKA_TBANK_TERMINAL_PASSWORD || '').trim();
 
@@ -217,6 +217,49 @@ export default {
       return { order, items };
     };
 
+    router.post('/notification', async (req, res) => {
+      try {
+        const payload = req.body || {};
+        const receivedToken = String(payload.Token || '');
+        if (!terminalPassword || !receivedToken || createPaymentToken(payload, terminalPassword) !== receivedToken) {
+          return res.status(403).send('INVALID TOKEN');
+        }
+        const paymentId = String(payload.PaymentId || payload.PaymentID || '').trim();
+        const status = String(payload.Status || '').trim().toUpperCase();
+        if (!paymentId || !database) return res.status(400).send('INVALID PAYMENT');
+        await database.transaction(async (trx) => {
+          const tracked = await trx('symbolika_tbank_payments').where({ payment_id: paymentId }).forUpdate().first();
+          if (!tracked) return;
+          await trx('symbolika_tbank_payments').where({ id: tracked.id }).update({ status, date_updated: trx.fn.now() });
+          if (status !== 'CONFIRMED' || tracked.order_payment_id) return;
+          const order = await trx('orders').where({ id: tracked.order_id }).first('id', 'customer', 'customer_company', 'payment_type');
+          if (!order) return;
+          let paymentType = order.payment_type;
+          if (!paymentType) {
+            const type = await trx('payment_types').whereRaw("lower(name) like '%безнал%'").orderBy('id').first('id');
+            paymentType = type?.id || null;
+          }
+          const inserted = await trx('order_payments').insert({
+            order: order.id,
+            customer: order.customer,
+            customer_company: order.customer_company,
+            amount: tracked.amount,
+            payment_date: new Date().toISOString().slice(0, 10),
+            payment_type: paymentType,
+            payment_direction: 'incoming',
+            allocation_mode: 'auto',
+            comment: `Оплата через Т-Банк, PaymentId ${paymentId}`,
+          }).returning('id');
+          const orderPaymentId = Number(inserted?.[0]?.id ?? inserted?.[0]);
+          await trx('symbolika_tbank_payments').where({ id: tracked.id }).update({ order_payment_id: orderPaymentId, date_updated: trx.fn.now() });
+        });
+        return res.send('OK');
+      } catch (error) {
+        logger.error({ error }, '[Symbolika TBank] Notification failed');
+        return res.status(500).send('ERROR');
+      }
+    });
+
     router.get('/orders/:id/preview', async (req, res) => {
       if (!requireUser(req, res)) return;
       try {
@@ -225,7 +268,8 @@ export default {
         const { order, items } = await loadOrder(orderId, req.accountability);
         const preview = buildInvoicePreview(order, items);
         if (!preview.items.length) throw apiError('В заказе нет позиций для выставления счёта.', 400);
-        res.json({ data: preview });
+        const tracked = database ? await database('symbolika_tbank_payments').where({ order_id: orderId }).orderBy('date_created', 'desc').first() : null;
+        res.json({ data: { ...preview, paymentLinkStatus: tracked?.status || '', paymentLinkUrl: tracked?.payment_url || '', paymentLinkAmount: tracked?.amount || 0 } });
       } catch (error) {
         res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось подготовить счёт.' }] });
       }
@@ -260,12 +304,21 @@ export default {
           Description: `Оплата по заказу ${preview.orderNumber}`.slice(0, 140),
           PayType: 'O',
           Language: 'ru',
+          NotificationURL: 'https://symbcorp.ru/symbolika-tbank/notification',
           Receipt: receipt,
         };
         const bankResult = await createAcquiringPaymentLink(requestBody, terminalPassword, injectedTransport || tbankTransport);
         const paymentUrl = String(bankResult?.PaymentURL || bankResult?.PaymentUrl || bankResult?.paymentUrl || '').trim();
         const paymentId = String(bankResult?.PaymentId || bankResult?.PaymentID || '').trim();
         if (!paymentUrl) throw apiError('Т-Банк инициировал платёж, но не вернул ссылку PaymentURL.', 502);
+        if (!paymentId) throw apiError('Т-Банк инициировал платёж без PaymentId.', 502);
+        if (database) await database('symbolika_tbank_payments').insert({
+          order_id: orderId,
+          payment_id: paymentId,
+          payment_url: paymentUrl,
+          amount: amount / 100,
+          status: String(bankResult?.Status || 'NEW'),
+        });
         res.json({ data: { paymentId, paymentUrl, total: preview.total, operationId } });
       } catch (error) {
         logger.error({ error, orderId: Number(req.params.id) || null }, '[Symbolika TBank] Payment link request failed');

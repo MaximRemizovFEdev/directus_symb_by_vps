@@ -38056,6 +38056,14 @@ export const CostingModule = {
                   </div>
                 </div>
 
+                <div v-if="tbankInvoiceDialog.paymentLinkStatus" class="symbolika-costing-label symbolika-costing-detail-wide">
+                  Статус последней ссылки
+                  <div class="symbolika-costing-detail-value">
+                    {{ tbankInvoiceDialog.paymentLinkStatus === 'CONFIRMED' ? 'Оплачено' : 'Ожидает оплаты' }}
+                    <span v-if="tbankInvoiceDialog.paymentLinkAmount"> · {{ formatMoney(tbankInvoiceDialog.paymentLinkAmount) }}</span>
+                  </div>
+                </div>
+
                 <div class="symbolika-costing-label symbolika-costing-detail-wide">
                   Куда отправить кассовый чек
                   <div class="symbolika-costing-segments">

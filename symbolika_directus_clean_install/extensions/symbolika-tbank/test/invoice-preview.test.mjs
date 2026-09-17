@@ -100,6 +100,7 @@ test('creates an acquiring payment link for an individual', async () => {
   assert.equal(request.Description, 'Оплата по заказу SO-00109');
   assert.equal(request.PayType, 'O');
   assert.equal(request.Language, 'ru');
+  assert.equal(request.NotificationURL, 'https://symbcorp.ru/symbolika-tbank/notification');
   assert.deepEqual(request.Receipt, {
     Email: 'client@example.com',
     Taxation: 'usn_income',
@@ -120,6 +121,7 @@ test('creates an acquiring payment link for an individual', async () => {
     Description: request.Description,
     PayType: request.PayType,
     Language: request.Language,
+    NotificationURL: request.NotificationURL,
     Receipt: request.Receipt,
   }, 'password-test'));
 });
