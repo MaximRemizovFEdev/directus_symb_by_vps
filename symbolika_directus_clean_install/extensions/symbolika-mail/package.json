@@ -1,0 +1,17 @@
+{
+  "name": "directus-extension-symbolika-mail",
+  "version": "1.0.0",
+  "type": "module",
+  "directus:extension": {
+    "type": "endpoint",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  },
+  "dependencies": {
+    "busboy": "^1.6.0",
+    "imapflow": "^1.0.195",
+    "mailparser": "3.9.16",
+    "nodemailer": "^9.0.5"
+  }
+}
