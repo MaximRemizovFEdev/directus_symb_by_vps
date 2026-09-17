@@ -21,5 +21,6 @@ test('T-Bank acquiring credentials are injected only through server environment 
 
   assert.match(compose, /SYMBOLIKA_TBANK_TERMINAL_KEY: "\$\{SYMBOLIKA_TBANK_TERMINAL_KEY:-\}"/);
   assert.match(compose, /SYMBOLIKA_TBANK_TERMINAL_PASSWORD: "\$\{SYMBOLIKA_TBANK_TERMINAL_PASSWORD:-\}"/);
+  assert.match(compose, /NODE_EXTRA_CA_CERTS: "\/directus\/setup\/certs\/russian-trusted-ca-bundle\.pem"/);
   assert.doesNotMatch(compose, /Bearer\s+t\.[A-Za-z0-9_-]{20,}/);
 });
