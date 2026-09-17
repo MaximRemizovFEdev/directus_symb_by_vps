@@ -2153,7 +2153,8 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     // mixed-payment tax with the order's nominal payment type.
     const tax_sum = round(num(item.tax_sum));
 
-    const profit_sum = round(order_sum - total_cost - manager_commission_sum - tax_sum);
+    const acquiring_fee_sum = round(num(item.acquiring_fee_sum));
+    const profit_sum = round(order_sum - total_cost - manager_commission_sum - tax_sum - acquiring_fee_sum);
     const margin_percent = order_sum > 0 ? round(profit_sum / order_sum * 100) : 0;
 
     await database('orders_items').where({ id }).update({
@@ -2190,7 +2191,8 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
     const items_manager_commission_sum = round(activeItems.reduce((s, x) => s + num(x.manager_commission_sum), 0));
     const items_tax_sum = round(activeItems.reduce((s, x) => s + num(x.tax_sum), 0));
 
-    const profit_sum = round(order_sum - items_total_cost - items_manager_commission_sum - items_tax_sum);
+    const acquiring_fee_sum = round(activeItems.reduce((s, x) => s + num(x.acquiring_fee_sum), 0));
+    const profit_sum = round(order_sum - items_total_cost - items_manager_commission_sum - items_tax_sum - acquiring_fee_sum);
     const margin_percent = order_sum > 0 ? round(profit_sum / order_sum * 100) : 0;
 
     const allocations = await database('payment_allocations').where({ order: orderId });
@@ -2204,6 +2206,7 @@ export default ({ filter, action, schedule }, { database, logger, env }) => {
       items_total_cost,
       items_manager_commission_sum,
       items_tax_sum,
+      acquiring_fee_sum,
       profit_sum,
       margin_percent,
       paid_amount,

@@ -250,15 +250,13 @@ export default {
         await database.transaction(async (trx) => {
           const tracked = await trx('symbolika_tbank_payments').where({ payment_id: paymentId }).forUpdate().first();
           if (!tracked) return;
-          await trx('symbolika_tbank_payments').where({ id: tracked.id }).update({ status, date_updated: trx.fn.now() });
+          const effectiveStatus = tracked.status === 'CONFIRMED' ? 'CONFIRMED' : status;
+          await trx('symbolika_tbank_payments').where({ id: tracked.id }).update({ status: effectiveStatus, date_updated: trx.fn.now() });
           if (status !== 'CONFIRMED' || tracked.order_payment_id) return;
-          const order = await trx('orders').where({ id: tracked.order_id }).first('id', 'customer', 'customer_company', 'payment_type');
+          const order = await trx('orders').where({ id: tracked.order_id }).first('id', 'customer', 'customer_company');
           if (!order) return;
-          let paymentType = order.payment_type;
-          if (!paymentType) {
-            const type = await trx('payment_types').whereRaw("lower(name) like '%безнал%'").orderBy('id').first('id');
-            paymentType = type?.id || null;
-          }
+          const type = await trx('payment_types').where({ tax_percent: 8 }).orderBy('id').first('id');
+          const paymentType = type?.id || null;
           const inserted = await trx('order_payments').insert({
             order: order.id,
             customer: order.customer,
@@ -267,11 +265,12 @@ export default {
             payment_date: new Date().toISOString().slice(0, 10),
             payment_type: paymentType,
             payment_direction: 'incoming',
-            allocation_mode: 'auto',
+            allocation_mode: 'to_order',
             comment: `Оплата через Т-Банк, PaymentId ${paymentId}`,
           }).returning('id');
           const orderPaymentId = Number(inserted?.[0]?.id ?? inserted?.[0]);
           await trx('symbolika_tbank_payments').where({ id: tracked.id }).update({ order_payment_id: orderPaymentId, date_updated: trx.fn.now() });
+          await trx.raw('SELECT symbolika_recalc_order_acquiring_fee(?)', [order.id]);
         });
         return res.send('OK');
       } catch (error) {

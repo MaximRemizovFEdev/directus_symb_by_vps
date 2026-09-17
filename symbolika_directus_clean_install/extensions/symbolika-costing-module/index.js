@@ -114,6 +114,7 @@ const fields = [
   'total_cost',
   'manager_commission_sum',
   'tax_sum',
+  'acquiring_fee_sum',
   'profit_sum',
   'margin_percent',
 ];
@@ -550,6 +551,7 @@ const orderEconomicsFields = [
   'items_total_cost',
   'items_tax_sum',
   'items_manager_commission_sum',
+  'acquiring_fee_sum',
   'profit_sum',
   'margin_percent',
 ];
@@ -2552,13 +2554,14 @@ export const CostingModule = {
         summary.revenue += this.parseMoney(row.order_sum);
         summary.cost += this.parseMoney(itemView ? row.total_cost : row.items_total_cost);
         summary.tax += this.parseMoney(itemView ? row.tax_sum : row.items_tax_sum);
+        summary.acquiringFee += this.parseMoney(row.acquiring_fee_sum);
         summary.commission += this.parseMoney(itemView ? row.manager_commission_sum : row.items_manager_commission_sum);
         summary.profit += orderMarginBeforePayroll({
           profit_sum: row.profit_sum,
           manager_commission_sum: itemView ? row.manager_commission_sum : row.items_manager_commission_sum,
         });
         return summary;
-      }, { orders: 0, items: 0, revenue: 0, cost: 0, tax: 0, commission: 0, profit: 0 });
+      }, { orders: 0, items: 0, revenue: 0, cost: 0, tax: 0, acquiringFee: 0, commission: 0, profit: 0 });
     },
 
     visiblePurchaseRows() {
@@ -32630,6 +32633,9 @@ export const CostingModule = {
           <div class="symbolika-economics-card">
             <span>Налоги</span><strong>{{ formatMoney(orderEconomicsSummary.tax) }} ₽</strong>
           </div>
+          <div class="symbolika-economics-card">
+            <span>Эквайринг 2,2%</span><strong>{{ formatMoney(orderEconomicsSummary.acquiringFee) }} ₽</strong>
+          </div>
           <div class="symbolika-economics-card" :class="orderEconomicsSummary.profit < 0 ? 'is-negative' : 'is-profit'">
             <span>Маржа до зарплат</span><strong>{{ formatMoney(orderEconomicsSummary.profit) }} ₽</strong>
           </div>
@@ -32688,6 +32694,7 @@ export const CostingModule = {
                 <td class="symbolika-costing-num">
                   <div class="symbolika-costing-money-stack">
                     <span>Налог <strong>{{ formatMoney(row.items_tax_sum) }}</strong></span>
+                    <span v-if="parseMoney(row.acquiring_fee_sum)">Эквайринг <strong>{{ formatMoney(row.acquiring_fee_sum) }}</strong></span>
                     <span>Менеджер <strong>{{ formatMoney(row.items_manager_commission_sum) }}</strong></span>
                   </div>
                 </td>
@@ -32734,6 +32741,7 @@ export const CostingModule = {
                           <td class="symbolika-costing-num">
                             <div class="symbolika-costing-money-stack">
                               <span>Налог <strong>{{ formatMoney(item.tax_sum) }}</strong></span>
+                              <span v-if="parseMoney(item.acquiring_fee_sum)">Эквайринг <strong>{{ formatMoney(item.acquiring_fee_sum) }}</strong></span>
                               <span>Менеджер <strong>{{ formatMoney(item.manager_commission_sum) }}</strong></span>
                             </div>
                           </td>
@@ -32752,7 +32760,7 @@ export const CostingModule = {
             </tbody>
           </table>
           <div v-if="!visibleOrderEconomicsRows.length" class="symbolika-costing-empty">Заказы не найдены</div>
-          <div class="symbolika-economics-note">Маржа до зарплат = выручка − полная себестоимость − налог. Процент менеджера уже входит в начисленную зарплату и здесь повторно не вычитается.</div>
+          <div class="symbolika-economics-note">Маржа до зарплат = выручка − полная себестоимость − налог − комиссия эквайринга. Процент менеджера уже входит в начисленную зарплату и здесь повторно не вычитается.</div>
         </div>
 
         <div v-if="activeTab === 'order_economics' && orderEconomicsView === 'items'" class="symbolika-costing-table-wrap symbolika-economics-table-wrap">
@@ -32769,13 +32777,13 @@ export const CostingModule = {
                 <td><div class="symbolika-costing-cell-stack"><span>{{ relatedName(row.contractor_1) || '-' }}</span><span v-if="relatedName(row.contractor_2)" class="symbolika-costing-cell-meta">{{ relatedName(row.contractor_2) }}</span></div></td>
                 <td class="symbolika-costing-num"><strong>{{ formatMoney(row.order_sum) }}</strong></td>
                 <td class="symbolika-costing-num">{{ formatMoney(row.total_cost) }}</td>
-                <td class="symbolika-costing-num"><div class="symbolika-costing-money-stack"><span>Налог <strong>{{ formatMoney(row.tax_sum) }}</strong></span><span>Менеджер <strong>{{ formatMoney(row.manager_commission_sum) }}</strong></span></div></td>
+                <td class="symbolika-costing-num"><div class="symbolika-costing-money-stack"><span>Налог <strong>{{ formatMoney(row.tax_sum) }}</strong></span><span v-if="parseMoney(row.acquiring_fee_sum)">Эквайринг <strong>{{ formatMoney(row.acquiring_fee_sum) }}</strong></span><span>Менеджер <strong>{{ formatMoney(row.manager_commission_sum) }}</strong></span></div></td>
                 <td class="symbolika-costing-num"><strong :class="orderEconomicsMargin(row, true) < 0 ? 'symbolika-economics-negative' : 'symbolika-economics-profit'">{{ formatMoney(orderEconomicsMargin(row, true)) }}</strong><div class="symbolika-costing-cell-meta">{{ formatMoney(orderEconomicsMarginPercent(row, true)) }}%</div></td>
               </tr>
             </tbody>
           </table>
           <div v-if="!visibleOrderEconomicsItemRows.length" class="symbolika-costing-empty">Позиции не найдены</div>
-          <div class="symbolika-economics-note">Маржа позиции до зарплат = сумма позиции − полная себестоимость − налог.</div>
+          <div class="symbolika-economics-note">Маржа позиции до зарплат = сумма позиции − полная себестоимость − налог − комиссия эквайринга.</div>
         </div>
 
         <div v-if="activeTab === 'costing'" class="symbolika-costing-filter-bar">
