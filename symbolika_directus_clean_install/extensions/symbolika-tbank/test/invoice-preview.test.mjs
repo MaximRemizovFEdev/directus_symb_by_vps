@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import endpoint, { buildInvoicePreview } from '../index.js';
+import endpoint, { buildInvoicePreview, createPaymentToken } from '../index.js';
 
 test('builds an invoice preview from active order positions without requiring contacts', () => {
   const preview = buildInvoicePreview({
@@ -40,7 +40,7 @@ test('uses a future fallback deadline and configured 1C invoice number when comp
   assert.equal(preview.invoiceNumber, '731');
 });
 
-test('creates an invoice with the server token and canonical order items', async () => {
+test('creates an SBP payment link through Init and GetQr', async () => {
   const routes = {};
   const router = {
     get(path, handler) { routes[`GET ${path}`] = handler; },
@@ -62,15 +62,21 @@ test('creates an invoice with the server token and canonical order items', async
   endpoint.handler(router, {
     services: { ItemsService },
     getSchema: async () => ({}),
-    env: { SYMBOLIKA_TBANK_TOKEN: 'server-only-test-token' },
+    env: {
+      SYMBOLIKA_TBANK_TERMINAL_KEY: 'terminal-test',
+      SYMBOLIKA_TBANK_TERMINAL_PASSWORD: 'password-test',
+    },
     logger: { warn() {}, error() {} },
   });
 
   const originalFetch = globalThis.fetch;
-  let bankRequest;
+  const bankRequests = [];
   globalThis.fetch = async (url, options) => {
-    bankRequest = { url, options };
-    return { ok: true, status: 200, json: async () => ({ invoiceId: 'invoice-1', PdfUrl: 'https://example.test/invoice-1' }) };
+    bankRequests.push({ url, options });
+    if (url.endsWith('/Init')) {
+      return { ok: true, status: 200, json: async () => ({ Success: true, PaymentId: 'payment-1' }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ Success: true, Data: 'https://qr.nspk.ru/payment-1' }) };
   };
   const response = {
     statusCode: 200,
@@ -80,9 +86,9 @@ test('creates an invoice with the server token and canonical order items', async
   };
 
   try {
-    await routes['POST /orders/:id/invoice']({
+    await routes['POST /orders/:id/payment-link']({
       params: { id: '114' },
-      body: { invoiceNumber: '109', dueDate: '2099-09-24' },
+      body: {},
       accountability: { user: 'user-1' },
     }, response);
   } finally {
@@ -90,11 +96,37 @@ test('creates an invoice with the server token and canonical order items', async
   }
 
   assert.equal(response.statusCode, 200);
-  assert.equal(response.body.data.paymentUrl, 'https://example.test/invoice-1');
-  assert.equal(bankRequest.options.headers.Authorization, 'Bearer server-only-test-token');
-  const sent = JSON.parse(bankRequest.options.body);
-  assert.equal(sent.invoiceNumber, '109');
-  assert.deepEqual(sent.items, [{ name: 'Брошюра', price: 1060, amount: 2, unit: 'шт', vat: 'None' }]);
-  assert.equal('contactPhone' in sent, false);
-  assert.equal('contacts' in sent, false);
+  assert.equal(response.body.data.paymentUrl, 'https://qr.nspk.ru/payment-1');
+  assert.equal(bankRequests.length, 2);
+  assert.equal(bankRequests[0].url, 'https://securepay.tinkoff.ru/v2/Init');
+  const init = JSON.parse(bankRequests[0].options.body);
+  assert.equal(init.TerminalKey, 'terminal-test');
+  assert.equal(init.Amount, 212000);
+  assert.match(init.OrderId, /^SO-00109-\d+$/);
+  assert.equal(init.Token, createPaymentToken({
+    TerminalKey: init.TerminalKey,
+    Amount: init.Amount,
+    OrderId: init.OrderId,
+    Description: init.Description,
+    PayType: init.PayType,
+  }, 'password-test'));
+  assert.equal(bankRequests[1].url, 'https://securepay.tinkoff.ru/v2/GetQr');
+  const qr = JSON.parse(bankRequests[1].options.body);
+  assert.deepEqual({
+    TerminalKey: qr.TerminalKey,
+    PaymentId: qr.PaymentId,
+    DataType: qr.DataType,
+    PaymentMethod: qr.PaymentMethod,
+  }, {
+    TerminalKey: 'terminal-test',
+    PaymentId: 'payment-1',
+    DataType: 'PAYLOAD',
+    PaymentMethod: 'SBP',
+  });
+  assert.equal(qr.Token, createPaymentToken({
+    TerminalKey: qr.TerminalKey,
+    PaymentId: qr.PaymentId,
+    DataType: qr.DataType,
+    PaymentMethod: qr.PaymentMethod,
+  }, 'password-test'));
 });

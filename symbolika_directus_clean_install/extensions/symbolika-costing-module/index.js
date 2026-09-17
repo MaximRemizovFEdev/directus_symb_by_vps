@@ -7260,8 +7260,6 @@ export const CostingModule = {
         saving: false,
         copied: false,
         error: '',
-        invoiceNumber: '',
-        dueDate: '',
         payerName: '',
         items: [],
         total: 0,
@@ -7287,23 +7285,11 @@ export const CostingModule = {
       const dialog = this.tbankInvoiceDialog;
       if (!dialog || dialog.loading || dialog.saving || dialog.paymentUrl) return;
       dialog.error = '';
-      const invoiceNumber = String(dialog.invoiceNumber || '').trim();
-      if (!/^\d{1,15}$/.test(invoiceNumber)) {
-        dialog.error = 'Номер счёта должен содержать от 1 до 15 цифр.';
-        return;
-      }
-      if (!dialog.dueDate) {
-        dialog.error = 'Укажите срок оплаты.';
-        return;
-      }
       dialog.saving = true;
       try {
-        const payload = await this.request(`/symbolika-tbank/orders/${dialog.orderId}/invoice`, {
+        const payload = await this.request(`/symbolika-tbank/orders/${dialog.orderId}/payment-link`, {
           method: 'POST',
-          body: JSON.stringify({
-            invoiceNumber,
-            dueDate: dialog.dueDate,
-          }),
+          body: JSON.stringify({}),
         });
         if (!this.tbankInvoiceDialog || this.tbankInvoiceDialog.orderId !== dialog.orderId) return;
         Object.assign(this.tbankInvoiceDialog, payload.data || {}, { copied: false });
@@ -38059,14 +38045,6 @@ export const CostingModule = {
                   </div>
                 </div>
 
-                <label class="symbolika-costing-label">
-                  Номер счёта
-                  <input v-model.trim="tbankInvoiceDialog.invoiceNumber" class="symbolika-costing-input" inputmode="numeric" maxlength="15" :disabled="!!tbankInvoiceDialog.paymentUrl" />
-                </label>
-                <label class="symbolika-costing-label">
-                  Срок оплаты
-                  <input v-model="tbankInvoiceDialog.dueDate" class="symbolika-costing-input" type="date" :disabled="!!tbankInvoiceDialog.paymentUrl" />
-                </label>
                 <div class="symbolika-costing-label symbolika-costing-detail-wide">
                   Позиции счёта
                   <div class="symbolika-costing-tbank-items">

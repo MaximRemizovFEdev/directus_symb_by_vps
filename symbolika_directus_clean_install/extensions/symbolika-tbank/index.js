@@ -1,6 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 
-const API_URL = 'https://business.tbank.ru/openapi/api/v1/invoice/send';
+const INIT_API_URL = 'https://securepay.tinkoff.ru/v2/Init';
+const GET_QR_API_URL = 'https://securepay.tinkoff.ru/v2/GetQr';
 
 function apiError(message, status = 500) {
   const error = new Error(message);
@@ -75,28 +76,39 @@ export function buildInvoicePreview(order, items, options = {}) {
   };
 }
 
-function tbankErrorMessage(payload, status) {
-  return String(
-    payload?.errorMessage
-      || payload?.message
-      || payload?.error?.message
-      || payload?.errors?.[0]?.message
-      || `Т-Банк вернул ошибку HTTP ${status}.`,
-  );
+export function createPaymentToken(payload, password) {
+  const values = Object.entries({ ...payload, Password: password })
+    .filter(([key, value]) => key !== 'Token' && value !== undefined && value !== null && typeof value !== 'object')
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([, value]) => String(value))
+    .join('');
+  return createHash('sha256').update(values, 'utf8').digest('hex');
 }
 
-function invoiceResult(payload = {}) {
-  return {
-    invoiceId: payload.invoiceId || payload.InvoiceId || payload.id || null,
-    paymentUrl: payload.paymentUrl || payload.PaymentUrl || payload.pdfUrl || payload.PdfUrl || payload.url || null,
-  };
+function paymentErrorMessage(payload, fallback) {
+  return String(payload?.Details || payload?.Message || payload?.message || payload?.errorMessage || fallback);
+}
+
+async function postPaymentApi(url, payload, password) {
+  const body = { ...payload, Token: createPaymentToken(payload, password) };
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30000),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result?.Success === false) {
+    throw apiError(paymentErrorMessage(result, `Т-Банк вернул ошибку HTTP ${response.status}.`), response.status >= 500 ? 502 : 400);
+  }
+  return result;
 }
 
 export default {
   id: 'symbolika-tbank',
   handler: (router, { services, getSchema, env, logger }) => {
-    const token = String(env.SYMBOLIKA_TBANK_TOKEN || process.env.SYMBOLIKA_TBANK_TOKEN || '').trim();
-    const accountNumber = String(env.SYMBOLIKA_TBANK_ACCOUNT_NUMBER || process.env.SYMBOLIKA_TBANK_ACCOUNT_NUMBER || '').trim();
+    const terminalKey = String(env.SYMBOLIKA_TBANK_TERMINAL_KEY || process.env.SYMBOLIKA_TBANK_TERMINAL_KEY || '').trim();
+    const terminalPassword = String(env.SYMBOLIKA_TBANK_TERMINAL_PASSWORD || process.env.SYMBOLIKA_TBANK_TERMINAL_PASSWORD || '').trim();
 
     const requireUser = (req, res) => {
       if (req.accountability?.user) return true;
@@ -138,51 +150,40 @@ export default {
       }
     });
 
-    router.post('/orders/:id/invoice', async (req, res) => {
+    router.post('/orders/:id/payment-link', async (req, res) => {
       if (!requireUser(req, res)) return;
       try {
-        if (!token) throw apiError('Интеграция с Т-Банком не настроена.', 503);
+        if (!terminalKey || !terminalPassword) throw apiError('Не настроены TerminalKey и пароль интернет-эквайринга Т-Банка.', 503);
         const orderId = Number(req.params.id);
         if (!Number.isInteger(orderId) || orderId <= 0) throw apiError('Некорректный заказ.', 400);
         const { order, items } = await loadOrder(orderId, req.accountability);
         const preview = buildInvoicePreview(order, items);
         if (!preview.items.length) throw apiError('В заказе нет позиций для выставления счёта.', 400);
-        if (preview.items.length > 100) throw apiError('Т-Банк принимает не более 100 позиций в одном счёте.', 400);
         if (preview.items.some((item) => item.price <= 0)) throw apiError('У всех позиций должна быть указана цена больше нуля.', 400);
-
-        const requestedInvoiceNumber = invoiceNumber(req.body?.invoiceNumber, preview.invoiceNumber);
-        const requestedDueDate = dateOnly(req.body?.dueDate) || preview.dueDate;
-        if (requestedDueDate < preview.invoiceDate) throw apiError('Срок оплаты не может быть раньше текущей даты.', 400);
-        const body = {
-          invoiceNumber: requestedInvoiceNumber,
-          invoiceDate: preview.invoiceDate,
-          dueDate: requestedDueDate,
-          items: preview.items.map(({ name, price, amount, unit, vat }) => ({ name, price, amount, unit, vat })),
-          customPaymentPurpose: `Оплата по заказу ${preview.orderNumber}`.slice(0, 512),
-        };
-        if (accountNumber) body.accountNumber = accountNumber;
-
-        const response = await fetch(API_URL, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'X-Request-Id': randomUUID(),
-          },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(30000),
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw apiError(tbankErrorMessage(payload, response.status), response.status >= 500 ? 502 : 400);
-        const result = invoiceResult(payload);
-        if (!result.paymentUrl) {
-          logger.warn({ orderId, invoiceId: result.invoiceId }, '[Symbolika TBank] Invoice created without a returned URL');
-          throw apiError('Счёт создан, но Т-Банк не вернул ссылку. Проверьте его в личном кабинете Т-Бизнеса.', 502);
-        }
-        res.json({ data: { ...result, invoiceNumber: requestedInvoiceNumber, total: preview.total } });
+        const amount = Math.round(preview.total * 100);
+        if (amount < 1000) throw apiError('Минимальная сумма оплаты через СБП — 10 рублей.', 400);
+        const operationId = `${preview.orderNumber}-${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, '').slice(-50);
+        const initResult = await postPaymentApi(INIT_API_URL, {
+          TerminalKey: terminalKey,
+          Amount: amount,
+          OrderId: operationId,
+          Description: `Оплата по заказу ${preview.orderNumber}`.slice(0, 140),
+          PayType: 'O',
+        }, terminalPassword);
+        const paymentId = String(initResult?.PaymentId || initResult?.PaymentID || '').trim();
+        if (!paymentId) throw apiError('Т-Банк инициировал платёж без PaymentId.', 502);
+        const qrResult = await postPaymentApi(GET_QR_API_URL, {
+          TerminalKey: terminalKey,
+          PaymentId: paymentId,
+          DataType: 'PAYLOAD',
+          PaymentMethod: 'SBP',
+        }, terminalPassword);
+        const paymentUrl = String(qrResult?.Data || qrResult?.data || '').trim();
+        if (!paymentUrl) throw apiError('Т-Банк не вернул платёжную ссылку в поле Data.', 502);
+        res.json({ data: { paymentId, paymentUrl, amount, total: preview.total, operationId } });
       } catch (error) {
-        logger.error({ error, orderId: Number(req.params.id) || null }, '[Symbolika TBank] Invoice request failed');
-        res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось создать счёт в Т-Банке.' }] });
+        logger.error({ error, orderId: Number(req.params.id) || null }, '[Symbolika TBank] Payment link request failed');
+        res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось создать ссылку на оплату в Т-Банке.' }] });
       }
     });
   },
