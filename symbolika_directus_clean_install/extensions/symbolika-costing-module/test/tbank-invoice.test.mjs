@@ -16,10 +16,10 @@ test('order card creates a T-Bank SBP payment link through the protected server 
   assert.doesNotMatch(source, /TBANK_TOKEN\s*=/);
 });
 
-test('T-Bank acquiring credentials are injected only through server environment variables', async () => {
+test('T-Bank API credentials are injected only through server environment variables', async () => {
   const compose = await readFile(composeUrl, 'utf8');
 
-  assert.match(compose, /SYMBOLIKA_TBANK_TERMINAL_KEY: "\$\{SYMBOLIKA_TBANK_TERMINAL_KEY:-\}"/);
-  assert.match(compose, /SYMBOLIKA_TBANK_TERMINAL_PASSWORD: "\$\{SYMBOLIKA_TBANK_TERMINAL_PASSWORD:-\}"/);
+  assert.match(compose, /SYMBOLIKA_TBANK_TOKEN: "\$\{SYMBOLIKA_TBANK_TOKEN:-\}"/);
+  assert.match(compose, /SYMBOLIKA_TBANK_ACCOUNT_NUMBER: "\$\{SYMBOLIKA_TBANK_ACCOUNT_NUMBER:-\}"/);
   assert.doesNotMatch(compose, /Bearer\s+t\.[A-Za-z0-9_-]{20,}/);
 });

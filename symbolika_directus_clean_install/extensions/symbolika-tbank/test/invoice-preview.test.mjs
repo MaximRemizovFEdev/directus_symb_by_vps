@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import endpoint, { buildInvoicePreview, createPaymentToken } from '../index.js';
+import endpoint, { buildInvoicePreview } from '../index.js';
 
 test('builds an invoice preview from active order positions without requiring contacts', () => {
   const preview = buildInvoicePreview({
@@ -40,7 +40,7 @@ test('uses a future fallback deadline and configured 1C invoice number when comp
   assert.equal(preview.invoiceNumber, '731');
 });
 
-test('creates an SBP payment link through Init and GetQr', async () => {
+test('creates a one-time B2B SBP payment link', async () => {
   const routes = {};
   const router = {
     get(path, handler) { routes[`GET ${path}`] = handler; },
@@ -60,12 +60,9 @@ test('creates an SBP payment link through Init and GetQr', async () => {
     async readByQuery() { return items; }
   }
   const bankRequests = [];
-  const tbankTransport = async (url, body) => {
-    bankRequests.push({ url, body });
-    if (url.endsWith('/Init')) {
-      return { ok: true, status: 200, payload: { Success: true, PaymentId: 'payment-1' } };
-    }
-    return { ok: true, status: 200, payload: { Success: true, Data: 'https://qr.nspk.ru/payment-1' } };
+  const tbankTransport = async (url, body, headers) => {
+    bankRequests.push({ url, body, headers });
+    return { ok: true, status: 200, payload: { qrId: '0d557f3e-5986-4fa3-9b83-13e7978f01cc', payload: 'https://qr.nspk.ru/payment-1' } };
   };
   const response = {
     statusCode: 200,
@@ -78,8 +75,8 @@ test('creates an SBP payment link through Init and GetQr', async () => {
     services: { ItemsService },
     getSchema: async () => ({}),
     env: {
-      SYMBOLIKA_TBANK_TERMINAL_KEY: 'terminal-test',
-      SYMBOLIKA_TBANK_TERMINAL_PASSWORD: 'password-test',
+      SYMBOLIKA_TBANK_TOKEN: 'api-token-test',
+      SYMBOLIKA_TBANK_ACCOUNT_NUMBER: '40702810900000000001',
     },
     logger: { warn() {}, error() {} },
     tbankTransport,
@@ -93,36 +90,15 @@ test('creates an SBP payment link through Init and GetQr', async () => {
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.data.paymentUrl, 'https://qr.nspk.ru/payment-1');
-  assert.equal(bankRequests.length, 2);
-  assert.equal(bankRequests[0].url, 'https://securepay.tinkoff.ru/v2/Init');
-  const init = bankRequests[0].body;
-  assert.equal(init.TerminalKey, 'terminal-test');
-  assert.equal(init.Amount, 212000);
-  assert.match(init.OrderId, /^SO-00109-\d+$/);
-  assert.equal(init.Token, createPaymentToken({
-    TerminalKey: init.TerminalKey,
-    Amount: init.Amount,
-    OrderId: init.OrderId,
-    Description: init.Description,
-    PayType: init.PayType,
-  }, 'password-test'));
-  assert.equal(bankRequests[1].url, 'https://securepay.tinkoff.ru/v2/GetQr');
-  const qr = bankRequests[1].body;
-  assert.deepEqual({
-    TerminalKey: qr.TerminalKey,
-    PaymentId: qr.PaymentId,
-    DataType: qr.DataType,
-    PaymentMethod: qr.PaymentMethod,
-  }, {
-    TerminalKey: 'terminal-test',
-    PaymentId: 'payment-1',
-    DataType: 'PAYLOAD',
-    PaymentMethod: 'SBP',
+  assert.equal(response.body.data.qrId, '0d557f3e-5986-4fa3-9b83-13e7978f01cc');
+  assert.equal(bankRequests.length, 1);
+  assert.equal(bankRequests[0].url, 'https://business.tbank.ru/openapi/api/v1/b2b/qr/onetime');
+  assert.deepEqual(bankRequests[0].body, {
+    purpose: 'Оплата по заказу SO-00109',
+    ttl: 7,
+    sum: 2120,
+    accountNumber: '40702810900000000001',
   });
-  assert.equal(qr.Token, createPaymentToken({
-    TerminalKey: qr.TerminalKey,
-    PaymentId: qr.PaymentId,
-    DataType: qr.DataType,
-    PaymentMethod: qr.PaymentMethod,
-  }, 'password-test'));
+  assert.equal(bankRequests[0].headers.Authorization, 'Bearer api-token-test');
+  assert.match(bankRequests[0].headers['X-Request-Id'], /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 });

@@ -1,10 +1,9 @@
-import { createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
 import { rootCertificates } from 'node:tls';
 
-const INIT_API_URL = 'https://securepay.tinkoff.ru/v2/Init';
-const GET_QR_API_URL = 'https://securepay.tinkoff.ru/v2/GetQr';
+const ONETIME_QR_API_URL = 'https://business.tbank.ru/openapi/api/v1/b2b/qr/onetime';
 const RUSSIAN_TRUSTED_CA = readFileSync(new URL('../../setup/certs/russian-trusted-ca-bundle.pem', import.meta.url), 'utf8');
 
 function apiError(message, status = 500) {
@@ -80,22 +79,13 @@ export function buildInvoicePreview(order, items, options = {}) {
   };
 }
 
-export function createPaymentToken(payload, password) {
-  const values = Object.entries({ ...payload, Password: password })
-    .filter(([key, value]) => key !== 'Token' && value !== undefined && value !== null && typeof value !== 'object')
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([, value]) => String(value))
-    .join('');
-  return createHash('sha256').update(values, 'utf8').digest('hex');
-}
-
 function paymentErrorMessage(payload, fallback) {
-  return String(payload?.Details || payload?.Message || payload?.message || payload?.errorMessage || fallback);
+  return String(payload?.error?.message || payload?.errorMessage || payload?.message || payload?.Message || payload?.Details || fallback);
 }
 
-function tbankTransport(url, body) {
+function tbankTransport(url, body, extraHeaders = {}) {
   const target = new URL(url);
-  if (target.protocol !== 'https:' || target.hostname !== 'securepay.tinkoff.ru') {
+  if (target.protocol !== 'https:' || target.hostname !== 'business.tbank.ru') {
     throw apiError('Некорректный адрес API Т-Банка.', 500);
   }
   const serialized = JSON.stringify(body);
@@ -109,6 +99,7 @@ function tbankTransport(url, body) {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(serialized),
+        ...extraHeaders,
       },
       ca: [...rootCertificates, RUSSIAN_TRUSTED_CA],
       servername: target.hostname,
@@ -129,11 +120,13 @@ function tbankTransport(url, body) {
   });
 }
 
-async function postPaymentApi(url, payload, password, transport = tbankTransport) {
-  const body = { ...payload, Token: createPaymentToken(payload, password) };
-  const response = await transport(url, body);
+async function createOneTimePaymentLink(payload, token, transport = tbankTransport) {
+  const response = await transport(ONETIME_QR_API_URL, payload, {
+    Authorization: `Bearer ${token}`,
+    'X-Request-Id': randomUUID(),
+  });
   const result = response.payload || {};
-  if (!response.ok || result?.Success === false) {
+  if (!response.ok) {
     throw apiError(paymentErrorMessage(result, `Т-Банк вернул ошибку HTTP ${response.status}.`), response.status >= 500 ? 502 : 400);
   }
   return result;
@@ -142,8 +135,8 @@ async function postPaymentApi(url, payload, password, transport = tbankTransport
 export default {
   id: 'symbolika-tbank',
   handler: (router, { services, getSchema, env, logger, tbankTransport: injectedTransport }) => {
-    const terminalKey = String(env.SYMBOLIKA_TBANK_TERMINAL_KEY || process.env.SYMBOLIKA_TBANK_TERMINAL_KEY || '').trim();
-    const terminalPassword = String(env.SYMBOLIKA_TBANK_TERMINAL_PASSWORD || process.env.SYMBOLIKA_TBANK_TERMINAL_PASSWORD || '').trim();
+    const apiToken = String(env.SYMBOLIKA_TBANK_TOKEN || process.env.SYMBOLIKA_TBANK_TOKEN || '').trim();
+    const accountNumber = String(env.SYMBOLIKA_TBANK_ACCOUNT_NUMBER || process.env.SYMBOLIKA_TBANK_ACCOUNT_NUMBER || '').replace(/\s/g, '');
 
     const requireUser = (req, res) => {
       if (req.accountability?.user) return true;
@@ -188,34 +181,26 @@ export default {
     router.post('/orders/:id/payment-link', async (req, res) => {
       if (!requireUser(req, res)) return;
       try {
-        if (!terminalKey || !terminalPassword) throw apiError('Не настроены TerminalKey и пароль интернет-эквайринга Т-Банка.', 503);
+        if (!apiToken) throw apiError('Не настроен API-токен Т-Банка.', 503);
+        if (accountNumber && !/^(\d{20}|\d{22})$/.test(accountNumber)) throw apiError('Некорректно настроен расчётный счёт Т-Банка.', 503);
         const orderId = Number(req.params.id);
         if (!Number.isInteger(orderId) || orderId <= 0) throw apiError('Некорректный заказ.', 400);
         const { order, items } = await loadOrder(orderId, req.accountability);
         const preview = buildInvoicePreview(order, items);
         if (!preview.items.length) throw apiError('В заказе нет позиций для выставления счёта.', 400);
         if (preview.items.some((item) => item.price <= 0)) throw apiError('У всех позиций должна быть указана цена больше нуля.', 400);
-        const amount = Math.round(preview.total * 100);
-        if (amount < 1000) throw apiError('Минимальная сумма оплаты через СБП — 10 рублей.', 400);
-        const operationId = `${preview.orderNumber}-${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, '').slice(-50);
-        const initResult = await postPaymentApi(INIT_API_URL, {
-          TerminalKey: terminalKey,
-          Amount: amount,
-          OrderId: operationId,
-          Description: `Оплата по заказу ${preview.orderNumber}`.slice(0, 140),
-          PayType: 'O',
-        }, terminalPassword, injectedTransport || tbankTransport);
-        const paymentId = String(initResult?.PaymentId || initResult?.PaymentID || '').trim();
-        if (!paymentId) throw apiError('Т-Банк инициировал платёж без PaymentId.', 502);
-        const qrResult = await postPaymentApi(GET_QR_API_URL, {
-          TerminalKey: terminalKey,
-          PaymentId: paymentId,
-          DataType: 'PAYLOAD',
-          PaymentMethod: 'SBP',
-        }, terminalPassword, injectedTransport || tbankTransport);
-        const paymentUrl = String(qrResult?.Data || qrResult?.data || '').trim();
-        if (!paymentUrl) throw apiError('Т-Банк не вернул платёжную ссылку в поле Data.', 502);
-        res.json({ data: { paymentId, paymentUrl, amount, total: preview.total, operationId } });
+        if (preview.total <= 0) throw apiError('Сумма оплаты должна быть больше нуля.', 400);
+        const requestBody = {
+          purpose: `Оплата по заказу ${preview.orderNumber}`.slice(0, 210),
+          ttl: 7,
+          sum: preview.total,
+          ...(accountNumber ? { accountNumber } : {}),
+        };
+        const bankResult = await createOneTimePaymentLink(requestBody, apiToken, injectedTransport || tbankTransport);
+        const paymentUrl = String(bankResult?.payload || bankResult?.url || bankResult?.paymentUrl || bankResult?.qrUrl || '').trim();
+        const qrId = String(bankResult?.qrId || bankResult?.id || '').trim();
+        if (!paymentUrl) throw apiError('Т-Банк создал ссылку, но не вернул её адрес.', 502);
+        res.json({ data: { qrId, paymentUrl, total: preview.total, ttl: requestBody.ttl } });
       } catch (error) {
         logger.error({ error, orderId: Number(req.params.id) || null }, '[Symbolika TBank] Payment link request failed');
         res.status(error.status || 500).json({ errors: [{ message: error.message || 'Не удалось создать ссылку на оплату в Т-Банке.' }] });
