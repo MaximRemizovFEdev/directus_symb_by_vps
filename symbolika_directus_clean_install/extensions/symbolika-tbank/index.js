@@ -1,9 +1,10 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
 import { rootCertificates } from 'node:tls';
 
 const INIT_API_URL = 'https://securepay.tinkoff.ru/v2/Init';
+const GET_QR_API_URL = 'https://securepay.tinkoff.ru/v2/GetQr';
 const RUSSIAN_TRUSTED_CA = readFileSync(new URL('../../setup/certs/russian-trusted-ca-bundle.pem', import.meta.url), 'utf8');
 
 function apiError(message, status = 500) {
@@ -185,6 +186,10 @@ async function createAcquiringPaymentLink(payload, password, transport = tbankTr
   return result;
 }
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+}
+
 export default {
   id: 'symbolika-tbank',
   handler: (router, { services, getSchema, env, logger, database, tbankTransport: injectedTransport }) => {
@@ -216,6 +221,18 @@ export default {
       });
       return { order, items };
     };
+
+    router.get('/pay/:token', async (req, res) => {
+      const token = String(req.params.token || '');
+      const tracked = database && /^[0-9a-f-]{36}$/i.test(token)
+        ? await database('symbolika_tbank_payments as tp').join('orders as o', 'o.id', 'tp.order_id').where('tp.public_token', token).first('tp.*', 'o.order_number')
+        : null;
+      if (!tracked) return res.status(404).send('Ссылка на оплату не найдена.');
+      const items = await database('orders_items').where({ order: tracked.order_id }).where((query) => query.whereNull('item_status').orWhereNot('item_status', 'cancelled')).orderBy('id').select('product_name', 'quantity', 'price_per_unit');
+      const paid = tracked.status === 'CONFIRMED';
+      const rows = items.map((item) => `<div class="item"><span>${escapeHtml(item.product_name)}</span><span>${escapeHtml(item.quantity)} шт. × ${Number(item.price_per_unit).toLocaleString('ru-RU')} ₽</span></div>`).join('');
+      return res.type('html').send(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Оплата ${escapeHtml(tracked.order_number)}</title><style>*{box-sizing:border-box}body{margin:0;background:#0b1015;color:#f5f7fa;font:16px system-ui,-apple-system,sans-serif;display:grid;min-height:100vh;place-items:center;padding:20px}.card{width:min(620px,100%);background:#151b22;border:1px solid #303945;border-radius:24px;padding:28px;box-shadow:0 24px 70px #0008}.brand{color:#ff7a21;font-weight:800}.muted{color:#98a4b3}.item{display:flex;justify-content:space-between;gap:20px;padding:14px 0;border-bottom:1px solid #2a333e}.total{font-size:32px;font-weight:900;margin:28px 0}.pay{display:block;text-align:center;background:#ff7a21;color:#101419;text-decoration:none;font-weight:800;padding:17px;border-radius:14px}.paid{color:#63e6b1;font-size:22px;font-weight:800}@media(max-width:520px){.card{padding:20px}.item{display:block}.item span{display:block;margin-top:5px}.total{font-size:27px}}</style></head><body><main class="card"><div class="brand">СИМВОЛИКА</div><p class="muted">Оплата заказа</p><h1>${escapeHtml(tracked.order_number)}</h1><section>${rows}</section><div class="total">${Number(tracked.amount).toLocaleString('ru-RU',{minimumFractionDigits:2})} ₽</div>${paid ? '<div class="paid">Оплата принята</div>' : `<a class="pay" href="${escapeHtml(tracked.sbp_url)}">Оплатить через СБП</a>`}<p class="muted">Безопасная оплата через Т‑Банк</p></main></body></html>`);
+    });
 
     router.post('/notification', async (req, res) => {
       try {
@@ -308,14 +325,20 @@ export default {
           Receipt: receipt,
         };
         const bankResult = await createAcquiringPaymentLink(requestBody, terminalPassword, injectedTransport || tbankTransport);
-        const paymentUrl = String(bankResult?.PaymentURL || bankResult?.PaymentUrl || bankResult?.paymentUrl || '').trim();
         const paymentId = String(bankResult?.PaymentId || bankResult?.PaymentID || '').trim();
-        if (!paymentUrl) throw apiError('Т-Банк инициировал платёж, но не вернул ссылку PaymentURL.', 502);
         if (!paymentId) throw apiError('Т-Банк инициировал платёж без PaymentId.', 502);
+        const qrPayload = { TerminalKey: terminalKey, PaymentId: paymentId, DataType: 'PAYLOAD', PaymentMethod: 'SBP' };
+        const qrResult = await createAcquiringPaymentLink.call(null, qrPayload, terminalPassword, async (url, body) => (injectedTransport || tbankTransport)(GET_QR_API_URL, body));
+        const sbpUrl = String(qrResult?.Data || qrResult?.data || '').trim();
+        if (!sbpUrl) throw apiError('Т-Банк не вернул ссылку СБП.', 502);
+        const publicToken = randomUUID();
+        const paymentUrl = `https://symbcorp.ru/symbolika-tbank/pay/${publicToken}`;
         if (database) await database('symbolika_tbank_payments').insert({
           order_id: orderId,
           payment_id: paymentId,
           payment_url: paymentUrl,
+          public_token: publicToken,
+          sbp_url: sbpUrl,
           amount: amount / 100,
           status: String(bankResult?.Status || 'NEW'),
         });

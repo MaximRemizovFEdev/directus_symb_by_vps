@@ -62,6 +62,7 @@ test('creates an acquiring payment link for an individual', async () => {
   const bankRequests = [];
   const tbankTransport = async (url, body) => {
     bankRequests.push({ url, body });
+    if (url.endsWith('/GetQr')) return { ok: true, status: 200, payload: { Success: true, Data: 'https://qr.nspk.ru/payment-1' } };
     return { ok: true, status: 200, payload: { Success: true, PaymentId: 'payment-1', PaymentURL: 'https://securepayments.tinkoff.ru/payment-1' } };
   };
   const response = {
@@ -89,9 +90,9 @@ test('creates an acquiring payment link for an individual', async () => {
   }, response);
 
   assert.equal(response.statusCode, 200);
-  assert.equal(response.body.data.paymentUrl, 'https://securepayments.tinkoff.ru/payment-1');
+  assert.match(response.body.data.paymentUrl, /^https:\/\/symbcorp\.ru\/symbolika-tbank\/pay\/[0-9a-f-]{36}$/);
   assert.equal(response.body.data.paymentId, 'payment-1');
-  assert.equal(bankRequests.length, 1);
+  assert.equal(bankRequests.length, 2);
   assert.equal(bankRequests[0].url, 'https://securepay.tinkoff.ru/v2/Init');
   const request = bankRequests[0].body;
   assert.equal(request.TerminalKey, 'terminal-test');
@@ -124,4 +125,7 @@ test('creates an acquiring payment link for an individual', async () => {
     NotificationURL: request.NotificationURL,
     Receipt: request.Receipt,
   }, 'password-test'));
+  assert.equal(bankRequests[1].url, 'https://securepay.tinkoff.ru/v2/GetQr');
+  assert.equal(bankRequests[1].body.PaymentMethod, 'SBP');
+  assert.equal(bankRequests[1].body.PaymentId, 'payment-1');
 });
