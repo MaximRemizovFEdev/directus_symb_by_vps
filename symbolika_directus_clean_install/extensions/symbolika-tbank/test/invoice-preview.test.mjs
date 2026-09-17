@@ -100,6 +100,19 @@ test('creates an acquiring payment link for an individual', async () => {
   assert.equal(request.Description, 'Оплата по заказу SO-00109');
   assert.equal(request.PayType, 'O');
   assert.equal(request.Language, 'ru');
+  assert.deepEqual(request.Receipt, {
+    Email: 'client@example.com',
+    Taxation: 'usn_income',
+    Items: [{
+      Name: 'Брошюра',
+      Price: 106000,
+      Quantity: 2,
+      Amount: 212000,
+      Tax: 'none',
+      PaymentMethod: 'full_payment',
+      PaymentObject: 'commodity',
+    }],
+  });
   assert.equal(request.Token, createPaymentToken({
     TerminalKey: request.TerminalKey,
     Amount: request.Amount,
@@ -107,5 +120,6 @@ test('creates an acquiring payment link for an individual', async () => {
     Description: request.Description,
     PayType: request.PayType,
     Language: request.Language,
+    Receipt: request.Receipt,
   }, 'password-test'));
 });

@@ -21,6 +21,29 @@ function roundMoney(value) {
   return Math.round((numberValue(value) + Number.EPSILON) * 100) / 100;
 }
 
+function receiptContact(order) {
+  const customer = order?.customer || {};
+  const email = String(customer.email || '').trim().toLowerCase();
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 64) return { Email: email };
+  const digits = String(customer.phone || '').replace(/\D/g, '');
+  const normalizedDigits = digits.length === 11 && digits.startsWith('8') ? `7${digits.slice(1)}` : digits;
+  if (normalizedDigits.length >= 10 && normalizedDigits.length <= 15) return { Phone: `+${normalizedDigits}` };
+  return null;
+}
+
+function buildReceipt(preview, contact) {
+  const Items = preview.items.map((item) => ({
+    Name: item.name.slice(0, 128),
+    Price: Math.round(item.price * 100),
+    Quantity: item.amount,
+    Amount: Math.round(item.price * item.amount * 100),
+    Tax: 'none',
+    PaymentMethod: 'full_payment',
+    PaymentObject: 'commodity',
+  }));
+  return { ...contact, Taxation: 'usn_income', Items };
+}
+
 function dateOnly(value) {
   const match = String(value || '').match(/^(\d{4}-\d{2}-\d{2})/);
   return match ? match[1] : '';
@@ -162,7 +185,7 @@ export default {
       const order = await orderService.readOne(orderId, {
         fields: [
           'id', 'order_number', 'invoice_number_1c', 'deadline',
-          'customer.id', 'customer.name',
+          'customer.id', 'customer.name', 'customer.phone', 'customer.email',
           'customer_company.id', 'customer_company.name',
         ],
       });
@@ -200,14 +223,19 @@ export default {
         if (!preview.items.length) throw apiError('В заказе нет позиций для выставления счёта.', 400);
         if (preview.items.some((item) => item.price <= 0)) throw apiError('У всех позиций должна быть указана цена больше нуля.', 400);
         if (preview.total <= 0) throw apiError('Сумма оплаты должна быть больше нуля.', 400);
+        const contact = receiptContact(order);
+        if (!contact) throw apiError('Для кассового чека у заказчика должен быть указан корректный телефон или email.', 400);
+        const receipt = buildReceipt(preview, contact);
+        const amount = receipt.Items.reduce((sum, item) => sum + item.Amount, 0);
         const operationId = `${preview.orderNumber}-${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, '').slice(-50);
         const requestBody = {
           TerminalKey: terminalKey,
-          Amount: Math.round(preview.total * 100),
+          Amount: amount,
           OrderId: operationId,
           Description: `Оплата по заказу ${preview.orderNumber}`.slice(0, 140),
           PayType: 'O',
           Language: 'ru',
+          Receipt: receipt,
         };
         const bankResult = await createAcquiringPaymentLink(requestBody, terminalPassword, injectedTransport || tbankTransport);
         const paymentUrl = String(bankResult?.PaymentURL || bankResult?.PaymentUrl || bankResult?.paymentUrl || '').trim();
