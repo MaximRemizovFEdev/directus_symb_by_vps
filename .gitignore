@@ -25,6 +25,7 @@ exports/
 
 tmp-*
 *.tmp
+/tbank-payment-v2.html
 
 *.sql
 !symbolika_directus_clean_install/setup/create-work-views.sql

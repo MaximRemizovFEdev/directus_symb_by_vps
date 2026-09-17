@@ -1538,6 +1538,7 @@ export const CostingModule = {
       expandedOrderEconomicsRows: {},
       expandedClientRows: {},
       paymentDialog: null,
+      tbankInvoiceDialog: null,
       clientPaymentDialog: null,
       clientOperationDialog: null,
       paymentDeleteDialog: null,
@@ -7240,6 +7241,94 @@ export const CostingModule = {
       } catch (error) {
         this.error = error?.message || 'Не удалось удалить оплату.';
         if (this.paymentDeleteDialog) this.paymentDeleteDialog.saving = false;
+      }
+    },
+
+    canCreateTbankInvoice(row) {
+      return Boolean(row && this.hasManagerWorkflowAccess && this.parseMoney(row.order_sum) > 0);
+    },
+
+    async openTbankInvoiceDialog(row) {
+      if (!this.canCreateTbankInvoice(row)) return;
+      const orderId = Number(this.entityId(this.orderId(row)) || 0);
+      if (!orderId) return;
+      this.error = '';
+      this.tbankInvoiceDialog = {
+        orderId,
+        orderNumber: this.orderNumber(row),
+        loading: true,
+        saving: false,
+        copied: false,
+        error: '',
+        invoiceNumber: '',
+        dueDate: '',
+        contactPhone: '',
+        email: '',
+        payerName: '',
+        items: [],
+        total: 0,
+        paymentUrl: '',
+        invoiceId: '',
+      };
+      try {
+        const payload = await this.request(`/symbolika-tbank/orders/${orderId}/preview`);
+        if (!this.tbankInvoiceDialog || this.tbankInvoiceDialog.orderId !== orderId) return;
+        Object.assign(this.tbankInvoiceDialog, payload.data || {}, { loading: false });
+      } catch (error) {
+        this.tbankInvoiceDialog = null;
+        this.error = error.message || 'Не удалось подготовить счёт.';
+      }
+    },
+
+    closeTbankInvoiceDialog() {
+      if (this.tbankInvoiceDialog?.saving) return;
+      this.tbankInvoiceDialog = null;
+    },
+
+    async createTbankPaymentLink() {
+      const dialog = this.tbankInvoiceDialog;
+      if (!dialog || dialog.loading || dialog.saving || dialog.paymentUrl) return;
+      dialog.error = '';
+      const invoiceNumber = String(dialog.invoiceNumber || '').trim();
+      if (!/^\d{1,15}$/.test(invoiceNumber)) {
+        dialog.error = 'Номер счёта должен содержать от 1 до 15 цифр.';
+        return;
+      }
+      if (!dialog.dueDate) {
+        dialog.error = 'Укажите срок оплаты.';
+        return;
+      }
+      dialog.saving = true;
+      try {
+        const payload = await this.request(`/symbolika-tbank/orders/${dialog.orderId}/invoice`, {
+          method: 'POST',
+          body: JSON.stringify({
+            invoiceNumber,
+            dueDate: dialog.dueDate,
+            contactPhone: dialog.contactPhone || null,
+            email: dialog.email || null,
+          }),
+        });
+        if (!this.tbankInvoiceDialog || this.tbankInvoiceDialog.orderId !== dialog.orderId) return;
+        Object.assign(this.tbankInvoiceDialog, payload.data || {}, { copied: false });
+      } catch (error) {
+        if (this.tbankInvoiceDialog) this.tbankInvoiceDialog.error = error.message || 'Не удалось создать ссылку на оплату.';
+      } finally {
+        if (this.tbankInvoiceDialog) this.tbankInvoiceDialog.saving = false;
+      }
+    },
+
+    async copyTbankPaymentLink() {
+      const dialog = this.tbankInvoiceDialog;
+      if (!dialog?.paymentUrl) return;
+      try {
+        await this.writeClipboardText(dialog.paymentUrl);
+        dialog.copied = true;
+        window.setTimeout(() => {
+          if (this.tbankInvoiceDialog === dialog) dialog.copied = false;
+        }, 1800);
+      } catch {
+        dialog.error = 'Не удалось скопировать ссылку.';
       }
     },
 
@@ -19978,6 +20067,58 @@ export const CostingModule = {
           justify-content: flex-end;
           gap: 8px;
           margin-block-start: 15px;
+        }
+
+        .symbolika-costing-tbank-modal {
+          inline-size: min(760px, calc(100vw - 32px));
+        }
+
+        .symbolika-costing-tbank-summary {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 8px;
+        }
+
+        .symbolika-costing-tbank-items {
+          display: grid;
+          gap: 7px;
+          max-block-size: 260px;
+          overflow: auto;
+        }
+
+        .symbolika-costing-tbank-item {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 90px 120px;
+          gap: 10px;
+          align-items: center;
+          padding: 9px 11px;
+          border: 1px solid var(--theme--border-color);
+          border-radius: 10px;
+          background: var(--theme--background-subdued);
+        }
+
+        .symbolika-costing-tbank-item strong {
+          min-inline-size: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .symbolika-costing-tbank-item span {
+          text-align: end;
+        }
+
+        .symbolika-costing-tbank-result {
+          display: grid;
+          gap: 8px;
+          padding: 12px;
+          border: 1px solid color-mix(in srgb, var(--theme--primary) 55%, var(--theme--border-color));
+          border-radius: 12px;
+          background: color-mix(in srgb, var(--theme--primary-background) 36%, var(--theme--background-page));
+        }
+
+        .symbolika-costing-tbank-result a {
+          overflow-wrap: anywhere;
         }
 
         .symbolika-costing-client-payment-modal {
@@ -37892,6 +38033,86 @@ export const CostingModule = {
           </div>
         </div>
 
+        <div v-if="tbankInvoiceDialog" class="symbolika-costing-modal-backdrop" @click.self="closeTbankInvoiceDialog">
+          <div class="symbolika-costing-modal symbolika-costing-tbank-modal">
+            <div class="symbolika-costing-modal-head">
+              <div>
+                <div class="symbolika-costing-subtle">{{ tbankInvoiceDialog.orderNumber }}</div>
+                <h2>Создать ссылку на оплату</h2>
+              </div>
+              <button type="button" class="symbolika-costing-close" :disabled="tbankInvoiceDialog.saving" @click="closeTbankInvoiceDialog">
+                <v-icon name="close" />
+              </button>
+            </div>
+
+            <div v-if="tbankInvoiceDialog.loading" class="symbolika-costing-empty">Подготавливаем данные заказа…</div>
+            <template v-else>
+              <div class="symbolika-costing-modal-grid">
+                <div class="symbolika-costing-tbank-summary symbolika-costing-detail-wide">
+                  <div class="symbolika-costing-detail-field">
+                    <div class="symbolika-costing-detail-label">Заказчик</div>
+                    <div class="symbolika-costing-detail-value">{{ tbankInvoiceDialog.payerName || 'Не указан' }}</div>
+                  </div>
+                  <div class="symbolika-costing-detail-field">
+                    <div class="symbolika-costing-detail-label">Позиций</div>
+                    <div class="symbolika-costing-detail-value">{{ tbankInvoiceDialog.items.length }}</div>
+                  </div>
+                  <div class="symbolika-costing-detail-field">
+                    <div class="symbolika-costing-detail-label">Сумма</div>
+                    <div class="symbolika-costing-detail-value">{{ formatMoney(tbankInvoiceDialog.total) }}</div>
+                  </div>
+                </div>
+
+                <label class="symbolika-costing-label">
+                  Номер счёта
+                  <input v-model.trim="tbankInvoiceDialog.invoiceNumber" class="symbolika-costing-input" inputmode="numeric" maxlength="15" :disabled="!!tbankInvoiceDialog.paymentUrl" />
+                </label>
+                <label class="symbolika-costing-label">
+                  Срок оплаты
+                  <input v-model="tbankInvoiceDialog.dueDate" class="symbolika-costing-input" type="date" :disabled="!!tbankInvoiceDialog.paymentUrl" />
+                </label>
+                <label class="symbolika-costing-label">
+                  Телефон клиента
+                  <input v-model.trim="tbankInvoiceDialog.contactPhone" class="symbolika-costing-input" placeholder="+7XXXXXXXXXX" :disabled="!!tbankInvoiceDialog.paymentUrl" />
+                </label>
+                <label class="symbolika-costing-label">
+                  Email клиента
+                  <input v-model.trim="tbankInvoiceDialog.email" class="symbolika-costing-input" type="email" placeholder="client@example.com" :disabled="!!tbankInvoiceDialog.paymentUrl" />
+                </label>
+
+                <div class="symbolika-costing-label symbolika-costing-detail-wide">
+                  Позиции счёта
+                  <div class="symbolika-costing-tbank-items">
+                    <div v-for="item in tbankInvoiceDialog.items" :key="item.id" class="symbolika-costing-tbank-item">
+                      <strong>{{ item.name }}</strong>
+                      <span>{{ formatQuantity(item.amount) }} шт.</span>
+                      <span>{{ formatMoney(item.price) }}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="tbankInvoiceDialog.paymentUrl" class="symbolika-costing-tbank-result symbolika-costing-detail-wide">
+                  <strong>Ссылка создана</strong>
+                  <a :href="tbankInvoiceDialog.paymentUrl" target="_blank" rel="noopener noreferrer">{{ tbankInvoiceDialog.paymentUrl }}</a>
+                  <button type="button" class="symbolika-costing-mini-button" @click="copyTbankPaymentLink">
+                    <v-icon :name="tbankInvoiceDialog.copied ? 'check' : 'content_copy'" small />
+                    {{ tbankInvoiceDialog.copied ? 'Скопировано' : 'Копировать ссылку' }}
+                  </button>
+                </div>
+                <div v-if="tbankInvoiceDialog.error" class="symbolika-costing-field-error symbolika-costing-detail-wide">{{ tbankInvoiceDialog.error }}</div>
+              </div>
+
+              <div class="symbolika-costing-modal-actions">
+                <button type="button" class="symbolika-costing-mini-button" :disabled="tbankInvoiceDialog.saving" @click="closeTbankInvoiceDialog">Закрыть</button>
+                <button v-if="!tbankInvoiceDialog.paymentUrl" type="button" class="symbolika-costing-button" :disabled="tbankInvoiceDialog.saving" @click="createTbankPaymentLink">
+                  <v-icon name="receipt_long" small />
+                  {{ tbankInvoiceDialog.saving ? 'Создаём…' : 'Создать ссылку' }}
+                </button>
+              </div>
+            </template>
+          </div>
+        </div>
+
         <div v-if="paymentDialog" class="symbolika-costing-modal-backdrop" @click.self="closePaymentDialog">
           <div class="symbolika-costing-modal">
             <h2>{{ paymentDialog.editingPaymentId ? 'Редактировать оплату' : (paymentDialog.returnToOrderIssue ? 'Оплата перед выдачей' : 'Принять оплату') }}</h2>
@@ -38610,6 +38831,10 @@ export const CostingModule = {
                 <button v-if="officePaymentDue(detail.row) > 0" type="button" class="symbolika-costing-button symbolika-costing-detail-action" @click="openPaymentDialog(detail.row)">
                   <v-icon name="payments" small />
                   Добавить оплату
+                </button>
+                <button v-if="canCreateTbankInvoice(detail.row)" type="button" class="symbolika-costing-button symbolika-costing-detail-action" @click="openTbankInvoiceDialog(detail.row)">
+                  <v-icon name="receipt_long" small />
+                  Создать ссылку на оплату
                 </button>
               </div>
             </div>
