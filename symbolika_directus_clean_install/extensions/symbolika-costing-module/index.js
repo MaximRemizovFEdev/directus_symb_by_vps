@@ -7263,6 +7263,8 @@ export const CostingModule = {
         payerName: '',
         items: [],
         total: 0,
+        receiptContactType: 'phone',
+        receiptContactValue: '',
         paymentUrl: '',
         invoiceId: '',
       };
@@ -7285,11 +7287,20 @@ export const CostingModule = {
       const dialog = this.tbankInvoiceDialog;
       if (!dialog || dialog.loading || dialog.saving || dialog.paymentUrl) return;
       dialog.error = '';
+      if (!String(dialog.receiptContactValue || '').trim()) {
+        dialog.error = dialog.receiptContactType === 'email'
+          ? 'Укажите email для отправки кассового чека.'
+          : 'Укажите телефон для отправки кассового чека.';
+        return;
+      }
       dialog.saving = true;
       try {
         const payload = await this.request(`/symbolika-tbank/orders/${dialog.orderId}/payment-link`, {
           method: 'POST',
-          body: JSON.stringify({}),
+          body: JSON.stringify({
+            contactType: dialog.receiptContactType,
+            contactValue: dialog.receiptContactValue,
+          }),
         });
         if (!this.tbankInvoiceDialog || this.tbankInvoiceDialog.orderId !== dialog.orderId) return;
         Object.assign(this.tbankInvoiceDialog, payload.data || {}, { copied: false });
@@ -38043,6 +38054,25 @@ export const CostingModule = {
                     <div class="symbolika-costing-detail-label">Сумма</div>
                     <div class="symbolika-costing-detail-value">{{ formatMoney(tbankInvoiceDialog.total) }}</div>
                   </div>
+                </div>
+
+                <div class="symbolika-costing-label symbolika-costing-detail-wide">
+                  Куда отправить кассовый чек
+                  <div class="symbolika-costing-segments">
+                    <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': tbankInvoiceDialog.receiptContactType === 'phone' }" @click="tbankInvoiceDialog.receiptContactType = 'phone'; tbankInvoiceDialog.receiptContactValue = ''">
+                      Телефон
+                    </button>
+                    <button type="button" class="symbolika-costing-filter" :class="{ 'is-active': tbankInvoiceDialog.receiptContactType === 'email' }" @click="tbankInvoiceDialog.receiptContactType = 'email'; tbankInvoiceDialog.receiptContactValue = ''">
+                      Email
+                    </button>
+                  </div>
+                  <input
+                    v-model.trim="tbankInvoiceDialog.receiptContactValue"
+                    class="symbolika-costing-input"
+                    :type="tbankInvoiceDialog.receiptContactType === 'email' ? 'email' : 'tel'"
+                    :placeholder="tbankInvoiceDialog.receiptContactType === 'email' ? 'client@example.ru' : '+7 900 000-00-00'"
+                    :disabled="tbankInvoiceDialog.saving"
+                  />
                 </div>
 
                 <div class="symbolika-costing-label symbolika-costing-detail-wide">

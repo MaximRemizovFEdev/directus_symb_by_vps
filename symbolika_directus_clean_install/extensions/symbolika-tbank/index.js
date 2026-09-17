@@ -31,6 +31,22 @@ function receiptContact(order) {
   return null;
 }
 
+function receiptContactFromInput(type, value) {
+  const normalizedType = String(type || '').trim().toLowerCase();
+  const rawValue = String(value || '').trim();
+  if (!rawValue) return null;
+  if (normalizedType === 'email') {
+    const email = rawValue.toLowerCase();
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 64 ? { Email: email } : null;
+  }
+  if (normalizedType === 'phone') {
+    const digits = rawValue.replace(/\D/g, '');
+    const normalizedDigits = digits.length === 11 && digits.startsWith('8') ? `7${digits.slice(1)}` : digits;
+    return normalizedDigits.length >= 10 && normalizedDigits.length <= 15 ? { Phone: `+${normalizedDigits}` } : null;
+  }
+  return null;
+}
+
 function buildReceipt(preview, contact) {
   const Items = preview.items.map((item) => ({
     Name: item.name.slice(0, 128),
@@ -89,6 +105,7 @@ export function buildInvoicePreview(order, items, options = {}) {
   const customer = order?.customer || {};
   const dueDate = orderDeadline && orderDeadline >= today ? orderDeadline : defaultDueDate;
   const total = roundMoney(invoiceItems.reduce((sum, item) => sum + item.price * item.amount, 0));
+  const contact = receiptContact(order);
 
   return {
     orderId: Number(order?.id),
@@ -97,6 +114,8 @@ export function buildInvoicePreview(order, items, options = {}) {
     invoiceDate: today,
     dueDate,
     payerName: String(company.name || customer.name || '').trim(),
+    receiptContactType: contact?.Email ? 'email' : 'phone',
+    receiptContactValue: contact?.Email || contact?.Phone || '',
     items: invoiceItems,
     total,
   };
@@ -223,8 +242,14 @@ export default {
         if (!preview.items.length) throw apiError('В заказе нет позиций для выставления счёта.', 400);
         if (preview.items.some((item) => item.price <= 0)) throw apiError('У всех позиций должна быть указана цена больше нуля.', 400);
         if (preview.total <= 0) throw apiError('Сумма оплаты должна быть больше нуля.', 400);
-        const contact = receiptContact(order);
-        if (!contact) throw apiError('Для кассового чека у заказчика должен быть указан корректный телефон или email.', 400);
+        const requestedContactType = String(req.body?.contactType || '').trim().toLowerCase();
+        const requestedContactValue = String(req.body?.contactValue || '').trim();
+        const contact = requestedContactValue
+          ? receiptContactFromInput(requestedContactType, requestedContactValue)
+          : receiptContact(order);
+        if (!contact) throw apiError(requestedContactValue
+          ? 'Проверьте правильность телефона или email для кассового чека.'
+          : 'Укажите телефон или email для отправки кассового чека.', 400);
         const receipt = buildReceipt(preview, contact);
         const amount = receipt.Items.reduce((sum, item) => sum + item.Amount, 0);
         const operationId = `${preview.orderNumber}-${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, '').slice(-50);
