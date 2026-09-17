@@ -7418,6 +7418,18 @@ export const CostingModule = {
         });
 
         const orderId = Number(fresh.order.id);
+        // The database trigger updates every position together with the order,
+        // but the already loaded item collections otherwise keep showing the
+        // previous `ready / in_office` state until the broad background reload
+        // finishes. Mirror the successful server transition in every local
+        // item cache immediately so order and positions change atomically in
+        // the interface as well.
+        fresh.items.forEach((item) => {
+          this.updateOrderItemCaches(item.id, {
+            item_status: 'delivered',
+            office_status: 'issued',
+          });
+        });
         this.updateOrderCaches(orderId, {
           order_status: Number(delivered.id),
           order_status_name: delivered.name,
