@@ -59,24 +59,13 @@ test('creates an SBP payment link through Init and GetQr', async () => {
     async readOne() { return order; }
     async readByQuery() { return items; }
   }
-  endpoint.handler(router, {
-    services: { ItemsService },
-    getSchema: async () => ({}),
-    env: {
-      SYMBOLIKA_TBANK_TERMINAL_KEY: 'terminal-test',
-      SYMBOLIKA_TBANK_TERMINAL_PASSWORD: 'password-test',
-    },
-    logger: { warn() {}, error() {} },
-  });
-
-  const originalFetch = globalThis.fetch;
   const bankRequests = [];
-  globalThis.fetch = async (url, options) => {
-    bankRequests.push({ url, options });
+  const tbankTransport = async (url, body) => {
+    bankRequests.push({ url, body });
     if (url.endsWith('/Init')) {
-      return { ok: true, status: 200, json: async () => ({ Success: true, PaymentId: 'payment-1' }) };
+      return { ok: true, status: 200, payload: { Success: true, PaymentId: 'payment-1' } };
     }
-    return { ok: true, status: 200, json: async () => ({ Success: true, Data: 'https://qr.nspk.ru/payment-1' }) };
+    return { ok: true, status: 200, payload: { Success: true, Data: 'https://qr.nspk.ru/payment-1' } };
   };
   const response = {
     statusCode: 200,
@@ -85,21 +74,28 @@ test('creates an SBP payment link through Init and GetQr', async () => {
     json(body) { this.body = body; return this; },
   };
 
-  try {
-    await routes['POST /orders/:id/payment-link']({
-      params: { id: '114' },
-      body: {},
-      accountability: { user: 'user-1' },
-    }, response);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  endpoint.handler(router, {
+    services: { ItemsService },
+    getSchema: async () => ({}),
+    env: {
+      SYMBOLIKA_TBANK_TERMINAL_KEY: 'terminal-test',
+      SYMBOLIKA_TBANK_TERMINAL_PASSWORD: 'password-test',
+    },
+    logger: { warn() {}, error() {} },
+    tbankTransport,
+  });
+
+  await routes['POST /orders/:id/payment-link']({
+    params: { id: '114' },
+    body: {},
+    accountability: { user: 'user-1' },
+  }, response);
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.data.paymentUrl, 'https://qr.nspk.ru/payment-1');
   assert.equal(bankRequests.length, 2);
   assert.equal(bankRequests[0].url, 'https://securepay.tinkoff.ru/v2/Init');
-  const init = JSON.parse(bankRequests[0].options.body);
+  const init = bankRequests[0].body;
   assert.equal(init.TerminalKey, 'terminal-test');
   assert.equal(init.Amount, 212000);
   assert.match(init.OrderId, /^SO-00109-\d+$/);
@@ -111,7 +107,7 @@ test('creates an SBP payment link through Init and GetQr', async () => {
     PayType: init.PayType,
   }, 'password-test'));
   assert.equal(bankRequests[1].url, 'https://securepay.tinkoff.ru/v2/GetQr');
-  const qr = JSON.parse(bankRequests[1].options.body);
+  const qr = bankRequests[1].body;
   assert.deepEqual({
     TerminalKey: qr.TerminalKey,
     PaymentId: qr.PaymentId,

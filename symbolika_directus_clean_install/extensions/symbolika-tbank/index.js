@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { request as httpsRequest } from 'node:https';
+import { rootCertificates } from 'node:tls';
 
 const INIT_API_URL = 'https://securepay.tinkoff.ru/v2/Init';
 const GET_QR_API_URL = 'https://securepay.tinkoff.ru/v2/GetQr';
+const RUSSIAN_TRUSTED_CA = readFileSync(new URL('../../setup/certs/russian-trusted-ca-bundle.pem', import.meta.url), 'utf8');
 
 function apiError(message, status = 500) {
   const error = new Error(message);
@@ -89,15 +93,46 @@ function paymentErrorMessage(payload, fallback) {
   return String(payload?.Details || payload?.Message || payload?.message || payload?.errorMessage || fallback);
 }
 
-async function postPaymentApi(url, payload, password) {
-  const body = { ...payload, Token: createPaymentToken(payload, password) };
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30000),
+function tbankTransport(url, body) {
+  const target = new URL(url);
+  if (target.protocol !== 'https:' || target.hostname !== 'securepay.tinkoff.ru') {
+    throw apiError('Некорректный адрес API Т-Банка.', 500);
+  }
+  const serialized = JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    const request = httpsRequest({
+      protocol: target.protocol,
+      hostname: target.hostname,
+      port: target.port || 443,
+      path: `${target.pathname}${target.search}`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(serialized),
+      },
+      ca: [...rootCertificates, RUSSIAN_TRUSTED_CA],
+      servername: target.hostname,
+      timeout: 30000,
+    }, (response) => {
+      let raw = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => { raw += chunk; });
+      response.on('end', () => {
+        let payload = {};
+        try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = {}; }
+        resolve({ ok: response.statusCode >= 200 && response.statusCode < 300, status: response.statusCode || 500, payload });
+      });
+    });
+    request.on('timeout', () => request.destroy(new Error('Превышено время ожидания ответа Т-Банка.')));
+    request.on('error', reject);
+    request.end(serialized);
   });
-  const result = await response.json().catch(() => ({}));
+}
+
+async function postPaymentApi(url, payload, password, transport = tbankTransport) {
+  const body = { ...payload, Token: createPaymentToken(payload, password) };
+  const response = await transport(url, body);
+  const result = response.payload || {};
   if (!response.ok || result?.Success === false) {
     throw apiError(paymentErrorMessage(result, `Т-Банк вернул ошибку HTTP ${response.status}.`), response.status >= 500 ? 502 : 400);
   }
@@ -106,7 +141,7 @@ async function postPaymentApi(url, payload, password) {
 
 export default {
   id: 'symbolika-tbank',
-  handler: (router, { services, getSchema, env, logger }) => {
+  handler: (router, { services, getSchema, env, logger, tbankTransport: injectedTransport }) => {
     const terminalKey = String(env.SYMBOLIKA_TBANK_TERMINAL_KEY || process.env.SYMBOLIKA_TBANK_TERMINAL_KEY || '').trim();
     const terminalPassword = String(env.SYMBOLIKA_TBANK_TERMINAL_PASSWORD || process.env.SYMBOLIKA_TBANK_TERMINAL_PASSWORD || '').trim();
 
@@ -169,7 +204,7 @@ export default {
           OrderId: operationId,
           Description: `Оплата по заказу ${preview.orderNumber}`.slice(0, 140),
           PayType: 'O',
-        }, terminalPassword);
+        }, terminalPassword, injectedTransport || tbankTransport);
         const paymentId = String(initResult?.PaymentId || initResult?.PaymentID || '').trim();
         if (!paymentId) throw apiError('Т-Банк инициировал платёж без PaymentId.', 502);
         const qrResult = await postPaymentApi(GET_QR_API_URL, {
@@ -177,7 +212,7 @@ export default {
           PaymentId: paymentId,
           DataType: 'PAYLOAD',
           PaymentMethod: 'SBP',
-        }, terminalPassword);
+        }, terminalPassword, injectedTransport || tbankTransport);
         const paymentUrl = String(qrResult?.Data || qrResult?.data || '').trim();
         if (!paymentUrl) throw apiError('Т-Банк не вернул платёжную ссылку в поле Data.', 502);
         res.json({ data: { paymentId, paymentUrl, amount, total: preview.total, operationId } });
