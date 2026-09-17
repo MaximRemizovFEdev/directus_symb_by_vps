@@ -31,19 +31,27 @@ BEGIN
 END;
 $$;
 
+UPDATE directus_fields
+   SET readonly = true,
+       hidden = false,
+       translations = json_build_array(json_build_object('language', 'ru-RU', 'translation', 'Эквайринг'))::json
+ WHERE collection = 'contractor_costing'
+   AND field = 'acquiring_fee_sum';
+
 INSERT INTO directus_fields (
   collection, field, special, interface, options, display, display_options,
   readonly, hidden, sort, width, translations
 )
-VALUES (
+SELECT
   'contractor_costing', 'acquiring_fee_sum', NULL, 'input', NULL, NULL, NULL,
   true, false, 26, 'half',
   json_build_array(json_build_object('language', 'ru-RU', 'translation', 'Эквайринг'))::json
-)
-ON CONFLICT (collection, field) DO UPDATE SET
-  readonly = EXCLUDED.readonly,
-  hidden = EXCLUDED.hidden,
-  translations = EXCLUDED.translations;
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM directus_fields
+  WHERE collection = 'contractor_costing'
+    AND field = 'acquiring_fee_sum'
+);
 
 UPDATE directus_permissions
    SET fields = CASE
