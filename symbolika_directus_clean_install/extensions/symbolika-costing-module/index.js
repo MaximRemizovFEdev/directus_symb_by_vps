@@ -31801,26 +31801,29 @@ export const CostingModule = {
                 </td>
                 <td>
                   <div class="symbolika-costing-position-statuses symbolika-costing-position-statuses-cell" :class="{ 'is-ready': isItemReady(row) }">
-                    <label class="symbolika-costing-position-status-field is-primary" @click.stop>
-                      <span class="symbolika-costing-position-status-label">Позиция</span>
-                      <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'item_status'), statusToneClass(itemStatusName(row.item_status))]" :value="row.item_status || ''" title="Статус позиции" @click.stop @change.stop="saveOrderItemField(row, 'item_status', $event.target.value)">
-                        <option v-for="status in itemWorkflowStatusOptions(row)" :key="'position-mode-item-' + status.value" :value="status.value">{{ status.text }}</option>
-                      </select>
-                    </label>
-                    <label v-if="!isItemReady(row)" class="symbolika-costing-position-status-field" @click.stop>
-                      <span class="symbolika-costing-position-status-label">Производство</span>
-                      <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'production_status'), statusToneClass(detailProductionStatus(row))]" :value="entityId(row.production_status) || ''" title="Статус производства" @click.stop @change.stop="saveOrderItemField(row, 'production_status', $event.target.value)">
-                        <option value="">Без статуса производства</option>
-                        <option v-for="status in itemProductionStatusOptions()" :key="'position-mode-production-' + status.id" :value="status.id">{{ status.name }}</option>
-                      </select>
-                    </label>
-                    <label v-if="isItemOfficeApplicable(row)" class="symbolika-costing-position-status-field" @click.stop>
-                      <span class="symbolika-costing-position-status-label">Офис</span>
-                      <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'office_status'), officeSelectClass(row.office_status)]" :value="row.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(row, 'office_status', $event.target.value)">
-                        <option v-for="status in officeStatusChoices" :key="'position-mode-office-' + status.value" :value="status.value">{{ status.text }}</option>
-                      </select>
-                    </label>
-                    <button v-if="showsSendItemToWorkButton(row)" type="button" class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work" :class="savingWorkClass('orders_items', row, 'item_status')" :disabled="itemSendToWorkBusy(row)" :title="itemSendToWorkTitle(row)" @click.stop="sendItemToWorkFromList(row)"><v-icon name="play_arrow" small />Запустить в работу</button>
+                    <span v-if="isIssuedArchiveItem(row)" class="symbolika-costing-pill symbolika-costing-pill-green">Выдан</span>
+                    <template v-else>
+                      <label class="symbolika-costing-position-status-field is-primary" @click.stop>
+                        <span class="symbolika-costing-position-status-label">Позиция</span>
+                        <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'item_status'), statusToneClass(itemStatusName(row.item_status))]" :value="row.item_status || ''" title="Статус позиции" @click.stop @change.stop="saveOrderItemField(row, 'item_status', $event.target.value)">
+                          <option v-for="status in itemWorkflowStatusOptions(row)" :key="'position-mode-item-' + status.value" :value="status.value">{{ status.text }}</option>
+                        </select>
+                      </label>
+                      <label v-if="!isItemReady(row)" class="symbolika-costing-position-status-field" @click.stop>
+                        <span class="symbolika-costing-position-status-label">Производство</span>
+                        <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'production_status'), statusToneClass(detailProductionStatus(row))]" :value="entityId(row.production_status) || ''" title="Статус производства" @click.stop @change.stop="saveOrderItemField(row, 'production_status', $event.target.value)">
+                          <option value="">Без статуса производства</option>
+                          <option v-for="status in itemProductionStatusOptions()" :key="'position-mode-production-' + status.id" :value="status.id">{{ status.name }}</option>
+                        </select>
+                      </label>
+                      <label v-if="isItemOfficeApplicable(row)" class="symbolika-costing-position-status-field" @click.stop>
+                        <span class="symbolika-costing-position-status-label">Офис</span>
+                        <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', row, 'office_status'), officeSelectClass(row.office_status)]" :value="row.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(row, 'office_status', $event.target.value)">
+                          <option v-for="status in officeStatusChoices" :key="'position-mode-office-' + status.value" :value="status.value">{{ status.text }}</option>
+                        </select>
+                      </label>
+                      <button v-if="showsSendItemToWorkButton(row)" type="button" class="symbolika-costing-issue-button symbolika-costing-send-work-button symbolika-costing-position-send-work" :class="savingWorkClass('orders_items', row, 'item_status')" :disabled="itemSendToWorkBusy(row)" :title="itemSendToWorkTitle(row)" @click.stop="sendItemToWorkFromList(row)"><v-icon name="play_arrow" small />Запустить в работу</button>
+                    </template>
                   </div>
                 </td>
                 <td class="symbolika-costing-num">
