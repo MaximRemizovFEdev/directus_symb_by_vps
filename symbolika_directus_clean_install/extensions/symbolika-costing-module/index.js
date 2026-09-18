@@ -6324,6 +6324,11 @@ export const CostingModule = {
         || this.isArchivedStatus(row?.item_status, row?.item_status_name, ['5', '6'], ['достав', 'отмен']);
     },
 
+    isIssuedArchiveItem(item, order = null) {
+      return String(item?.office_status || '').trim() === 'issued'
+        || String(order?.office_status || '').trim() === 'issued';
+    },
+
     isWorkArchived(row) {
       return this.isArchivedStatus(row?.production_status, row?.production_status_name, ['5', '6'], ['готов', 'отмен']);
     },
@@ -32340,16 +32345,19 @@ export const CostingModule = {
                         </div>
                       </div>
                       <div class="symbolika-costing-position-statuses" :class="{ 'is-ready': isItemReady(item) }">
-                        <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'item_status'), statusToneClass(itemStatusName(item.item_status))]" :value="item.item_status || ''" title="Статус позиции" @click.stop @change.stop="saveOrderItemField(item, 'item_status', $event.target.value)">
-                          <option v-for="status in itemWorkflowStatusOptions(item)" :key="'archive-item-status-' + status.value" :value="status.value">{{ status.text }}</option>
-                        </select>
-                        <select v-if="!isItemReady(item)" class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'production_status'), statusToneClass(detailProductionStatus(item))]" :value="entityId(item.production_status) || ''" title="Статус производства" @click.stop @change.stop="saveOrderItemField(item, 'production_status', $event.target.value)">
-                          <option value="">Без статуса производства</option>
-                          <option v-for="status in itemProductionStatusOptions()" :key="'archive-production-status-' + status.id" :value="status.id">{{ status.name }}</option>
-                        </select>
-                        <select v-if="isItemOfficeApplicable(item)" class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'office_status'), officeSelectClass(item.office_status)]" :value="item.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(item, 'office_status', $event.target.value)">
-                          <option v-for="status in officeStatusChoices" :key="'archive-office-status-' + status.value" :value="status.value">{{ status.text }}</option>
-                        </select>
+                        <span v-if="isIssuedArchiveItem(item, row)" class="symbolika-costing-pill symbolika-costing-pill-green">Выдан</span>
+                        <template v-else>
+                          <select class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'item_status'), statusToneClass(itemStatusName(item.item_status))]" :value="item.item_status || ''" title="Статус позиции" @click.stop @change.stop="saveOrderItemField(item, 'item_status', $event.target.value)">
+                            <option v-for="status in itemWorkflowStatusOptions(item)" :key="'archive-item-status-' + status.value" :value="status.value">{{ status.text }}</option>
+                          </select>
+                          <select v-if="!isItemReady(item)" class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'production_status'), statusToneClass(detailProductionStatus(item))]" :value="entityId(item.production_status) || ''" title="Статус производства" @click.stop @change.stop="saveOrderItemField(item, 'production_status', $event.target.value)">
+                            <option value="">Без статуса производства</option>
+                            <option v-for="status in itemProductionStatusOptions()" :key="'archive-production-status-' + status.id" :value="status.id">{{ status.name }}</option>
+                          </select>
+                          <select v-if="isItemOfficeApplicable(item)" class="symbolika-costing-table-select symbolika-costing-position-status-select" :class="[savingWorkClass('orders_items', item, 'office_status'), officeSelectClass(item.office_status)]" :value="item.office_status || 'not_in_office'" title="Статус офиса" @click.stop @change.stop="saveOrderItemField(item, 'office_status', $event.target.value)">
+                            <option v-for="status in officeStatusChoices" :key="'archive-office-status-' + status.value" :value="status.value">{{ status.text }}</option>
+                          </select>
+                        </template>
                       </div>
                     </div>
                     <div v-if="!detailPositions(row).length" class="symbolika-costing-empty">Нет позиций</div>
